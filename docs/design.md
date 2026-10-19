@@ -214,7 +214,7 @@ target(t)  = rootPitch + shift + contour × (f0(t) - rootPitch)
 - テスト: Vitest(DSP・解析・データ処理)、Playwright(画面操作)
 - DSP: signalsmith-stretch(WASM)。TD-PSOLA と pYIN は TypeScript で書き、遅ければ WASM に移す
 - 公開先: Cloudflare Workers の静的アセット(`_headers` に CSP / COOP / COEP を設定)
-- **TapMV と共通化できるもの**: `Store`、`history`、`idb` / `blobStore` / `persistence`、`projectFile`、`onsets`、`midi`、`audioSession`、`touch`、`i18n`。MVP ではコピーして使い、共通パッケージにするかは後で決める(論点 I)。
+- **TapMV から流用できるもの**: `Store`、`history`、`idb` / `blobStore` / `persistence`、`projectFile`、`onsets`、`midi`、`audioSession`、`touch`、`i18n`。**MADDAW 側にコピーして使い、TapMV のフォルダには一切手を加えない**(共通パッケージ化もしない)。
 
 ## 10. フェーズ計画
 
@@ -235,6 +235,5 @@ target(t)  = rootPitch + shift + contour × (f0(t) - rootPitch)
 
 - **A. トラックと素材の関係**: 1トラック1素材でよいか。それとも、ノートごとに別の素材を選べるようにするか。→ 案: MVP は1対1。データ構造には余地を残す
 - **H. 「平均キー」の定義**: 重み付き中央値(既定案)でよいか。それとも「一番長く伸ばしている音」を優先するか。Phase 0 の結果を見て決める
-- **I. TapMV とのコード共有**: コピーで始めるか。それとも最初から共通パッケージ(モノレポ)にするか
 - **J. 和音**: 同じトラックで複数のノートを同時に鳴らすことを許すか(処理上は可能。人力ボーカルでも、ハモりに使える)
 - **K. 公開とライセンス**: TapMV と同じく無料公開か。依存ライブラリはすべて MIT / BSD 系にする前提で進める

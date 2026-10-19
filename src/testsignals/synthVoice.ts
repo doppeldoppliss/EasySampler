@@ -78,6 +78,31 @@ export function demoPhrasePitch(baseMidi: number, durationSec: number): (t: numb
   };
 }
 
+/**
+ * A spoken-like syllable "sa": a hiss (the consonant, unvoiced) running into
+ * a sung /a/ with a scoop, vibrato and a falling end — head, sustain and tail
+ * for the synthesis markers to find. Deterministic (seeded noise).
+ */
+export function demoSyllable(sampleRate: number, baseMidi = 62): Float32Array {
+  const hissSec = 0.09;
+  const vowelSec = 0.75;
+  const vowel = synthVoice({ sampleRate, durationSec: vowelSec, pitch: demoPhrasePitch(baseMidi, vowelSec), fadeSec: 0.02 });
+  const hissLength = Math.round(hissSec * sampleRate);
+  const out = new Float32Array(hissLength + vowel.length);
+  let seed = 12345;
+  let previous = 0;
+  for (let n = 0; n < hissLength; n++) {
+    seed = (seed * 16807) % 2147483647;
+    const white = seed / 2147483647 - 0.5;
+    const high = white - previous; // a first difference: the hiss lives up high
+    previous = white;
+    const envelope = Math.sin((Math.PI * n) / hissLength) ** 0.5;
+    out[n] = high * envelope * 0.35;
+  }
+  out.set(vowel, hissLength);
+  return out;
+}
+
 export function normalize(x: Float32Array, peak: number): Float32Array {
   let max = 0;
   for (const v of x) max = Math.max(max, Math.abs(v));

@@ -103,6 +103,7 @@ Phase 0 で使ったピーク拾い方式は、周期のばらつきが大きく
 |---|---|---|
 | **周期プール**(既定) | 持続区間から安定した周期を10〜40個集める。そこから近い周期をランダムに選び続け、直前の周期には戻らないようにする。周期の長さと振幅にわずかな揺らぎを加える | 自然な持続音。同じ周期を規則的に繰り返したときの「ロボット声」を防ぐ |
 | ループ | クロスフェード付きでループする(クロスフェードの長さは指定できる) | 素材の「うねり」も含めて繰り返したいとき |
+| 伸ばさない(ワンショット) | 素材を最後まで一度だけ鳴らす | ドラムや効果音 |
 | ウェーブテーブル(Phase 3) | 1〜数周期をくり返す | わざとシンセっぽく、無機質にしたいとき |
 
 - 区間の境目は解析結果から自動で提案し、波形の上でドラッグして直せる。
@@ -202,7 +203,7 @@ Instrument {
   root: { midi: number, mode: "auto" | "manual" }  // 例 61.63 = D4 −37¢
   markers: {
     attack: number                                 // 頭部の終わり = 発音位置
-    sustain: { start, end, mode: "pool" | "loop" | "wavetable", crossfadeSec }
+    sustain: { start, end, mode: "pool" | "loop" | "none" | "wavetable", crossfadeSec }
     tail: { start, enabled: boolean, limit: "none" | "beat" | "bar" | "unlimited" }
   }
   releaseFadeSec: number                           // 既定 0.02

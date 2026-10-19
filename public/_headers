@@ -1,0 +1,7 @@
+# Response headers for Cloudflare (also applied by `npm run dev` / `preview`,
+# see vite.config.ts). COOP + COEP make the page cross-origin isolated, which
+# SharedArrayBuffer (the audio engine's shared buffers) needs.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  X-Content-Type-Options: nosniff

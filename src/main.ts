@@ -1635,7 +1635,7 @@ function currentFileName(): string {
   if (params.sustainMode === "none" || exportSettings.format === "single") return exportFileName(base, note, exportSettings, params.sustainMode === "none");
   if (exportSettings.format === "loop") return `${base}_${pitchLabel(note).replace("#", "s")}_loop.wav`;
   if (exportSettings.format === "wavetable") return `${base}_wavetable.wav`;
-  return `${base}.zip`;
+  return `${base}${exportSettings.destination === "decent" ? ".dslibrary" : ".zip"}`;
 }
 
 // ---------------------------------------------------------------- building & delivering

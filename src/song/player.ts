@@ -4,6 +4,7 @@
 // seconds); a render block is split at every event in it.
 
 import type { Engine } from "../engine/engine";
+import { FxChain } from "../fx/chain";
 import { BackingSynth } from "./backing";
 import type { SeqNote } from "./parts";
 
@@ -20,6 +21,8 @@ interface SongEvent {
 export class SongPlayer {
   private readonly sampleRate: number;
   readonly backing: BackingSynth;
+  /** The effect rack, on the Engine's output (material and keyboard) only — never on the backing. */
+  readonly fx: FxChain;
   private events: SongEvent[] = [];
   /** The context frame at which song time `fromFrame` plays; null when stopped. */
   private startFrame: number | null = null;
@@ -32,6 +35,7 @@ export class SongPlayer {
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
     this.backing = new BackingSynth(sampleRate);
+    this.fx = new FxChain(sampleRate);
   }
 
   get playing(): boolean {
@@ -60,6 +64,8 @@ export class SongPlayer {
     this.startFrame = atFrame;
     this.fromFrame = Math.max(0, Math.round(fromSec * this.sampleRate));
     this.positioned = false;
+    // The LFOs start with the song.
+    this.fx.reset();
   }
 
   stop(engine: Engine): void {
@@ -123,6 +129,7 @@ export class SongPlayer {
     const l = outL.subarray(from, to);
     const r = outR === outL ? l : outR.subarray(from, to);
     engine.render(l, r, to - from);
+    this.fx.process(l, r, to - from);
     this.backing.renderAdd(l, r, to - from, this.backingGain);
   }
 }

@@ -7,7 +7,7 @@
 import type { PitchCorrection } from "../analysis/corrections";
 import { normalizeRemoved } from "../instrument/layout";
 import { clampMarkers } from "../instrument/markers";
-import { DEFAULT_EXPORT, DEFAULT_PARAMS, type Credit, type ExportSettings, type InstrumentParams, type Markers } from "../instrument/types";
+import { DEFAULT_EXPORT, DEFAULT_FX, DEFAULT_PARAMS, type Credit, type ExportSettings, type FxBeats, type FxSettings, type InstrumentParams, type Markers } from "../instrument/types";
 
 export interface CutSettings {
   name: string;
@@ -146,6 +146,58 @@ function sanitizeParams(raw: unknown): InstrumentParams {
       velocitySens: clamp(num(amp.velocitySens, d.amp.velocitySens), 0, 1),
     },
     maxVoices: d.maxVoices,
+    fx: sanitizeFx(raw.fx),
+  };
+}
+
+const FX_BEATS: FxBeats[] = [0.25, 0.5, 1, 2, 4, 8];
+
+/** The effect rack; anything missing or out of range falls back to the default (off). */
+function sanitizeFx(raw: unknown): FxSettings {
+  const d = DEFAULT_FX;
+  const r = isRecord(raw) ? raw : {};
+  const part = (key: keyof FxSettings) => (isRecord(r[key]) ? (r[key] as Record<string, unknown>) : {});
+  const on = (p: Record<string, unknown>) => p.on === true;
+  const beats = (v: unknown, fallback: FxBeats) => (FX_BEATS.includes(v as FxBeats) ? (v as FxBeats) : fallback);
+  const t = part("transient");
+  const e = part("eq");
+  const sa = part("saturation");
+  const a = part("air");
+  const fi = part("filter");
+  const c = part("crush");
+  const ch = part("chorus");
+  const w = part("width");
+  const p = part("pan");
+  const l = part("limiter");
+  return {
+    transient: { on: on(t), attackDb: clamp(num(t.attackDb, d.transient.attackDb), -24, 24), sustainDb: clamp(num(t.sustainDb, d.transient.sustainDb), -24, 24) },
+    eq: {
+      on: on(e),
+      lowCutHz: clamp(num(e.lowCutHz, d.eq.lowCutHz), 0, 2000),
+      lowDb: clamp(num(e.lowDb, d.eq.lowDb), -24, 24),
+      lowHz: clamp(num(e.lowHz, d.eq.lowHz), 20, 1000),
+      midDb: clamp(num(e.midDb, d.eq.midDb), -24, 24),
+      midHz: clamp(num(e.midHz, d.eq.midHz), 100, 10000),
+      midQ: clamp(num(e.midQ, d.eq.midQ), 0.2, 10),
+      highDb: clamp(num(e.highDb, d.eq.highDb), -24, 24),
+      highHz: clamp(num(e.highHz, d.eq.highHz), 1000, 18000),
+      highCutHz: clamp(num(e.highCutHz, d.eq.highCutHz), 500, 20000),
+    },
+    saturation: { on: on(sa), drive: clamp(num(sa.drive, d.saturation.drive), 0, 1), mix: clamp(num(sa.mix, d.saturation.mix), 0, 1) },
+    air: { on: on(a), amount: clamp(num(a.amount, d.air.amount), 0, 1) },
+    filter: {
+      on: on(fi),
+      type: fi.type === "highpass" || fi.type === "bandpass" ? fi.type : "lowpass",
+      cutoffHz: clamp(num(fi.cutoffHz, d.filter.cutoffHz), 40, 18000),
+      resonance: clamp(num(fi.resonance, d.filter.resonance), 0, 1),
+      lfoOctaves: clamp(num(fi.lfoOctaves, d.filter.lfoOctaves), 0, 6),
+      lfoBeats: beats(fi.lfoBeats, d.filter.lfoBeats),
+    },
+    crush: { on: on(c), bits: clamp(Math.round(num(c.bits, d.crush.bits)), 1, 16), downsample: clamp(Math.round(num(c.downsample, d.crush.downsample)), 1, 64), mix: clamp(num(c.mix, d.crush.mix), 0, 1) },
+    chorus: { on: on(ch), rateHz: clamp(num(ch.rateHz, d.chorus.rateHz), 0.05, 8), depthMs: clamp(num(ch.depthMs, d.chorus.depthMs), 0, 15), mix: clamp(num(ch.mix, d.chorus.mix), 0, 1) },
+    width: { on: on(w), side: clamp(num(w.side, d.width.side), 0, 3), midDb: clamp(num(w.midDb, d.width.midDb), -24, 12) },
+    pan: { on: on(p), depth: clamp(num(p.depth, d.pan.depth), 0, 1), beats: beats(p.beats, d.pan.beats) },
+    limiter: { on: on(l), gainDb: clamp(num(l.gainDb, d.limiter.gainDb), 0, 24), ceilingDb: clamp(num(l.ceilingDb, d.limiter.ceilingDb), -24, 0), releaseMs: clamp(num(l.releaseMs, d.limiter.releaseMs), 5, 1000) },
   };
 }
 

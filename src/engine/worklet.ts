@@ -36,6 +36,7 @@ class EngineProcessor extends AudioWorkletProcessor {
         break;
       case "instrument":
         this.engine.setInstrument(message.markers, message.params);
+        this.song.fx.set(message.params.fx);
         break;
       case "noteOn":
         this.engine.noteOn(message.note, message.velocity);
@@ -48,6 +49,7 @@ class EngineProcessor extends AudioWorkletProcessor {
         break;
       case "tempo":
         this.engine.setTempo(message.bpm);
+        this.song.fx.setTempo(message.bpm);
         break;
       case "song":
         this.song.stop(this.engine);

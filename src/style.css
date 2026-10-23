@@ -729,3 +729,8 @@ details.credit summary {
   min-width: 0;
   accent-color: var(--accent);
 }
+
+/* エフェクト: a group that is on shows it in its summary. */
+details.sub.fx > summary.on {
+  color: var(--accent);
+}

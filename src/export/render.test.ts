@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { analyzePitch } from "../analysis/pyin";
 import { rootPitch } from "../analysis/rootPitch";
 import { analyzeMaterial, prepareSource } from "../engine/prepare";
-import { DEFAULT_EXPORT, DEFAULT_PARAMS, PRESETS, exportLengthSec, type InstrumentParams } from "../instrument/types";
+import { DEFAULT_EXPORT, DEFAULT_FX, DEFAULT_PARAMS, PRESETS, exportLengthSec, type InstrumentParams } from "../instrument/types";
 import { demoSyllable } from "../testsignals/synthVoice";
 import { exportFileName, renderNote } from "./render";
 
@@ -96,5 +96,33 @@ describe("export settings", () => {
     expect(exportFileName("ore.mp4", 60, { ...DEFAULT_EXPORT, beats: 2, bpm: 165 }, false)).toBe("ore_C4_2beat@165.wav");
     expect(exportFileName("a:b/c.wav", 61, { ...DEFAULT_EXPORT, lengthMode: "seconds", seconds: 1.5 }, false)).toBe("a_b_c_Cs4_1.5s.wav");
     expect(exportFileName("hit", 59, DEFAULT_EXPORT, true)).toBe("hit_B3.wav");
+  });
+});
+
+describe("renderNote with effects", () => {
+  it("bakes the effects in: a mono material with chorus comes out stereo, about as long as without", () => {
+    const { analysis, source, params } = setup();
+    const plain = renderNote(source, analysis.markers, params, 62, 1);
+    const fx = structuredClone(DEFAULT_FX);
+    fx.chorus.on = true;
+    fx.chorus.mix = 0.6;
+    const out = renderNote(source, analysis.markers, { ...params, fx }, 62, 1);
+    expect(out.channels).toHaveLength(2);
+    const [l, r] = out.channels;
+    let diff = 0;
+    for (let i = 0; i < l.length; i++) diff += Math.abs(l[i] - r[i]);
+    expect(diff / l.length).toBeGreaterThan(1e-3);
+    expect(Math.abs(l.length - plain.channels[0].length) / SR).toBeLessThan(0.2);
+  });
+
+  it("lines the limiter's look-ahead back up: the note starts where it did without it", () => {
+    const { analysis, source, params } = setup();
+    const onset = (x: Float32Array) => x.findIndex((v) => Math.abs(v) > 1e-3);
+    const plain = renderNote(source, analysis.markers, params, 62, 1);
+    const fx = structuredClone(DEFAULT_FX);
+    fx.limiter.on = true;
+    fx.limiter.gainDb = 0;
+    const limited = renderNote(source, analysis.markers, { ...params, fx }, 62, 1);
+    expect(Math.abs(onset(limited.channels[0]) - onset(plain.channels[0]))).toBeLessThanOrEqual(2);
   });
 });

@@ -22,6 +22,7 @@ import { normalizeRemoved, outputLayout } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
 import {
   DEFAULT_EXPORT,
+  DEFAULT_FX,
   DEFAULT_PARAMS,
   PRESETS,
   destinationRate,
@@ -30,6 +31,8 @@ import {
   type Destination,
   type ExportFormat,
   type ExportSettings,
+  type FxBeats,
+  type FxSettings,
   type InstrumentParams,
   type Markers,
   type PresetId,
@@ -150,7 +153,7 @@ function updateExport(change: (s: ExportSettings) => void): void {
   refreshExport();
 }
 
-function range(label: string, min: number, max: number, step: number, get: () => number, set: (p: InstrumentParams, v: number) => void, format: (v: number) => string): HTMLElement {
+function range(label: string, min: number, max: number, step: number, get: () => number, set: (p: InstrumentParams, v: number) => void, format: (v: number) => string, keepPreset = false): HTMLElement {
   const input = el("input", { type: "range", min: String(min), max: String(max), step: String(step) });
   const value = el("output", { className: "num" });
   const refresh = () => {
@@ -158,24 +161,24 @@ function range(label: string, min: number, max: number, step: number, get: () =>
     value.textContent = format(get());
   };
   input.addEventListener("input", () => {
-    update((p) => set(p, Number(input.value)));
+    update((p) => set(p, Number(input.value)), keepPreset);
     value.textContent = format(Number(input.value));
   });
   controlsRefreshers.push(refresh);
   return el("label", { className: "control" }, [el("span", { className: "control-label", textContent: label }), input, value]);
 }
 
-function select<T extends string>(label: string, options: [T, string][], get: () => T, set: (p: InstrumentParams, v: T) => void): HTMLElement {
+function select<T extends string>(label: string, options: [T, string][], get: () => T, set: (p: InstrumentParams, v: T) => void, keepPreset = false): HTMLElement {
   const input = el("select", {}, options.map(([value, text]) => el("option", { value, textContent: text })));
   controlsRefreshers.push(() => (input.value = get()));
-  input.addEventListener("change", () => update((p) => set(p, input.value as T)));
+  input.addEventListener("change", () => update((p) => set(p, input.value as T), keepPreset));
   return el("label", { className: "control" }, [el("span", { className: "control-label", textContent: label }), input]);
 }
 
-function check(label: string, get: () => boolean, set: (p: InstrumentParams, v: boolean) => void): HTMLElement {
+function check(label: string, get: () => boolean, set: (p: InstrumentParams, v: boolean) => void, keepPreset = false): HTMLElement {
   const input = el("input", { type: "checkbox" });
   controlsRefreshers.push(() => (input.checked = get()));
-  input.addEventListener("change", () => update((p) => set(p, input.checked)));
+  input.addEventListener("change", () => update((p) => set(p, input.checked), keepPreset));
   return el("label", { className: "control check" }, [input, el("span", { textContent: label })]);
 }
 
@@ -492,6 +495,125 @@ const keysPanel = el("section", { className: "panel keys-panel" }, [
   imeWarning,
   piano.element,
   el("p", { className: "fine", textContent: "●の付いた鍵が、選んだ音名(書き出す高さ)です。" }),
+]);
+
+// ---------------------------------------------------------------- panel 3b: effects
+
+// Each effect folds into its own group; its summary says whether it is on.
+// Changing an effect keeps the preset (presets are about the voice, not the rack).
+type FxKey = keyof FxSettings;
+const fxSummaries: { key: FxKey; summary: HTMLElement; label: string }[] = [];
+const db = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`;
+const hz = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)} kHz` : `${Math.round(v)} Hz`);
+const BEATS: [string, string][] = [
+  ["0.25", "1/16 音符"],
+  ["0.5", "1/8 音符"],
+  ["1", "1 拍"],
+  ["2", "2 拍"],
+  ["4", "1 小節"],
+  ["8", "2 小節"],
+];
+
+/** A log-scaled frequency slider (0–1000 on the slider, `lo`–`hi` Hz); with `off`, its end reads as off. */
+function fxFreq(label: string, lo: number, hi: number, get: () => number, set: (p: InstrumentParams, v: number) => void, off?: { at: number; text: string }): HTMLElement {
+  const toPos = (f: number) => (1000 * Math.log(f / lo)) / Math.log(hi / lo);
+  const toHz = (pos: number) => lo * (hi / lo) ** (pos / 1000);
+  const isOff = (pos: number) => off !== undefined && Math.abs(toHz(pos) - off.at) / off.at < 0.02;
+  return range(
+    label,
+    0,
+    1000,
+    1,
+    () => toPos(Math.max(lo, Math.min(hi, get() || lo))),
+    (p, v) => set(p, isOff(v) ? off!.at : Math.round(toHz(v))),
+    (v) => (isOff(v) ? off!.text : hz(toHz(v))),
+    true,
+  );
+}
+
+function fxGroup(key: FxKey, label: string, note: string, controls: HTMLElement[]): HTMLElement {
+  const summary = el("summary");
+  fxSummaries.push({ key, summary, label });
+  const group = el("details", { className: "sub fx" }, [
+    summary,
+    check("オン", () => params.fx[key].on, (p, v) => (p.fx[key].on = v), true),
+    el("p", { className: "fine help", textContent: note }),
+    ...controls,
+  ]);
+  // (The control's own listener has updated the params by the time this bubbles up.)
+  group.addEventListener("change", refreshFxSummaries);
+  return group;
+}
+
+function refreshFxSummaries(): void {
+  for (const { key, summary, label } of fxSummaries) {
+    const on = params.fx[key].on;
+    summary.textContent = on ? `${label}(オン)` : label;
+    summary.classList.toggle("on", on);
+  }
+}
+controlsRefreshers.push(refreshFxSummaries);
+
+const fxResetButton = button("すべてオフに戻す", "small", () => {
+  update((p) => (p.fx = structuredClone(DEFAULT_FX)), true);
+  refreshControls();
+});
+
+const fxPanel = el("section", { className: "panel fx-panel" }, [
+  el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxResetButton]),
+  el("p", { className: "fine", textContent: "上から順にかかります。試し弾き・「曲で試す」・書き出す WAV のすべてに入ります(Vital 用ウェーブテーブルを除く)。区間ごとの設定です。" }),
+  fxGroup("transient", "トランジェント(立ち上がり)", "音の頭(アタック)と、そのあとの伸び(サステイン)を別々に上げ下げします。", [
+    range("アタック", -12, 12, 0.5, () => params.fx.transient.attackDb, (p, v) => (p.fx.transient.attackDb = v), db, true),
+    range("サステイン", -12, 12, 0.5, () => params.fx.transient.sustainDb, (p, v) => (p.fx.transient.sustainDb = v), db, true),
+  ]),
+  fxGroup("eq", "EQ", "低域カット・低域・中域(ベル)・高域・高域カット。", [
+    fxFreq("低域カット", 20, 2000, () => params.fx.eq.lowCutHz, (p, v) => (p.fx.eq.lowCutHz = v <= 20 ? 0 : v), { at: 20, text: "オフ" }),
+    range("低域", -18, 18, 0.5, () => params.fx.eq.lowDb, (p, v) => (p.fx.eq.lowDb = v), db, true),
+    fxFreq("低域の周波数", 20, 1000, () => params.fx.eq.lowHz, (p, v) => (p.fx.eq.lowHz = v)),
+    range("中域", -18, 18, 0.5, () => params.fx.eq.midDb, (p, v) => (p.fx.eq.midDb = v), db, true),
+    fxFreq("中域の周波数", 100, 10000, () => params.fx.eq.midHz, (p, v) => (p.fx.eq.midHz = v)),
+    range("中域の幅(Q)", 0.3, 8, 0.1, () => params.fx.eq.midQ, (p, v) => (p.fx.eq.midQ = v), (v) => v.toFixed(1), true),
+    range("高域", -18, 18, 0.5, () => params.fx.eq.highDb, (p, v) => (p.fx.eq.highDb = v), db, true),
+    fxFreq("高域の周波数", 1000, 18000, () => params.fx.eq.highHz, (p, v) => (p.fx.eq.highHz = v)),
+    fxFreq("高域カット", 500, 20000, () => params.fx.eq.highCutHz, (p, v) => (p.fx.eq.highCutHz = v), { at: 20000, text: "オフ" }),
+  ]),
+  fxGroup("saturation", "サチュレーション(真空管風の歪み)", "音を太く前に出します。かけすぎると歪みが目立ちます。", [
+    range("ドライブ", 0, 1, 0.01, () => params.fx.saturation.drive, (p, v) => (p.fx.saturation.drive = v), pct, true),
+    range("かかり具合(ミックス)", 0, 1, 0.01, () => params.fx.saturation.mix, (p, v) => (p.fx.saturation.mix = v), pct, true),
+  ]),
+  fxGroup("air", "エア(高域の抜け)", "高い音を持ち上げ、少し倍音を足して抜けをよくします。上げすぎると耳に痛くなります。", [
+    range("量", 0, 1, 0.01, () => params.fx.air.amount, (p, v) => (p.fx.air.amount = v), pct, true),
+  ]),
+  fxGroup("filter", "フィルター(LFO)", "カットオフを拍に合わせて揺らします。揺れの幅を 0 にすれば、ふつうのフィルターです。", [
+    select("種類", [["lowpass", "ローパス"], ["highpass", "ハイパス"], ["bandpass", "バンドパス"]], () => params.fx.filter.type, (p, v) => (p.fx.filter.type = v), true),
+    fxFreq("カットオフ", 40, 18000, () => params.fx.filter.cutoffHz, (p, v) => (p.fx.filter.cutoffHz = v)),
+    range("レゾナンス", 0, 1, 0.01, () => params.fx.filter.resonance, (p, v) => (p.fx.filter.resonance = v), pct, true),
+    range("揺れの幅", 0, 6, 0.1, () => params.fx.filter.lfoOctaves, (p, v) => (p.fx.filter.lfoOctaves = v), (v) => `±${v.toFixed(1)} オクターブ`, true),
+    select("揺れの周期", BEATS, () => String(params.fx.filter.lfoBeats), (p, v) => (p.fx.filter.lfoBeats = Number(v) as FxBeats), true),
+  ]),
+  fxGroup("crush", "ビットクラッシャー", "ビット数とサンプリングレートを落として、ゲーム機のようなざらついた音にします。", [
+    range("ビット数", 1, 16, 1, () => params.fx.crush.bits, (p, v) => (p.fx.crush.bits = v), (v) => `${v} bit`, true),
+    range("間引き", 1, 32, 1, () => params.fx.crush.downsample, (p, v) => (p.fx.crush.downsample = v), (v) => (v === 1 ? "なし" : `1/${v}`), true),
+    range("かかり具合(ミックス)", 0, 1, 0.01, () => params.fx.crush.mix, (p, v) => (p.fx.crush.mix = v), pct, true),
+  ]),
+  fxGroup("chorus", "コーラス", "少しずらした音を左右に重ねて、厚みと広がりを出します。モノラルの素材もステレオになります。", [
+    range("速さ", 0.1, 5, 0.05, () => params.fx.chorus.rateHz, (p, v) => (p.fx.chorus.rateHz = v), (v) => `${v.toFixed(2)} Hz`, true),
+    range("深さ", 0, 12, 0.1, () => params.fx.chorus.depthMs, (p, v) => (p.fx.chorus.depthMs = v), (v) => `${v.toFixed(1)} ms`, true),
+    range("かかり具合(ミックス)", 0, 1, 0.01, () => params.fx.chorus.mix, (p, v) => (p.fx.chorus.mix = v), pct, true),
+  ]),
+  fxGroup("width", "ステレオ幅(ミッド/サイド)", "左右の広がり(サイド)と中央(ミッド)を別々に調整します。モノラルの素材は広がらないので、コーラスと組み合わせます。", [
+    range("広がり(サイド)", 0, 3, 0.01, () => params.fx.width.side, (p, v) => (p.fx.width.side = v), (v) => (v === 0 ? "モノラル" : pct(v)), true),
+    range("中央(ミッド)", -12, 6, 0.5, () => params.fx.width.midDb, (p, v) => (p.fx.width.midDb = v), db, true),
+  ]),
+  fxGroup("pan", "オートパン", "音を拍に合わせて左右に振ります。アルペジオなどに。", [
+    range("深さ", 0, 1, 0.01, () => params.fx.pan.depth, (p, v) => (p.fx.pan.depth = v), pct, true),
+    select("周期", BEATS, () => String(params.fx.pan.beats), (p, v) => (p.fx.pan.beats = Number(v) as FxBeats), true),
+  ]),
+  fxGroup("limiter", "リミッター", "最後に音量を上げつつ、天井を超えないように抑えます。", [
+    range("入力ゲイン", 0, 18, 0.5, () => params.fx.limiter.gainDb, (p, v) => (p.fx.limiter.gainDb = v), db, true),
+    range("天井", -12, 0, 0.1, () => params.fx.limiter.ceilingDb, (p, v) => (p.fx.limiter.ceilingDb = v), (v) => `${v.toFixed(1)} dBFS`, true),
+    range("リリース", 5, 500, 1, () => params.fx.limiter.releaseMs, (p, v) => (p.fx.limiter.releaseMs = v), (v) => `${Math.round(v)} ms`, true),
+  ]),
 ]);
 
 // ---------------------------------------------------------------- panel 4: export
@@ -886,7 +1008,7 @@ function openFiles(files: readonly File[]): void {
 
 // ---------------------------------------------------------------- page
 
-const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, songPanel.element, exportPanel, detailsPanel]);
+const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, fxPanel, songPanel.element, exportPanel, detailsPanel]);
 
 document.getElementById("app")!.append(
   el("header", { className: "top" }, [el("h1", { textContent: "MADDAW" }), el("div", { className: "row" }, [rePickButton, openButton, demoButton])]),

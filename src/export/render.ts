@@ -4,6 +4,7 @@
 // random walk is seeded, so the same settings give the same file.
 
 import { Engine, type PreparedSource } from "../engine/engine";
+import { FxChain } from "../fx/chain";
 import { outputLayout } from "../instrument/layout";
 import type { ExportSettings, InstrumentParams, Markers } from "../instrument/types";
 
@@ -26,6 +27,8 @@ const PEAK = 0.98;
 /** Trailing samples below this level are cut off, keeping a short margin. */
 const SILENCE = 1e-4;
 const MARGIN_SEC = 0.005;
+/** Room left after the voice for the effects to ring out (chorus, filter, limiter release). */
+const FX_TAIL_SEC = 0.15;
 
 /**
  * Plays `note` for `holdSec` (the hold ends `release` early so the file is
@@ -43,7 +46,11 @@ export function renderNote(source: PreparedSource, markers: Markers, params: Ins
   const oneShot = params.sustainMode === "none";
   const releaseAt = oneShot ? Infinity : Math.max(0, holdSec - (params.tail.enabled ? 0 : params.amp.release)) * rate;
   const limit = Math.ceil((oneShot ? MAX_ONESHOT_SEC : holdSec + MAX_AFTER_SEC) * rate);
-  const stereo = source.channels.length > 1;
+  const fx = new FxChain(rate);
+  fx.set(params.fx);
+  fx.setTempo(bpm);
+  // A mono material still comes out in stereo when the effects spread it.
+  const stereo = source.channels.length > 1 || (fx.active && FxChain.makesStereo(params.fx));
 
   let left = new Float32Array(Math.ceil(Math.min(limit, (oneShot ? 2 : holdSec + 0.5) * rate)));
   let right = stereo ? new Float32Array(left.length) : left;
@@ -65,6 +72,22 @@ export function renderNote(source: PreparedSource, markers: Markers, params: Ins
     left.set(blockL, at);
     if (stereo) right.set(blockR, at);
     at += BLOCK;
+  }
+
+  // The effects, over the whole note (their LFOs start with it), shifted back by the limiter's look-ahead.
+  if (fx.active) {
+    const pad = Math.round(FX_TAIL_SEC * rate) + fx.latency;
+    if (at + pad > left.length) {
+      left = grow(left, at + pad);
+      right = stereo ? grow(right, at + pad) : left;
+    }
+    left.fill(0, at, at + pad);
+    if (stereo) right.fill(0, at, at + pad);
+    fx.process(left, right, at + pad);
+    const latency = fx.latency;
+    left.copyWithin(0, latency, at + pad);
+    if (stereo) right.copyWithin(0, latency, at + pad);
+    at += pad - latency;
   }
 
   // Cut the trailing silence, scale down if anything would clip.

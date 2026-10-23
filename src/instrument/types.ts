@@ -62,7 +62,49 @@ export interface InstrumentParams {
   /** Release: the fade after the note is let go when the tail is off (default 20 ms). */
   amp: { attack: number; decay: number; sustain: number; release: number; velocitySens: number };
   maxVoices: number;
+  /** The effect rack (エフェクト), after the voices: what the keyboard, 曲で試す and the file all get. */
+  fx: FxSettings;
 }
+
+/** LFO speeds, in beats per cycle (counted in the export BPM, or the song's while 曲で試す plays). */
+export type FxBeats = 0.25 | 0.5 | 1 | 2 | 4 | 8;
+
+/** The effects, always in this order: shape → tone → colour → movement → space → level. */
+export interface FxSettings {
+  /** Transient shaper: dB on the attack and on what follows it. */
+  transient: { on: boolean; attackDb: number; sustainDb: number };
+  /** EQ: low cut, low shelf, one bell, high shelf, high cut (a cut at 0 / ≥ 20 kHz is off). */
+  eq: { on: boolean; lowCutHz: number; lowDb: number; lowHz: number; midDb: number; midHz: number; midQ: number; highDb: number; highHz: number; highCutHz: number };
+  /** Saturation (tube-like, asymmetric): drive 0–1, dry/wet. */
+  saturation: { on: boolean; drive: number; mix: number };
+  /** Air: high-shelf lift plus a little generated top end, 0–1. */
+  air: { on: boolean; amount: number };
+  /** Filter with an LFO on the cutoff (octaves of sweep). */
+  filter: { on: boolean; type: "lowpass" | "highpass" | "bandpass"; cutoffHz: number; resonance: number; lfoOctaves: number; lfoBeats: FxBeats };
+  /** Bit crusher: bit depth, sample-rate division, dry/wet. */
+  crush: { on: boolean; bits: number; downsample: number; mix: number };
+  /** Chorus: speed (Hz), depth (ms), dry/wet. */
+  chorus: { on: boolean; rateHz: number; depthMs: number; mix: number };
+  /** Mid/side: side level (1 = as is, 0 = mono, 2 = twice as wide) and mid level. */
+  width: { on: boolean; side: number; midDb: number };
+  /** Auto-pan: depth 0–1. */
+  pan: { on: boolean; depth: number; beats: FxBeats };
+  /** Limiter: input gain, ceiling (dBFS), release. */
+  limiter: { on: boolean; gainDb: number; ceilingDb: number; releaseMs: number };
+}
+
+export const DEFAULT_FX: FxSettings = {
+  transient: { on: false, attackDb: 0, sustainDb: 0 },
+  eq: { on: false, lowCutHz: 0, lowDb: 0, lowHz: 150, midDb: 0, midHz: 1500, midQ: 1, highDb: 0, highHz: 6000, highCutHz: 20000 },
+  saturation: { on: false, drive: 0.3, mix: 1 },
+  air: { on: false, amount: 0.3 },
+  filter: { on: false, type: "lowpass", cutoffHz: 2000, resonance: 0.3, lfoOctaves: 2, lfoBeats: 1 },
+  crush: { on: false, bits: 8, downsample: 4, mix: 1 },
+  chorus: { on: false, rateHz: 0.8, depthMs: 4, mix: 0.4 },
+  width: { on: false, side: 1.4, midDb: 0 },
+  pan: { on: false, depth: 0.6, beats: 1 },
+  limiter: { on: false, gainDb: 3, ceilingDb: -1, releaseMs: 80 },
+};
 
 export interface Credit {
   title: string;
@@ -86,6 +128,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, driftCents: 0, micro: true },
   amp: { attack: 0.005, decay: 0.1, sustain: 1, release: 0.02, velocitySens: 0.5 },
   maxVoices: 24,
+  fx: DEFAULT_FX,
 };
 
 export interface Preset {

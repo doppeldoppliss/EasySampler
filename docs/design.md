@@ -1,6 +1,6 @@
 # MADDAW 設計 v2.0(シンセ化ツール方式)
 
-> 状態: **確定(2026-10-23)。Phase 1 の実装に入る。** v1.2([design-v1.2.md](design-v1.2.md))からの方向転換。前回「微妙」だったのは DAW という構想が大きすぎた点だと確認し、論点 A〜G は「11. 決定事項」のとおり推奨案で決めた。
+> 状態: **確定(2026-10-23)。Phase 1・2 は実装済み(同日)。次は Phase 3。** v1.2([design-v1.2.md](design-v1.2.md))からの方向転換。前回「微妙」だったのは DAW という構想が大きすぎた点だと確認し、論点 A〜G は「11. 決定事項」のとおり推奨案で決めた。
 > 2026-10-23。参考: [note: 音MAD シンセ化(REAPER + VocalShifter LE)](https://note.com/madcreator/n/n402147958bda)、[note: Vital を音MADで使う方法](https://note.com/darekachan/n/ne7635b60d8b1)、[動画: フリーシンセ VITAL を使った音MADでの音作りの一例(にす)](https://www.nicovideo.jp/watch/sm41508561)(動画の説明欄は note 記事を参考記事として指している)。
 
 ## 0. v1.2 からの転換
@@ -154,8 +154,8 @@ Engine は Worklet・テスト・計測で共通の形になっているので�
 
 | Phase | 内容 | 完了の基準 |
 |---|---|---|
-| **1 単音 WAV が出る(MVP)** | 範囲ハンドルによる切り出し、目標の音名、平坦化 100% 既定、拍数 / 秒での長さ指定、オフライン書き出し、`navigator.share` と `<a download>`、1カラムの画面、PWA、デモ素材と3ステップ案内 | **iPhone の Safari だけで、素材から単音 WAV を作って GarageBand の Sampler で鳴らせる。** PC では REAPER + VocalShifter LE の手順と同等の結果が1分以内に出る |
-| **2 音源として渡せる** | マルチサンプル音源(SFZ + .dspreset の zip)、ループ WAV(`smpl`)、設定 JSON の保存・復元、長い素材からの複数区間の一括書き出し、出典メモの埋め込み、44.1kHz 変換の選択肢 | iOS の Decent Sampler と REAPER で、音域全体を途切れず鳴らせる音源が出る |
+| **1 単音 WAV が出る(MVP)** ✅ | 範囲ハンドルによる切り出し、目標の音名、平坦化 100% 既定、拍数 / 秒での長さ指定、オフライン書き出し、`navigator.share` と `<a download>`、1カラムの画面、PWA、デモ素材と3ステップ案内 | **iPhone の Safari だけで、素材から単音 WAV を作って GarageBand の Sampler で鳴らせる。** PC では REAPER + VocalShifter LE の手順と同等の結果が1分以内に出る |
+| **2 音源として渡せる** ✅ | マルチサンプル音源(SFZ + .dspreset の zip。±1 オクターブを 3 半音おき、各 WAV にループ点)、ループ WAV(`smpl`。ループ末尾を直前区間へクロスフェードして継ぎ目を消す)、設定 JSON の保存・復元(同じ素材を開き直すと localStorage から自動復元)、複数区間(カット)の管理と一括 zip 書き出し(settings.json 同梱)、出典メモの埋め込み、44.1kHz 変換の選択肢 | iOS の Decent Sampler と REAPER で、音域全体を途切れず鳴らせる音源が出る(実機の Decent Sampler / sforzando での読み込みは未確認) |
 | **3 シンセ向け** | Vital 用ウェーブテーブル、ウェーブテーブル型の持続(1〜数周期の繰り返し)、解析結果の手直し(オクターブ修正、有声 / 無声)の UI 強化、Signalsmith モード(和音・雑音の多い素材) | Vital に読み込んで、PitchSplice なしで使える |
 | **4 仕上げ** | 英語版・中国語版、ドラム / 効果音向けのワンショット一括処理、ピッチカーブの手描き修正 | |
 

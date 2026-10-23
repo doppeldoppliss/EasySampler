@@ -1,0 +1,152 @@
+// The settings file (design.md 5): everything the user decided about a
+// material — the cuts with their markers and parameters, the export
+// settings, the credit — and nothing of the audio. Small enough to keep in
+// localStorage per material (so reopening the same file restores it) and
+// to save / load as JSON by hand.
+
+import { clampMarkers } from "../instrument/markers";
+import { DEFAULT_EXPORT, DEFAULT_PARAMS, type Credit, type ExportSettings, type InstrumentParams, type Markers } from "../instrument/types";
+
+export interface CutSettings {
+  name: string;
+  markers: Markers;
+  params: InstrumentParams;
+  note: number;
+  noteMode: "auto" | "manual";
+}
+
+export interface SettingsFile {
+  app: "MADDAW";
+  version: 1;
+  savedAt: string;
+  material: { name: string; durationSec: number; sampleRate: number; channels: number };
+  export: ExportSettings;
+  credit: Credit;
+  cuts: CutSettings[];
+  currentCut: number;
+}
+
+export function serializeSettings(file: Omit<SettingsFile, "app" | "version" | "savedAt">): string {
+  const full: SettingsFile = { app: "MADDAW", version: 1, savedAt: new Date().toISOString(), ...file };
+  return JSON.stringify(full, null, 2);
+}
+
+/** Parses and sanitises a settings file; throws when it isn't one. Unknown fields are dropped, missing ones filled from the defaults. */
+export function parseSettings(text: string): SettingsFile {
+  const raw: unknown = JSON.parse(text);
+  if (!isRecord(raw) || raw.app !== "MADDAW" || raw.version !== 1) throw new Error("MADDAW の設定ファイルではありません");
+  const material = isRecord(raw.material) ? raw.material : {};
+  const cutsRaw = Array.isArray(raw.cuts) ? raw.cuts : [];
+  const cuts = cutsRaw.map((c, i) => sanitizeCut(c, i)).filter((c): c is CutSettings => c !== null);
+  if (cuts.length === 0) throw new Error("区間がありません");
+  const exp = sanitizeExport(raw.export);
+  return {
+    app: "MADDAW",
+    version: 1,
+    savedAt: typeof raw.savedAt === "string" ? raw.savedAt : "",
+    material: {
+      name: typeof material.name === "string" ? material.name : "",
+      durationSec: num(material.durationSec, 0),
+      sampleRate: num(material.sampleRate, 0),
+      channels: num(material.channels, 1),
+    },
+    export: exp,
+    credit: sanitizeCredit(raw.credit),
+    cuts,
+    currentCut: Math.max(0, Math.min(cuts.length - 1, Math.round(num(raw.currentCut, 0)))),
+  };
+}
+
+/** The storage key for a material: its name and length (the same file opened again finds its settings). */
+export function settingsKey(name: string, frames: number, sampleRate: number): string {
+  return `maddaw.settings.v1:${name}:${frames}:${sampleRate}`;
+}
+
+function sanitizeCut(raw: unknown, index: number): CutSettings | null {
+  if (!isRecord(raw) || !isRecord(raw.markers)) return null;
+  const m = raw.markers;
+  const markers = clampMarkers({
+    rangeStart: num(m.rangeStart, 0),
+    rangeEnd: num(m.rangeEnd, 1),
+    attack: num(m.attack, 0),
+    sustainStart: num(m.sustainStart, 0),
+    sustainEnd: num(m.sustainEnd, 1),
+    tailStart: num(m.tailStart, 1),
+  });
+  return {
+    name: typeof raw.name === "string" && raw.name.trim() ? raw.name : `区間 ${index + 1}`,
+    markers,
+    params: sanitizeParams(raw.params),
+    note: Math.max(0, Math.min(127, Math.round(num(raw.note, 60)))),
+    noteMode: raw.noteMode === "manual" ? "manual" : "auto",
+  };
+}
+
+function sanitizeParams(raw: unknown): InstrumentParams {
+  const d = DEFAULT_PARAMS;
+  if (!isRecord(raw)) return structuredClone(d);
+  const tail = isRecord(raw.tail) ? raw.tail : {};
+  const wobble = isRecord(raw.wobble) ? raw.wobble : {};
+  const amp = isRecord(raw.amp) ? raw.amp : {};
+  return {
+    root: num(raw.root, d.root),
+    rootMode: raw.rootMode === "manual" ? "manual" : "auto",
+    pitchMode: raw.pitchMode === "resample" ? "resample" : "preserve-length",
+    flatten: clamp(num(raw.flatten, d.flatten), 0, 1),
+    formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
+    formantFollow: typeof raw.formantFollow === "boolean" ? raw.formantFollow : d.formantFollow,
+    sustainMode: raw.sustainMode === "loop" || raw.sustainMode === "none" ? raw.sustainMode : "pool",
+    tail: {
+      enabled: typeof tail.enabled === "boolean" ? tail.enabled : d.tail.enabled,
+      limit: tail.limit === "none" || tail.limit === "beat" || tail.limit === "bar" ? tail.limit : "unlimited",
+    },
+    wobble: {
+      vibratoCents: clamp(num(wobble.vibratoCents, d.wobble.vibratoCents), 0, 200),
+      vibratoHz: clamp(num(wobble.vibratoHz, d.wobble.vibratoHz), 1, 12),
+      vibratoDelaySec: clamp(num(wobble.vibratoDelaySec, d.wobble.vibratoDelaySec), 0, 5),
+      driftCents: clamp(num(wobble.driftCents, d.wobble.driftCents), 0, 100),
+      micro: typeof wobble.micro === "boolean" ? wobble.micro : d.wobble.micro,
+    },
+    amp: {
+      attack: clamp(num(amp.attack, d.amp.attack), 0, 5),
+      decay: clamp(num(amp.decay, d.amp.decay), 0, 10),
+      sustain: clamp(num(amp.sustain, d.amp.sustain), 0, 1),
+      release: clamp(num(amp.release, d.amp.release), 0, 10),
+      velocitySens: clamp(num(amp.velocitySens, d.amp.velocitySens), 0, 1),
+    },
+    maxVoices: d.maxVoices,
+  };
+}
+
+function sanitizeExport(raw: unknown): ExportSettings {
+  const d = DEFAULT_EXPORT;
+  if (!isRecord(raw)) return structuredClone(d);
+  const destinations = ["generic", "garageband", "vital", "decent"] as const;
+  const formats = ["single", "loop", "multisample"] as const;
+  return {
+    lengthMode: raw.lengthMode === "seconds" ? "seconds" : "beats",
+    beats: clamp(num(raw.beats, d.beats), 0.25, 64),
+    bpm: clamp(num(raw.bpm, d.bpm), 20, 400),
+    seconds: clamp(num(raw.seconds, d.seconds), 0.1, 60),
+    destination: destinations.includes(raw.destination as never) ? (raw.destination as ExportSettings["destination"]) : d.destination,
+    format: formats.includes(raw.format as never) ? (raw.format as ExportSettings["format"]) : d.format,
+  };
+}
+
+function sanitizeCredit(raw: unknown): Credit {
+  const r = isRecord(raw) ? raw : {};
+  const str = (v: unknown) => (typeof v === "string" ? v.slice(0, 2000) : "");
+  return { title: str(r.title), url: str(r.url), timecode: str(r.timecode), memo: str(r.memo) };
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function num(v: unknown, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}

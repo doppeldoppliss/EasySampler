@@ -92,13 +92,14 @@ export const PRESETS: Preset[] = [
 export type LengthMode = "beats" | "seconds";
 
 /** Where the file is going; picks the sample rate and the help text (design.md 5–7). */
-export type Destination = "generic" | "garageband" | "vital";
+export type Destination = "generic" | "garageband" | "vital" | "decent";
 
+/** What is written: one WAV, one loopable WAV, or a multisample folder (zip). */
+export type ExportFormat = "single" | "loop" | "multisample";
+
+/** Shared by every cut of the material; the note itself belongs to the cut. */
 export interface ExportSettings {
-  /** The note the file is tuned to (a whole MIDI number; the file comes out exactly at it, A4 = 440 Hz). */
-  note: number;
-  /** The note follows the detected root until the user picks one. */
-  noteMode: "auto" | "manual";
+  format: ExportFormat;
   lengthMode: LengthMode;
   beats: number;
   bpm: number;
@@ -107,8 +108,7 @@ export interface ExportSettings {
 }
 
 export const DEFAULT_EXPORT: ExportSettings = {
-  note: 60,
-  noteMode: "auto",
+  format: "single",
   lengthMode: "beats",
   beats: 2,
   bpm: 120,

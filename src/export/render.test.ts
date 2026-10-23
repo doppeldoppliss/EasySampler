@@ -93,8 +93,8 @@ describe("export settings", () => {
   });
 
   it("names the file after the material, the note and the length", () => {
-    expect(exportFileName("ore.mp4", { ...DEFAULT_EXPORT, note: 60, beats: 2, bpm: 165 }, false)).toBe("ore_C4_2beat@165.wav");
-    expect(exportFileName("a:b/c.wav", { ...DEFAULT_EXPORT, note: 61, lengthMode: "seconds", seconds: 1.5 }, false)).toBe("a_b_c_Cs4_1.5s.wav");
-    expect(exportFileName("hit", { ...DEFAULT_EXPORT, note: 59 }, true)).toBe("hit_B3.wav");
+    expect(exportFileName("ore.mp4", 60, { ...DEFAULT_EXPORT, beats: 2, bpm: 165 }, false)).toBe("ore_C4_2beat@165.wav");
+    expect(exportFileName("a:b/c.wav", 61, { ...DEFAULT_EXPORT, lengthMode: "seconds", seconds: 1.5 }, false)).toBe("a_b_c_Cs4_1.5s.wav");
+    expect(exportFileName("hit", 59, DEFAULT_EXPORT, true)).toBe("hit_B3.wav");
   });
 });

@@ -1,16 +1,29 @@
-// 16-bit PCM WAV, mono or multichannel — what the app writes out. An
-// optional LIST/INFO chunk carries the credit (作品名 etc.), which samplers
-// and editors that read INFO tags show.
+// 16-bit PCM WAV, mono or multichannel — what the app writes out. Optional
+// chunks: LIST/INFO with the credit (作品名 etc.), which samplers and editors
+// that read INFO tags show, and `smpl` with the root note and a loop, which
+// samplers read to hold a note indefinitely.
 
 /** INFO tags: 4-character ids (INAM = name, IART = artist/source, ICMT = comment, ISFT = software). */
 export type WavInfo = Partial<Record<"INAM" | "IART" | "ICMT" | "ISFT" | "ICOP", string>>;
 
-export function encodeWav(channels: readonly Float32Array[], sampleRate: number, info?: WavInfo): Blob {
+export interface WavSampler {
+  /** MIDI note the file plays at its own pitch. */
+  unityNote: number;
+  /** Loop in sample frames: [start, end) — `end` is the first frame after the loop. */
+  loop?: { start: number; end: number };
+}
+
+export function encodeWav(channels: readonly Float32Array[], sampleRate: number, info?: WavInfo, sampler?: WavSampler): Blob {
+  return new Blob([encodeWavBytes(channels, sampleRate, info, sampler)], { type: "audio/wav" });
+}
+
+export function encodeWavBytes(channels: readonly Float32Array[], sampleRate: number, info?: WavInfo, sampler?: WavSampler): ArrayBuffer {
   const count = channels.length;
   const frames = channels[0]?.length ?? 0;
   const dataBytes = frames * count * 2;
   const list = encodeInfo(info);
-  const buffer = new ArrayBuffer(44 + dataBytes + (dataBytes & 1) + list.byteLength);
+  const smpl = encodeSampler(sampler, sampleRate);
+  const buffer = new ArrayBuffer(44 + dataBytes + (dataBytes & 1) + list.byteLength + smpl.byteLength);
   const view = new DataView(buffer);
   const text = (at: number, value: string) => {
     for (let i = 0; i < value.length; i++) view.setUint8(at + i, value.charCodeAt(i));
@@ -37,8 +50,10 @@ export function encodeWav(channels: readonly Float32Array[], sampleRate: number,
     }
   }
   at += dataBytes & 1; // chunks start on even bytes
+  new Uint8Array(buffer, at).set(new Uint8Array(smpl));
+  at += smpl.byteLength;
   new Uint8Array(buffer, at).set(new Uint8Array(list));
-  return new Blob([buffer], { type: "audio/wav" });
+  return buffer;
 }
 
 /** A LIST chunk of type INFO with the given tags (UTF-8, NUL-terminated, even-padded); empty when there are none. */
@@ -68,29 +83,75 @@ function encodeInfo(info?: WavInfo): ArrayBuffer {
   return buffer;
 }
 
-/** Reads the INFO tags back out of a WAV (for tests and for showing a file's credit). */
-export function readWavInfo(bytes: ArrayBuffer): WavInfo {
+/** The `smpl` chunk: unity note and, when given, one forward loop that plays forever. */
+function encodeSampler(sampler: WavSampler | undefined, sampleRate: number): ArrayBuffer {
+  if (!sampler) return new ArrayBuffer(0);
+  const loops = sampler.loop ? 1 : 0;
+  const size = 36 + 24 * loops;
+  const buffer = new ArrayBuffer(8 + size);
+  const view = new DataView(buffer);
+  const text = (at: number, value: string) => {
+    for (let i = 0; i < value.length; i++) view.setUint8(at + i, value.charCodeAt(i));
+  };
+  text(0, "smpl");
+  view.setUint32(4, size, true);
+  view.setUint32(8, 0, true); // manufacturer
+  view.setUint32(12, 0, true); // product
+  view.setUint32(16, Math.round(1e9 / sampleRate), true); // sample period (ns)
+  view.setUint32(20, Math.max(0, Math.min(127, Math.round(sampler.unityNote))), true);
+  view.setUint32(24, 0, true); // pitch fraction
+  view.setUint32(28, 0, true); // SMPTE format
+  view.setUint32(32, 0, true); // SMPTE offset
+  view.setUint32(36, loops, true);
+  view.setUint32(40, 0, true); // sampler data
+  if (sampler.loop) {
+    view.setUint32(44, 0, true); // cue point id
+    view.setUint32(48, 0, true); // forward
+    view.setUint32(52, sampler.loop.start, true);
+    view.setUint32(56, Math.max(sampler.loop.start, sampler.loop.end - 1), true); // last frame of the loop (inclusive)
+    view.setUint32(60, 0, true); // fraction
+    view.setUint32(64, 0, true); // play count: forever
+  }
+  return buffer;
+}
+
+/** Reads the INFO tags and the sampler chunk back out of a WAV (for tests and for showing a file's credit). */
+export function readWavChunks(bytes: ArrayBuffer): { info: WavInfo; sampler?: WavSampler; frames: number; channels: number; sampleRate: number } {
   const view = new DataView(bytes);
   const tag = (at: number) => String.fromCharCode(view.getUint8(at), view.getUint8(at + 1), view.getUint8(at + 2), view.getUint8(at + 3));
   const info: WavInfo = {};
+  let sampler: WavSampler | undefined;
+  let frames = 0;
+  let channels = 1;
+  let sampleRate = 0;
   let at = 12;
   while (at + 8 <= bytes.byteLength) {
     const id = tag(at);
     const size = view.getUint32(at + 4, true);
-    if (id === "LIST" && tag(at + 8) === "INFO") {
+    if (id === "fmt ") {
+      channels = view.getUint16(at + 10, true);
+      sampleRate = view.getUint32(at + 12, true);
+    } else if (id === "data") {
+      frames = size / (channels * 2);
+    } else if (id === "smpl") {
+      sampler = { unityNote: view.getUint32(at + 20, true) };
+      if (view.getUint32(at + 36, true) > 0) sampler.loop = { start: view.getUint32(at + 52, true), end: view.getUint32(at + 56, true) + 1 };
+    } else if (id === "LIST" && tag(at + 8) === "INFO") {
       let p = at + 12;
       const end = at + 8 + size;
       const decoder = new TextDecoder();
       while (p + 8 <= end) {
         const key = tag(p) as keyof WavInfo;
         const length = view.getUint32(p + 4, true);
-        let text = decoder.decode(new Uint8Array(bytes, p + 8, length));
-        text = text.replace(/\0+$/, "");
-        info[key] = text;
+        info[key] = decoder.decode(new Uint8Array(bytes, p + 8, length)).replace(/\0+$/, "");
         p += 8 + length + (length & 1);
       }
     }
     at += 8 + size + (size & 1);
   }
-  return info;
+  return { info, sampler, frames, channels, sampleRate };
+}
+
+export function readWavInfo(bytes: ArrayBuffer): WavInfo {
+  return readWavChunks(bytes).info;
 }

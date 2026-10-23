@@ -93,6 +93,25 @@ export function suggestMarkers(track: PitchTrack, durationSec: number): Markers 
   return clampMarkers({ rangeStart, rangeEnd, attack, sustainStart, sustainEnd, tailStart: sustainEnd });
 }
 
+/** Markers for a cut of the material: the suggestion made within [from, to) seconds only (a second 区間 of a long clip). */
+export function suggestMarkersWithin(track: PitchTrack, from: number, to: number): Markers {
+  const hop = track.hopSec;
+  const first = Math.max(0, Math.floor(from / hop));
+  const last = Math.min(track.f0.length, Math.ceil(to / hop));
+  if (last - first < 2) return clampMarkers({ rangeStart: from, rangeEnd: to, attack: from, sustainStart: from, sustainEnd: to, tailStart: to });
+  const window: PitchTrack = { hopSec: hop, f0: track.f0.slice(first, last), voicedProb: track.voicedProb.slice(first, last), rms: track.rms.slice(first, last) };
+  const offset = first * hop;
+  const m = suggestMarkers(window, to - offset);
+  return clampMarkers({
+    rangeStart: Math.max(from, m.rangeStart + offset),
+    rangeEnd: Math.min(to, m.rangeEnd + offset),
+    attack: m.attack + offset,
+    sustainStart: m.sustainStart + offset,
+    sustainEnd: m.sustainEnd + offset,
+    tailStart: m.tailStart + offset,
+  });
+}
+
 /** How much pitch (semitones) and level (in 6 dB units) move about within frames [from, to). Lower is steadier. */
 function steadinessCost(track: PitchTrack, from: number, to: number): number {
   let n = 0;

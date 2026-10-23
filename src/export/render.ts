@@ -9,6 +9,10 @@ import type { ExportSettings, InstrumentParams, Markers } from "../instrument/ty
 export interface Rendered {
   channels: Float32Array[];
   sampleRate: number;
+  /** Where the head (played once, unstretched) ends and the sustain begins, in seconds of output. */
+  headSec: number;
+  /** When the note was released (seconds of output); the file runs on through the release / tail. */
+  holdEndSec: number;
 }
 
 const BLOCK = 128;
@@ -73,8 +77,13 @@ export function renderNote(source: PreparedSource, markers: Markers, params: Ins
   }
   const length = Math.min(at, end + 1 + Math.round(MARGIN_SEC * rate));
   const gain = peak > PEAK ? PEAK / peak : 1;
+  // In preserve-length mode the head plays at its own speed; resampling scales it with the pitch.
+  const headSpeed = params.pitchMode === "resample" ? 2 ** ((note - params.root) / 12) : 1;
+  const headSec = Math.max(0, markers.sustainStart - markers.rangeStart) / headSpeed;
   return {
     sampleRate: rate,
+    headSec,
+    holdEndSec: Math.min(length, released ? releaseAt : at) / rate,
     channels: channels.map((channel) => {
       const out = channel.slice(0, length);
       if (gain !== 1) for (let i = 0; i < out.length; i++) out[i] *= gain;
@@ -91,12 +100,20 @@ function grow(x: Float32Array, atLeast: number): Float32Array<ArrayBuffer> {
 
 const NOTE_NAMES = ["C", "Cs", "D", "Ds", "E", "F", "Fs", "G", "Gs", "A", "As", "B"];
 
-/** `ore_C4_2beat@165.wav` — the material's name, the note, and how long (file-system safe). */
-export function exportFileName(materialName: string, settings: ExportSettings, oneShot: boolean): string {
-  const base = materialName.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim() || "material";
-  const note = `${NOTE_NAMES[((settings.note % 12) + 12) % 12]}${Math.floor(settings.note / 12) - 1}`;
+/** "Cs4" — a note name safe in file names (no '#'). */
+export function fileNoteName(midi: number): string {
+  return `${NOTE_NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
+}
+
+/** A name safe for every file system; falls back to "material". */
+export function safeBaseName(name: string): string {
+  return name.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim() || "material";
+}
+
+/** `ore_C4_2beat@165.wav` — the material's name, the note, and how long. */
+export function exportFileName(baseName: string, note: number, settings: ExportSettings, oneShot: boolean): string {
   const length = oneShot ? "" : settings.lengthMode === "beats" ? `_${trimNumber(settings.beats)}beat@${trimNumber(settings.bpm)}` : `_${trimNumber(settings.seconds)}s`;
-  return `${base}_${note}${length}.wav`;
+  return `${safeBaseName(baseName)}_${fileNoteName(note)}${length}.wav`;
 }
 
 function trimNumber(value: number): string {

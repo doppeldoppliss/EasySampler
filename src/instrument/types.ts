@@ -41,6 +41,8 @@ export interface InstrumentParams {
   formantSemitones: number;
   /** Let the formants follow a little on shifts beyond ±7 semitones. */
   formantFollow: boolean;
+  /** Whether the sustain plays at all; off: the head goes straight on to the tail (or the note ends). */
+  sustainEnabled: boolean;
   sustainMode: SustainMode;
   /** Wavetable sustain: how many consecutive periods are cycled (1 = one period over and over). */
   wavetableCycles: number;
@@ -121,6 +123,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   flatten: 1,
   formantSemitones: 0,
   formantFollow: true,
+  sustainEnabled: true,
   sustainMode: "pool",
   wavetableCycles: 1,
   stretch: { head: 1, sustain: 1, tail: 1 },

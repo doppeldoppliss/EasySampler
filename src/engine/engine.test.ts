@@ -165,3 +165,32 @@ describe("tail length limit", () => {
     expect(unlimited).toBeGreaterThan(beat);
   });
 });
+
+describe("sustain on / off", () => {
+  /** Seconds until the last audible sample of a note held `holdSec`. */
+  function soundingSec(overrides: Partial<InstrumentParams>, holdSec: number): { sec: number; headSec: number; tailSec: number } {
+    const material = demoSyllable(SR);
+    const { engine, analysis } = setup(material, overrides);
+    const out = play(engine, 62, holdSec, 2);
+    let last = 0;
+    for (let i = 0; i < out.length; i++) if (Math.abs(out[i]) > 1e-4) last = i;
+    const m = analysis.markers;
+    return { sec: last / SR, headSec: m.sustainStart - m.rangeStart, tailSec: m.rangeEnd - Math.max(m.tailStart, m.sustainStart) };
+  }
+
+  it("on (the default): the note lasts as long as it is held", () => {
+    expect(soundingSec({}, 1.5).sec).toBeGreaterThan(1.45);
+  });
+
+  it("off, tail off: only the head plays, however long the key is held", () => {
+    const { sec, headSec } = soundingSec({ sustainEnabled: false }, 1.5);
+    expect(sec).toBeLessThan(headSec + 0.05);
+    expect(sec).toBeGreaterThan(headSec * 0.8);
+  });
+
+  it("off, tail on: the head goes straight on to the tail", () => {
+    const { sec, headSec, tailSec } = soundingSec({ sustainEnabled: false, tail: { enabled: true, limit: "unlimited" } }, 1.5);
+    expect(sec).toBeGreaterThan(headSec + tailSec * 0.5);
+    expect(sec).toBeLessThan(headSec + tailSec + 0.1);
+  });
+});

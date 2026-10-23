@@ -735,6 +735,8 @@ const detailsPanel = el("details", { className: "panel params" }, [
       select("ピッチの変え方", [["preserve-length", "長さ保持(PSOLA)"], ["resample", "速度連動(昔ながら)"]], () => params.pitchMode, (p, v) => (p.pitchMode = v)),
       select("持続区間の伸ばし方", [["pool", "周期プール(自然)"], ["loop", "ループ"], ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"], ["none", "伸ばさない(ワンショット)"]], () => params.sustainMode, (p, v) => (p.sustainMode = v)),
       range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
+      check("持続区間を鳴らす", () => params.sustainEnabled, (p, v) => (p.sustainEnabled = v)),
+      el("p", { className: "fine help", textContent: "オフにすると持続区間を飛ばし、頭部のあとすぐ語尾(オンのとき)へ進みます。鍵盤を押している長さに関係なく、そこで音が終わります。" }),
       check("語尾を末尾に付ける", () => params.tail.enabled, (p, v) => (p.tail.enabled = v)),
       select(
         "語尾の長さ",

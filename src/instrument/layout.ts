@@ -84,12 +84,18 @@ export function outputLayout(markers: Markers, params: InstrumentParams, holdSec
   // In resample mode the speed follows the pitch; that shift isn't known here, so the layout assumes the root.
   const headSrcSec = usedBetween(markers, markers.rangeStart, markers.sustainStart);
   const sustainSrcSec = usedBetween(markers, markers.sustainStart, markers.sustainEnd);
-  const elastic = params.sustainMode !== "none";
+  const skipped = !params.sustainEnabled;
+  const elastic = !skipped && params.sustainMode !== "none";
   const headSec = headSrcSec * params.stretch.head;
   let sustainSec: number;
   let tailSrcSec: number;
   let tailSec: number;
-  if (elastic) {
+  if (skipped) {
+    // Head, then the tail when it's on; the hold doesn't matter.
+    sustainSec = 0;
+    tailSrcSec = params.tail.enabled && params.tail.limit !== "none" ? usedBetween(markers, Math.max(markers.tailStart, markers.sustainStart), markers.rangeEnd) : 0;
+    tailSec = tailSrcSec * params.stretch.tail;
+  } else if (elastic) {
     sustainSec = Math.max(0, holdSec - headSec);
     tailSrcSec = params.tail.enabled ? usedBetween(markers, Math.max(markers.tailStart, markers.sustainStart), markers.rangeEnd) : 0;
     tailSec = tailSrcSec * params.stretch.tail;

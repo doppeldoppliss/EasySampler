@@ -20,6 +20,8 @@
 //   sustain – held as long as the note is: by default a random walk over a
 //             pool of steady periods (no fixed loop to hear), or a loop
 //   tail    – after the note is released, when enabled: the material's own end
+// With the sustain switched off, the head goes straight on to the tail (or
+// the note ends there), however long the key is held.
 // "Resample" mode uses the same grains with their time and pitch scaled
 // together, which is exactly playback at a different speed.
 //
@@ -366,7 +368,10 @@ export class Engine {
   private enterPhaseIfDue(v: Voice): void {
     if (v.phase !== Phase.Head || v.srcTime < this.sustainStart) return;
     const params = this.params!;
-    if (params.sustainMode === "none") {
+    if (!params.sustainEnabled) {
+      if (this.tailOn()) this.jumpToTail(v);
+      else v.phase = Phase.Done;
+    } else if (params.sustainMode === "none") {
       v.phase = Phase.Run;
     } else if (v.released && this.tailOn()) {
       this.jumpToTail(v);
@@ -447,6 +452,8 @@ export class Engine {
     const params = this.params!;
     const resample = params.pitchMode === "resample";
     this.enterPhaseIfDue(v);
+    // The head ended with nothing after it (sustain off, tail off).
+    if (v.phase === Phase.Done) return false;
 
     let k: number;
     if (v.phase === Phase.Sustain && this.fromPool()) {

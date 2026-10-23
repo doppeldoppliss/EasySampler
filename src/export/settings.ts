@@ -135,6 +135,7 @@ function sanitizeParams(raw: unknown): InstrumentParams {
     flatten: clamp(num(raw.flatten, d.flatten), 0, 1),
     tune: sanitizeTune(raw.tune, d.tune),
     unvoicedFollow: typeof raw.unvoicedFollow === "boolean" ? raw.unvoicedFollow : d.unvoicedFollow,
+    levelEven: clamp(num(raw.levelEven, d.levelEven), 0, 1),
     formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
     formantFollow: typeof raw.formantFollow === "boolean" ? raw.formantFollow : d.formantFollow,
     sustainEnabled: typeof raw.sustainEnabled === "boolean" ? raw.sustainEnabled : d.sustainEnabled,

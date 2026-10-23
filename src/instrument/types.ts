@@ -54,6 +54,12 @@ export interface InstrumentParams {
    * old-style speed-change 音MAD — while the length stays the same.
    */
   unvoicedFollow: boolean;
+  /**
+   * How much the sustain's grains are evened out in level (0 = each period as loud as it was
+   * recorded, so a decaying vowel makes the random walk wander in level; 1 = every period scaled
+   * to the sustain's median loudness, boost capped at ×4). The head and the tail keep their own.
+   */
+  levelEven: number;
   /** Formant shift in semitones (0 = keep the voice's character). */
   formantSemitones: number;
   /** Let the formants follow a little on shifts beyond ±7 semitones. */
@@ -154,6 +160,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   flatten: 1,
   tune: { mode: "flatten", scale: "chromatic", key: 0 },
   unvoicedFollow: false,
+  levelEven: 1,
   formantSemitones: 0,
   formantFollow: true,
   sustainEnabled: true,

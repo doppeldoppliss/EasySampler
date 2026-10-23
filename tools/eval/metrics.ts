@@ -25,7 +25,7 @@ export interface LevelMetrics {
   rms: number;
   /** Seconds until the envelope first reaches 90 % of its level in the first 250 ms (how fast the note arrives). */
   attackSec: number;
-  /** Relative deviation (std ÷ mean) of the envelope over the middle half of the sounding part. */
+  /** Relative deviation (std ÷ mean) of the envelope over the sustain window (or the middle half of the sound when none is given). */
   holdUnevenness: number;
   /** Seconds from the last time the envelope was above 70 % of its maximum to the end of sound (how the note leaves). */
   fadeOutSec: number;
@@ -180,7 +180,7 @@ export function pitchMetrics(x: Float32Array, sampleRate: number, targetMidi: nu
   };
 }
 
-export function levelMetrics(x: Float32Array, sampleRate: number): LevelMetrics {
+export function levelMetrics(x: Float32Array, sampleRate: number, sustain?: { fromSec: number; toSec: number }): LevelMetrics {
   const env = envelope(x, sampleRate);
   const v = env.values;
   let peak = 0;
@@ -204,8 +204,8 @@ export function levelMetrics(x: Float32Array, sampleRate: number): LevelMetrics 
   const soundingHops = Math.min(v.length, Math.ceil(soundingSec / env.hopSec));
   let lastLoud = 0;
   for (let i = 0; i < soundingHops; i++) if (v[i] >= 0.7 * max) lastLoud = i;
-  const midFrom = Math.floor(soundingHops * 0.25);
-  const midTo = Math.max(midFrom + 1, Math.floor(soundingHops * 0.75));
+  const midFrom = sustain ? Math.min(soundingHops - 1, Math.floor(sustain.fromSec / env.hopSec)) : Math.floor(soundingHops * 0.25);
+  const midTo = Math.max(midFrom + 1, sustain ? Math.min(soundingHops, Math.floor(sustain.toSec / env.hopSec)) : Math.floor(soundingHops * 0.75));
   const mid = Array.from(v.subarray(midFrom, midTo));
   const mean = mid.reduce((s, e) => s + e, 0) / mid.length;
   const std = Math.sqrt(mid.reduce((s, e) => s + (e - mean) * (e - mean), 0) / mid.length);
@@ -390,7 +390,7 @@ export interface ReportOptions {
 
 export function report(channels: readonly Float32Array[], sampleRate: number, options: ReportOptions): Report {
   const x = mixMono(channels);
-  const level = levelMetrics(x, sampleRate);
+  const level = levelMetrics(x, sampleRate, { fromSec: options.sustainFromSec, toSec: options.sustainToSec });
   const pitch = pitchMetrics(x, sampleRate, options.targetMidi, options.sustainFromSec, Math.min(options.sustainToSec, level.soundingSec));
   const tone = toneMetrics(x, sampleRate, level.soundingSec);
   const artefacts = artefactMetrics(x, sampleRate, level.soundingSec);

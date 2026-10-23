@@ -340,7 +340,8 @@ describe("sustain mode \"stretch\"", () => {
     const engine = new Engine(SR);
     engine.setSource(prepareSource([material], analysis, SR));
     const root = analysis.root?.midi ?? 62;
-    engine.setInstrument(m, { ...DEFAULT_PARAMS, root, sustainMode: "stretch", amp: { ...DEFAULT_PARAMS.amp, velocitySens: 0 } });
+    // (levelEven off: the level is the probe of the read position here.)
+    engine.setInstrument(m, { ...DEFAULT_PARAMS, root, sustainMode: "stretch", levelEven: 0, amp: { ...DEFAULT_PARAMS.amp, velocitySens: 0 } });
     engine.setHold(2);
     const out = play(engine, Math.round(root), 2, 0.1);
     const level = (sec: number) => rms(out, Math.round(sec * SR), Math.round((sec + 0.1) * SR));
@@ -381,5 +382,32 @@ describe("音階に合わせる (tune mode \"scale\")", () => {
       return Math.max(...levels) / Math.max(1e-6, Math.min(...levels));
     };
     expect(ripple(trem)).toBeGreaterThan(ripple(plain) * 2);
+  });
+});
+
+describe("levelEven (持続部の音量を揃える)", () => {
+  it("steadies the sustain of a decaying vowel, and leaves it alone at 0", () => {
+    const material = demoSyllable(SR);
+    const m = analyzeMaterial([material], SR).markers;
+    for (let i = 0; i < material.length; i++) {
+      const t = i / SR;
+      if (t >= m.sustainStart) material[i] *= Math.max(0.1, 1 - (t - m.sustainStart) / (m.sustainEnd - m.sustainStart));
+    }
+    const unevenness = (levelEven: number) => {
+      const engine = new Engine(SR);
+      const analysis = analyzeMaterial([material], SR);
+      engine.setSource(prepareSource([material], analysis, SR));
+      engine.setInstrument(m, { ...DEFAULT_PARAMS, root: analysis.root?.midi ?? 62, levelEven, amp: { ...DEFAULT_PARAMS.amp, velocitySens: 0 } });
+      const out = play(engine, 62, 1.5, 0.1);
+      const win = Math.round(0.02 * SR);
+      const levels: number[] = [];
+      for (let at = Math.round(0.4 * SR); at + win < Math.round(1.4 * SR); at += win) levels.push(rms(out, at, at + win));
+      const mean = levels.reduce((s, v) => s + v, 0) / levels.length;
+      return Math.sqrt(levels.reduce((s, v) => s + (v - mean) ** 2, 0) / levels.length) / mean;
+    };
+    const raw = unevenness(0);
+    const even = unevenness(1);
+    expect(even).toBeLessThan(raw * 0.6);
+    expect(even).toBeLessThan(0.15);
   });
 });

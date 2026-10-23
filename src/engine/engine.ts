@@ -150,6 +150,9 @@ export class Engine {
   /** The material's pitch per mark as the engine uses it: as detected, or averaged over smoothSec (平滑化). */
   private f0 = new Float32Array(0);
   private pool = new Int32Array(0);
+  /** RMS of the material around each mark (one grain's worth), and the sustain's median of it. */
+  private markRms = new Float32Array(0);
+  private sustainLevel = 0;
   private voices: Voice[] = [];
   private order = 0;
   private seed = 0x2545f491;
@@ -182,7 +185,17 @@ export class Engine {
         this.right[k] = Math.min(cap, toNext);
         this.period[k] = (this.left[k] + this.right[k]) / 2;
       }
-    }
+      // The level at each mark, for evening out the sustain.
+      this.markRms = new Float32Array(count);
+      const x = source.channels[0];
+      for (let k = 0; k < count; k++) {
+        const from = Math.max(0, Math.floor(m[k] - this.left[k]));
+        const to = Math.min(x.length, Math.ceil(m[k] + this.right[k]));
+        let s = 0;
+        for (let i = from; i < to; i++) s += x[i] * x[i];
+        this.markRms[k] = to > from ? Math.sqrt(s / (to - from)) : 0;
+      }
+    } else this.markRms = new Float32Array(0);
     this.rebuildPool();
     this.rebuildF0();
   }
@@ -380,6 +393,9 @@ export class Engine {
     }
     const skip = Math.max(0, Math.floor((inside.length - MAX_POOL) / 2));
     this.pool = Int32Array.from(inside.slice(skip, skip + MAX_POOL));
+    // The sustain's typical loudness: the median over its voiced marks.
+    const levels = inside.map((k) => this.markRms[k]).filter((v) => v > 0).sort((a, b) => a - b);
+    this.sustainLevel = levels.length ? levels[levels.length >> 1] : 0;
   }
 
   private start(v: Voice, note: number, velocity: number): void {
@@ -605,6 +621,12 @@ export class Engine {
         reverse = v.reverseNext;
         v.reverseNext = !v.reverseNext;
       }
+    }
+
+    // Evening out the sustain: a quiet period is brought up toward the sustain's median (capped), a loud one down.
+    if (v.phase === Phase.Sustain && params.levelEven > 0 && this.sustainLevel > 0) {
+      const local = this.markRms[k];
+      if (local > 1e-5) gain *= Math.min(4, this.sustainLevel / local) ** params.levelEven;
     }
 
     const grain = freeGrain(v.grains);

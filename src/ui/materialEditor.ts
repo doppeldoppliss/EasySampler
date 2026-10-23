@@ -905,7 +905,7 @@ export class MaterialEditor {
       g.fillText(name, 4 * dpr, stripBottom + lane / 2 + 4 * dpr);
       const beyond = layout.totalSec - (width - laneX) / pxPerSec;
       if (beyond > 0.005) {
-        const text = `→ あと ${beyond.toFixed(beyond < 10 ? 2 : 1)} 秒`;
+        const text = `あと${beyond.toFixed(1)}秒`;
         const tw = g.measureText(text).width + 10 * dpr;
         g.fillStyle = cssVar("--panel");
         g.fillRect(width - tw, stripBottom + 4 * dpr, tw, lane - 8 * dpr);

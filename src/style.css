@@ -967,3 +967,33 @@ fieldset,
 .band-dot.tail {
   background: var(--band-tail);
 }
+
+/* The keyboard pinned to the bottom of the screen (試し弾き → 画面下に固定). */
+.keys-panel.pinned {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-width: 760px;
+  margin: 0 auto;
+  border-radius: 12px 12px 0 0;
+  z-index: 3;
+  box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.18);
+}
+
+/* Room at the end of the page for the pinned keyboard. */
+body.keys-pinned {
+  padding-bottom: 190px;
+}
+
+.keys-panel.pinned .piano {
+  height: 100px;
+}
+
+.keys-panel.pinned > .fine:last-child {
+  display: none;
+}
+
+details.sub.credit > summary {
+  font-weight: 600;
+}

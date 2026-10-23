@@ -256,7 +256,7 @@ cutName.addEventListener("input", () => {
 });
 const addCutButton = button("＋ 区間を追加", "small", () => addCut("next"));
 const dupCutButton = button("複製", "small", () => addCut("copy"));
-const removeCutButton = button("この区間を消す", "small", () => removeCut());
+const removeCutButton = button("この区間を削除", "small", () => removeCut());
 const cutBar = el("div", { className: "cut-bar" }, [
   el("span", { className: "control-label", textContent: "区間" }),
   cutSelect,
@@ -331,7 +331,7 @@ const trimButton = button("選択した部分だけ残す", "small", () => {
   afterMarkersEdited();
 });
 const removedLabel = el("span", { className: "fine" });
-const undoRemoveButton = button("最後の削除を戻す", "small", () => {
+const undoRemoveButton = button("削除を 1 つ戻す", "small", () => {
   if (!markers?.removed?.length) return;
   markers = clampMarkers({ ...markers, removed: markers.removed.slice(0, -1) });
   afterMarkersEdited();
@@ -359,8 +359,8 @@ function afterMarkersEdited(): void {
 const correctionsLabel = el("span", { className: "fine" });
 /** What the fix bar's buttons just did (so the answer is next to the finger, not at the top of the page). */
 const fixStatus = el("span", { className: "fine fix-status", role: "status" });
-const undoCorrectionButton = button("最後の手直しを取り消す", "small", () => void setCorrections(material?.corrections.slice(0, -1) ?? []));
-const clearCorrectionsButton = button("すべて取り消す", "small", () => void setCorrections([]));
+const undoCorrectionButton = button("手直しを 1 つ戻す", "small", () => void setCorrections(material?.corrections.slice(0, -1) ?? []));
+const clearCorrectionsButton = button("手直しをすべて戻す", "small", () => void setCorrections([]));
 const fixBar = el("div", { className: "fix-bar" }, [
   el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, clearSelectionButton, fixStatus]),
   el("div", { className: "row tight fix-pitch" }, [el("span", { className: "fine", textContent: "判定の手直し:" }), ...fixButtons, ...shiftButtons, setNoteButton]),
@@ -403,7 +403,7 @@ const seekClock = el("span", { className: "fine num seek-clock" });
 // Undo / redo (the history itself lives further down, with the settings).
 const undoButton = button("元に戻す", "small", () => undo());
 const redoButton = button("やり直す", "small", () => redo());
-undoButton.title = "Ctrl + Z";
+undoButton.title = "Ctrl + Z — つまみ・マーカー・削除・手直し・区間など、すべての変更を 1 つ戻します";
 redoButton.title = "Ctrl + Y";
 let seekLength = 0;
 function showSeek(sec: number): void {
@@ -688,12 +688,27 @@ function shiftPiano(delta: number): void {
   const low = Math.max(24, Math.min(96 - span, piano.low + delta));
   piano.setRange(low, low + span);
 }
+// Pinned: the keyboard stays at the bottom of the screen while the controls below it are scrolled, so a
+// tweak can be heard without scrolling back. On by default on wide screens, off on phones (room).
+const PIN_KEY = "maddaw.keys.pinned";
+let keysPinned = (safeStorage(PIN_KEY) ?? (SMALL_SCREEN ? "off" : "on")) === "on";
+const pinToggle = button("", "small", () => {
+  keysPinned = !keysPinned;
+  safeStorage(PIN_KEY, keysPinned ? "on" : "off");
+  showPinned();
+});
+function showPinned(): void {
+  pinToggle.textContent = `画面下に固定: ${keysPinned ? "オン" : "オフ"}`;
+  keysPanel.classList.toggle("pinned", keysPinned);
+  document.body.classList.toggle("keys-pinned", keysPinned);
+}
 const keysPanel = el("section", { className: "panel keys-panel" }, [
-  el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "試し弾き" }), octaveDown, octaveUp, pcToggle, pcState, el("span", { className: "fine" }, ["同時発音 ", voiceCount])]),
+  el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "試し弾き" }), octaveDown, octaveUp, pinToggle, pcToggle, pcState, el("span", { className: "fine" }, ["同時発音 ", voiceCount])]),
   imeWarning,
   piano.element,
   el("p", { className: "fine", textContent: "●の付いた鍵が、選んだ音名(書き出す高さ)です。" }),
 ]);
+showPinned();
 
 // ---------------------------------------------------------------- panel 3b: effects
 
@@ -1020,8 +1035,17 @@ const resetSettingsButton = button("設定を捨てて最初から", "small", ()
 const benchButton = button("負荷を測る", "small", () => benchmark());
 const benchResult = el("span", { className: "fine" });
 
+exportPanel.append(
+  el("details", { className: "sub credit" }, [el("summary", { textContent: "出典メモ(WAV に書き込まれます。親作品登録・クレジット用)" }), ...creditFields]),
+  el("details", { className: "sub" }, [
+    el("summary", { textContent: "設定ファイル(保存・読み込み・最初から)" }),
+    el("p", { className: "fine", textContent: "区間・マーカー・つまみ・音名などの設定だけを保存します(音声は含みません)。同じ素材を開き直すと、この端末では自動で前回の設定に戻ります。" }),
+    el("div", { className: "row tight" }, [saveSettingsButton, loadSettingsButton, resetSettingsButton, settingsStatus]),
+  ]),
+);
+
 const detailsPanel = el("details", { className: "panel params" }, [
-  el("summary", { textContent: "細かい設定(基準ピッチ・鳴らし方・揺らぎ・エンベロープ・出典メモ・設定ファイル)" }),
+  el("summary", { textContent: "細かい設定(基準ピッチ・鳴らし方・揺らぎ・エンベロープ)" }),
   el("div", { className: "params-grid" }, [
     el("fieldset", {}, [
       el("legend", { textContent: "基準ピッチ(素材そのものの高さ)" }),
@@ -1046,15 +1070,6 @@ const detailsPanel = el("details", { className: "panel params" }, [
       range("サステイン", 0, 1, 0.01, () => params.amp.sustain, (p, v) => (p.amp.sustain = v), pct),
       range("リリース", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms),
       range("ベロシティ感度", 0, 1, 0.01, () => params.amp.velocitySens, (p, v) => (p.amp.velocitySens = v), pct),
-    ]),
-    el("fieldset", { className: "credit" }, [
-      el("legend", { textContent: "出典メモ(WAV に書き込まれます。親作品登録・クレジット用)" }),
-      ...creditFields,
-    ]),
-    el("fieldset", {}, [
-      el("legend", { textContent: "設定ファイル" }),
-      el("p", { className: "fine", textContent: "区間・マーカー・つまみ・音名などの設定だけを保存します(音声は含みません)。同じ素材を開き直すと、この端末では自動で前回の設定に戻ります。" }),
-      el("div", { className: "row tight" }, [saveSettingsButton, loadSettingsButton, resetSettingsButton, settingsStatus]),
     ]),
     location.search.includes("bench") ? el("div", { className: "row" }, [benchButton, benchResult]) : el("span"),
   ]),
@@ -1218,7 +1233,7 @@ function renderQueue(): void {
     ...queue.map((item, i) => {
       const open = button(i === queueIndex ? "開いています" : "開く", "small", () => void openQueueItem(i));
       open.disabled = i === queueIndex;
-      const remove = button("外す", "small", () => {
+      const remove = button("リストから外す", "small", () => {
         queue.splice(i, 1);
         if (queueIndex === i) queueIndex = -1;
         else if (queueIndex > i) queueIndex--;

@@ -443,8 +443,8 @@ const materialPanel = el("section", { className: "panel" }, [
     el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, el("span", { className: "spacer" }), undoButton, redoButton, zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
   ]),
   el("details", { className: "fine hint" }, [
-    el("summary", { textContent: "使い方: 両端のハンドルで範囲、帯の端でマーカー、波形を横にドラッグで選択。上の目盛りを押すと再生位置、2 回押すと再生。" }),
-    el("p", { textContent: "目盛り: 1 回押すと再生位置を置き、2 回押すとそこから元の音が鳴ります。引くと位置をなぞれます(再生中は飛びます)。下の「書き出し後」レーンも同じで、こちらは書き出し後が鳴ります。▶ / ■(スペースキー)で再生と停止、■ は再生を始めた位置に戻ります。Shift + スペースは元の音。" }),
+    el("summary", { textContent: "使い方: 両端のハンドルで範囲、帯の端でマーカー、波形を横にドラッグで選択。波形や目盛りを押すと再生位置、2 回押すと再生。" }),
+    el("p", { textContent: "波形か目盛り: 1 回押すと再生位置を置き、2 回押すとそこから元の音が鳴ります。引くと位置をなぞれます(再生中は飛びます)。下の「書き出し後」レーンも同じで、こちらは書き出し後が鳴ります。▶ / ■(スペースキー)で再生と停止、■ は再生を始めた位置に戻ります。Shift + スペースは元の音。" }),
     el("p", { textContent: "判定の点線は「判定 …」の札をつかんで上下にドラッグ(半音ずつ。Alt でセント単位、ダブルクリックで最寄りの半音)。拡大は Ctrl + ホイールかピンチ、横スクロールは Shift + ホイールか 2 本指。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。フェードのつまみは「エフェクト」の「フェード」を開いている間、レーンに出ます。" }),
   ]),
   editor.element,

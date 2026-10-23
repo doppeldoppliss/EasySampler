@@ -577,7 +577,18 @@ export class MaterialEditor {
     if (this.selecting?.pointerId === event.pointerId) {
       const moved = this.selecting.moved;
       this.selecting = null;
-      if (!moved) this.selection = null; // a tap clears
+      if (!moved) {
+        // A tap on the waveform: the selection clears and the play position goes there (a second tap plays).
+        this.selection = null;
+        const sec = this.displaySecAt(event.clientX);
+        const now = performance.now();
+        const again = this.lastTap && this.lastTap.kind === "original" && now - this.lastTap.at < DOUBLE_TAP_MS && Math.abs(event.clientX - this.lastTap.x) < DOUBLE_TAP_PX;
+        this.lastTap = again ? null : { at: now, x: event.clientX, kind: "original" };
+        this.draw();
+        this.onSelect(this.selection);
+        this.onSeek("original", sec, again ? "play" : "tap");
+        return;
+      }
       this.draw();
       this.onSelect(this.selection);
     }

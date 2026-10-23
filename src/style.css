@@ -62,6 +62,11 @@
   box-sizing: border-box;
 }
 
+/* `hidden` wins over any display the classes set (.button is inline-flex). */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -191,6 +196,151 @@ input:focus-visible {
   gap: 14px;
 }
 
+/* The three-step guide shown the first time. */
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+
+.steps ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin: 0;
+  padding-left: 1.2em;
+  font-size: 14px;
+}
+
+.steps li::marker {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.hint {
+  margin: 0;
+  max-width: 36em;
+}
+
+/* Panel 2: note, flatten, length. */
+.note-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.note-select {
+  font-size: 20px;
+  font-weight: 700;
+  min-height: 44px;
+  min-width: 7em;
+}
+
+.note-row .button.small {
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 18px;
+}
+
+.control.preset {
+  grid-template-columns: minmax(8em, 13em) minmax(0, 1fr);
+}
+
+.length {
+  display: grid;
+  grid-template-columns: minmax(8em, 13em) minmax(0, 1fr);
+  gap: 6px 8px;
+  align-items: center;
+  margin: 6px 0;
+}
+
+.length > .control-label {
+  grid-row: 1 / span 3;
+  align-self: start;
+  padding-top: 8px;
+}
+
+.length-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 2;
+}
+
+.length > .fine {
+  grid-column: 2;
+}
+
+.length.disabled .length-row {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+input[type="number"] {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  min-height: 36px;
+  width: 5.5em;
+}
+
+input[type="radio"] {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+/* Panel 4: export. */
+.control.destination {
+  grid-template-columns: minmax(6em, 8em) minmax(0, 1fr);
+}
+
+.help {
+  margin: 4px 0 10px;
+}
+
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+.button.big {
+  min-height: 48px;
+  padding: 8px 22px;
+  font-size: 16px;
+  flex: 1 1 8em;
+}
+
+.file-name {
+  font-size: 13px;
+  word-break: break-all;
+}
+
+details.params > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.params-grid {
+  display: grid;
+  gap: 12px 24px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  margin-top: 10px;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -311,11 +461,6 @@ select,
   grid-template-columns: minmax(8em, 13em) minmax(0, 1fr);
 }
 
-.params {
-  display: grid;
-  gap: 8px 24px;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-}
 
 fieldset {
   border: none;
@@ -398,6 +543,14 @@ details.credit summary {
 }
 
 @media (max-width: 600px) {
+  #app {
+    padding: 10px 12px 32px;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+
   .control {
     grid-template-columns: 1fr 4.5em;
   }
@@ -406,11 +559,34 @@ details.credit summary {
     grid-column: 1 / -1;
   }
 
+  .control.preset,
+  .control.destination {
+    grid-template-columns: 1fr;
+  }
+
+  .length {
+    grid-template-columns: 1fr;
+  }
+
+  .length > .control-label {
+    grid-row: auto;
+    padding-top: 0;
+  }
+
+  .length-row,
+  .length > .fine {
+    grid-column: 1;
+  }
+
   .editor-canvas {
     height: 240px;
   }
 
   .piano {
-    height: 120px;
+    height: 130px;
+  }
+
+  .steps ol {
+    flex-direction: column;
   }
 }

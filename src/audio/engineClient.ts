@@ -25,8 +25,10 @@ export class EngineClient {
   private worker = new Worker(new URL("../workers/analysis.worker.ts", import.meta.url), { type: "module" });
   private nextId = 1;
   private waiting = new Map<number, (response: AnalysisResponse) => void>();
+  private preview: AudioBufferSourceNode | null = null;
   onStatus: (voices: number) => void = () => {};
   onError: (message: string) => void = () => {};
+  onPreviewEnd: () => void = () => {};
 
   constructor() {
     this.worker.onmessage = (event: MessageEvent<AnalysisResponse>) => {
@@ -116,6 +118,35 @@ export class EngineClient {
 
   allOff(): void {
     if (this.node) this.post({ type: "allOff" });
+  }
+
+  /** Plays a rendered buffer (the file as it will be written) once; a second call stops the first. Call from a gesture. */
+  playBuffer(channels: readonly Float32Array[], sampleRate: number): void {
+    this.unlock();
+    const context = this.context!;
+    const frames = channels[0]?.length ?? 0;
+    if (frames === 0) return;
+    const buffer = context.createBuffer(channels.length, frames, sampleRate);
+    channels.forEach((channel, i) => buffer.getChannelData(i).set(channel));
+    this.stopPreview();
+    const node = context.createBufferSource();
+    node.buffer = buffer;
+    node.connect(context.destination);
+    node.onended = () => {
+      if (this.preview === node) this.preview = null;
+      this.onPreviewEnd();
+    };
+    node.start();
+    this.preview = node;
+  }
+
+  stopPreview(): void {
+    try {
+      this.preview?.stop();
+    } catch {
+      // already stopped
+    }
+    this.preview = null;
   }
 
   /** The source last sent, and whether it was made for the engine's actual rate. */

@@ -1,15 +1,16 @@
 // The instrument (楽器): a stretch of a material set up to be played by notes
-// (design.md 4 and 6). Every setting here is a parameter — nothing is
-// rendered to a new file — so any of it can be changed at any time (★1).
-// Times are seconds within the material.
+// (design.md 4), and the export settings (design.md 5): which note the file
+// is tuned to and how long it is. Every setting here is a parameter —
+// nothing is rendered until the file is written — so any of it can be
+// changed at any time. Times are seconds within the material.
 
 export type SustainMode = "pool" | "loop" | "none";
 export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
-export type PresetId = "original" | "jinriki" | "synth-lead" | "bass" | "drum";
+export type PresetId = "synth" | "synth-lead" | "bass" | "jinriki" | "original" | "drum";
 
 export interface Markers {
-  /** Where the material starts and stops being used. */
+  /** Where the material starts and stops being used (the cut, 切り出し). */
   rangeStart: number;
   rangeEnd: number;
   /** End of the head (頭部) = where the sound "lands": the head plays once, unstretched. */
@@ -55,11 +56,12 @@ export interface Credit {
   memo: string;
 }
 
+/** Synth-ification (シンセ化) is the default: flat on the note, the vowel drawn out, a little life left in it. */
 export const DEFAULT_PARAMS: InstrumentParams = {
   root: 60,
   rootMode: "auto",
   pitchMode: "preserve-length",
-  flatten: 0,
+  flatten: 1,
   formantSemitones: 0,
   formantFollow: true,
   sustainMode: "pool",
@@ -77,9 +79,50 @@ export interface Preset {
 
 /** Starting points (design.md 4.5); the root and markers stay as they are. */
 export const PRESETS: Preset[] = [
-  { id: "original", label: "原型(抑揚そのまま)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "pool", tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
-  { id: "jinriki", label: "人力(抑揚を少し整える)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0.3, sustainMode: "pool", tail: { ...p.tail, enabled: true }, wobble: { ...p.wobble, vibratoCents: 15, vibratoHz: 5.5, vibratoDelaySec: 0.3, driftCents: 4, micro: true } }) },
-  { id: "synth-lead", label: "シンセ化リード", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 25, vibratoHz: 5.8, vibratoDelaySec: 0.2, driftCents: 0, micro: true } }) },
+  { id: "synth", label: "シンセ化(平坦)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
+  { id: "synth-lead", label: "シンセ化リード(ビブラート)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 25, vibratoHz: 5.8, vibratoDelaySec: 0.2, driftCents: 0, micro: true } }) },
   { id: "bass", label: "ベース", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, amp: { ...p.amp, attack: 0.003, release: 0.04 } }) },
-  { id: "drum", label: "ドラム(ワンショット)", apply: (p) => ({ ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", tail: { ...p.tail, enabled: true }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, amp: { ...p.amp, attack: 0.001, sustain: 1, release: 0.03 } }) },
+  { id: "jinriki", label: "人力(抑揚を少し整える)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0.3, sustainMode: "pool", tail: { ...p.tail, enabled: true }, wobble: { ...p.wobble, vibratoCents: 15, vibratoHz: 5.5, vibratoDelaySec: 0.3, driftCents: 4, micro: true } }) },
+  { id: "original", label: "原型(抑揚そのまま)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "pool", tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
+  { id: "drum", label: "ドラム・効果音(ワンショット)", apply: (p) => ({ ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", tail: { ...p.tail, enabled: true }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, amp: { ...p.amp, attack: 0.001, sustain: 1, release: 0.03 } }) },
 ];
+
+// ---------------------------------------------------------------- export
+
+export type LengthMode = "beats" | "seconds";
+
+/** Where the file is going; picks the sample rate and the help text (design.md 5–7). */
+export type Destination = "generic" | "garageband" | "vital";
+
+export interface ExportSettings {
+  /** The note the file is tuned to (a whole MIDI number; the file comes out exactly at it, A4 = 440 Hz). */
+  note: number;
+  /** The note follows the detected root until the user picks one. */
+  noteMode: "auto" | "manual";
+  lengthMode: LengthMode;
+  beats: number;
+  bpm: number;
+  seconds: number;
+  destination: Destination;
+}
+
+export const DEFAULT_EXPORT: ExportSettings = {
+  note: 60,
+  noteMode: "auto",
+  lengthMode: "beats",
+  beats: 2,
+  bpm: 120,
+  seconds: 1,
+  destination: "generic",
+};
+
+/** How long the note is held (seconds). */
+export function exportLengthSec(settings: ExportSettings): number {
+  const seconds = settings.lengthMode === "beats" ? (settings.beats * 60) / Math.max(1, settings.bpm) : settings.seconds;
+  return Math.max(0.05, Math.min(60, seconds));
+}
+
+/** The sample rate the destination wants; null = keep the material's own. */
+export function destinationRate(destination: Destination): number | null {
+  return destination === "garageband" ? 44100 : null;
+}

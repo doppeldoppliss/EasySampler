@@ -30,6 +30,8 @@ export class MaterialEditor {
   private material: EditorMaterial | null = null;
   private markers: Markers | null = null;
   private root = 60;
+  /** The note the file is tuned to: where the edited curve is drawn. */
+  private target = 60;
   private flatten = 0;
   private dragging: { handle: Handle; pointerId: number } | null = null;
   private hover: Handle | null = null;
@@ -51,9 +53,10 @@ export class MaterialEditor {
     this.draw();
   }
 
-  setState(markers: Markers, root: number, flatten: number): void {
+  setState(markers: Markers, root: number, flatten: number, target = root): void {
     this.markers = markers;
     this.root = root;
+    this.target = target;
     this.flatten = flatten;
     this.draw();
   }
@@ -176,8 +179,8 @@ export class MaterialEditor {
 
     // Pitch scale: the voiced curve and the root, with some room.
     const track = material.track;
-    let minPitch = this.root;
-    let maxPitch = this.root;
+    let minPitch = Math.min(this.root, this.target);
+    let maxPitch = Math.max(this.root, this.target);
     for (const v of track.f0) {
       if (!Number.isFinite(v)) continue;
       minPitch = Math.min(minPitch, v);
@@ -203,22 +206,26 @@ export class MaterialEditor {
       }
     }
 
-    // Root pitch: dotted line, labelled at the right.
-    g.strokeStyle = cssVar("--text");
-    g.lineWidth = 1.5 * dpr;
-    g.setLineDash([2 * dpr, 4 * dpr]);
-    g.beginPath();
-    g.moveTo(0, y(this.root));
-    g.lineTo(width, y(this.root));
-    g.stroke();
-    g.setLineDash([]);
-    const label = pitchLabel(this.root);
+    // The detected root: dotted line. The target note (the file's pitch): solid accent line, labelled at the right.
     g.font = `600 ${12 * dpr}px system-ui, sans-serif`;
-    const labelWidth = g.measureText(label).width;
-    g.fillStyle = cssVar("--panel");
-    g.fillRect(width - labelWidth - 12 * dpr, y(this.root) - 16 * dpr, labelWidth + 8 * dpr, 15 * dpr);
-    g.fillStyle = cssVar("--text");
-    g.fillText(label, width - labelWidth - 8 * dpr, y(this.root) - 4 * dpr);
+    const line = (midi: number, label: string, color: string, dash: number[]) => {
+      g.strokeStyle = color;
+      g.lineWidth = 1.5 * dpr;
+      g.setLineDash(dash);
+      g.beginPath();
+      g.moveTo(0, y(midi));
+      g.lineTo(width, y(midi));
+      g.stroke();
+      g.setLineDash([]);
+      const labelWidth = g.measureText(label).width;
+      g.fillStyle = cssVar("--panel");
+      g.fillRect(width - labelWidth - 12 * dpr, y(midi) - 16 * dpr, labelWidth + 8 * dpr, 15 * dpr);
+      g.fillStyle = color;
+      g.fillText(label, width - labelWidth - 8 * dpr, y(midi) - 4 * dpr);
+    };
+    // (within a quarter tone the two lines sit on top of each other: the root's label would only overlap)
+    if (Math.abs(this.target - this.root) > 0.5) line(this.root, `判定 ${pitchLabel(this.root)}`, cssVar("--muted"), [2 * dpr, 4 * dpr]);
+    line(this.target, pitchLabel(this.target), cssVar("--accent"), []);
 
     const curve = (value: (pitch: number) => number, from: number, to: number) => {
       g.beginPath();
@@ -242,10 +249,10 @@ export class MaterialEditor {
     g.setLineDash([5 * dpr, 3 * dpr]);
     curve((p) => p, 0, this.duration);
     g.setLineDash([]);
-    // After flattening (as played on the root note): yellow, thick, solid — within the range.
+    // After flattening, as it will be written (on the target note): yellow, thick, solid — within the range.
     g.strokeStyle = cssVar("--pitch-edited");
     g.lineWidth = 3 * dpr;
-    curve((p) => this.root + (1 - this.flatten) * (p - this.root), markers.rangeStart, markers.rangeEnd);
+    curve((p) => this.target + (1 - this.flatten) * (p - this.root), markers.rangeStart, markers.rangeEnd);
 
     // Marker strip: head / sustain / tail bands with labels.
     const bands: [number, number, string, string][] = [
@@ -270,14 +277,24 @@ export class MaterialEditor {
       }
     }
 
-    // Handles: a line through everything, a grip in the strip.
+    // Handles: a line through everything, a grip in the strip. The range
+    // handles (the cut) are bigger, with a bracket at the top, since they are
+    // the first thing to reach for.
     for (const handle of HANDLE_ORDER) {
       const hx = Math.round(x(markers[handle]));
       const active = this.dragging?.handle === handle || this.hover === handle;
+      const isRange = handle === "rangeStart" || handle === "rangeEnd";
       g.fillStyle = active ? cssVar("--accent") : cssVar("--handle");
-      g.fillRect(hx - (active ? 1 : 0.5) * dpr, 0, (active ? 2 : 1) * dpr, height);
-      const gripTop = handle === "tailStart" ? plotHeight + strip / 2 : plotHeight;
-      g.fillRect(hx - 3 * dpr, gripTop + 2 * dpr, 6 * dpr, strip / 2 - 4 * dpr);
+      g.fillRect(hx - (active || isRange ? 1 : 0.5) * dpr, 0, (active || isRange ? 2 : 1) * dpr, height);
+      if (isRange) {
+        const dir = handle === "rangeStart" ? 1 : -1;
+        g.fillRect(hx - (dir > 0 ? 1 : 9) * dpr, 0, 10 * dpr, 3 * dpr);
+        g.fillRect(hx - (dir > 0 ? 1 : 9) * dpr, plotHeight - 3 * dpr, 10 * dpr, 3 * dpr);
+        g.fillRect(hx - 5 * dpr, plotHeight + 2 * dpr, 10 * dpr, strip - 4 * dpr);
+      } else {
+        const gripTop = handle === "tailStart" ? plotHeight + strip / 2 : plotHeight;
+        g.fillRect(hx - 3 * dpr, gripTop + 2 * dpr, 6 * dpr, strip / 2 - 4 * dpr);
+      }
     }
   }
 }

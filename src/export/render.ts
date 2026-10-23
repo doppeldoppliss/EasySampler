@@ -1,0 +1,104 @@
+// Rendering the file (design.md 4–5): one note, played by the same Engine
+// the keyboard uses, straight into a buffer — no AudioContext, no real-time
+// constraint, and exactly what the user heard when trying it. The Engine's
+// random walk is seeded, so the same settings give the same file.
+
+import { Engine, type PreparedSource } from "../engine/engine";
+import type { ExportSettings, InstrumentParams, Markers } from "../instrument/types";
+
+export interface Rendered {
+  channels: Float32Array[];
+  sampleRate: number;
+}
+
+const BLOCK = 128;
+/** A one-shot (nothing is stretched) may run this long before it's cut off. */
+const MAX_ONESHOT_SEC = 30;
+/** After the release, the voice gets this long to finish (a tail, a long release). */
+const MAX_AFTER_SEC = 8;
+/** Anything above this peak is scaled down (never clipped). */
+const PEAK = 0.98;
+/** Trailing samples below this level are cut off, keeping a short margin. */
+const SILENCE = 1e-4;
+const MARGIN_SEC = 0.005;
+
+/**
+ * Plays `note` for `holdSec` (the hold ends `release` early so the file is
+ * about `holdSec` long when the tail is off) and renders until the voice
+ * has finished. A one-shot instrument (sustain "none") ignores `holdSec`
+ * and plays the material out.
+ */
+export function renderNote(source: PreparedSource, markers: Markers, params: InstrumentParams, note: number, holdSec: number): Rendered {
+  const rate = source.sampleRate;
+  const engine = new Engine(rate);
+  engine.setSource(source);
+  engine.setInstrument(markers, { ...params, maxVoices: 1 });
+  const oneShot = params.sustainMode === "none";
+  const releaseAt = oneShot ? Infinity : Math.max(0, holdSec - (params.tail.enabled ? 0 : params.amp.release)) * rate;
+  const limit = Math.ceil((oneShot ? MAX_ONESHOT_SEC : holdSec + MAX_AFTER_SEC) * rate);
+  const stereo = source.channels.length > 1;
+
+  let left = new Float32Array(Math.ceil(Math.min(limit, (oneShot ? 2 : holdSec + 0.5) * rate)));
+  let right = stereo ? new Float32Array(left.length) : left;
+  const blockL = new Float32Array(BLOCK);
+  const blockR = new Float32Array(BLOCK);
+  engine.noteOn(note, 1);
+  let released = false;
+  let at = 0;
+  while (at < limit && engine.activeVoices() > 0) {
+    if (!released && at + BLOCK > releaseAt) {
+      engine.noteOff(note);
+      released = true;
+    }
+    engine.render(blockL, blockR);
+    if (at + BLOCK > left.length) {
+      left = grow(left, at + BLOCK);
+      right = stereo ? grow(right, at + BLOCK) : left;
+    }
+    left.set(blockL, at);
+    if (stereo) right.set(blockR, at);
+    at += BLOCK;
+  }
+
+  // Cut the trailing silence, scale down if anything would clip.
+  const channels = stereo ? [left, right] : [left];
+  let end = 0;
+  let peak = 0;
+  for (const channel of channels) {
+    for (let i = 0; i < at; i++) {
+      const v = Math.abs(channel[i]);
+      if (v > SILENCE && i > end) end = i;
+      if (v > peak) peak = v;
+    }
+  }
+  const length = Math.min(at, end + 1 + Math.round(MARGIN_SEC * rate));
+  const gain = peak > PEAK ? PEAK / peak : 1;
+  return {
+    sampleRate: rate,
+    channels: channels.map((channel) => {
+      const out = channel.slice(0, length);
+      if (gain !== 1) for (let i = 0; i < out.length; i++) out[i] *= gain;
+      return out;
+    }),
+  };
+}
+
+function grow(x: Float32Array, atLeast: number): Float32Array<ArrayBuffer> {
+  const out = new Float32Array(Math.max(atLeast, x.length * 2));
+  out.set(x);
+  return out;
+}
+
+const NOTE_NAMES = ["C", "Cs", "D", "Ds", "E", "F", "Fs", "G", "Gs", "A", "As", "B"];
+
+/** `ore_C4_2beat@165.wav` — the material's name, the note, and how long (file-system safe). */
+export function exportFileName(materialName: string, settings: ExportSettings, oneShot: boolean): string {
+  const base = materialName.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim() || "material";
+  const note = `${NOTE_NAMES[((settings.note % 12) + 12) % 12]}${Math.floor(settings.note / 12) - 1}`;
+  const length = oneShot ? "" : settings.lengthMode === "beats" ? `_${trimNumber(settings.beats)}beat@${trimNumber(settings.bpm)}` : `_${trimNumber(settings.seconds)}s`;
+  return `${base}_${note}${length}.wav`;
+}
+
+function trimNumber(value: number): string {
+  return String(Math.round(value * 100) / 100);
+}

@@ -29,7 +29,11 @@ export class EngineClient {
   private waiting = new Map<number, (response: AnalysisResponse) => void>();
   private preview: AudioBufferSourceNode | null = null;
   private previewStartedAt = 0;
+  /** Seconds into the buffer the preview started at (seeking). */
+  private previewOffset = 0;
   private previewDuration = 0;
+  /** The buffer last played, so a seek can restart it from elsewhere. */
+  private lastBuffer: AudioBuffer | null = null;
   onStatus: (voices: number) => void = () => {};
   onError: (message: string) => void = () => {};
   onPreviewEnd: () => void = () => {};
@@ -166,8 +170,8 @@ export class EngineClient {
     return this.context?.currentTime ?? null;
   }
 
-  /** Plays a rendered buffer (the file as it will be written) once; a second call stops the first. Call from a gesture. */
-  playBuffer(channels: readonly Float32Array[], sampleRate: number): void {
+  /** Plays a rendered buffer (the file as it will be written) once, from `fromSec`; a second call stops the first. Call from a gesture. */
+  playBuffer(channels: readonly Float32Array[], sampleRate: number, fromSec = 0): void {
     this.unlock();
     const context = this.context!;
     const frames = channels[0]?.length ?? 0;
@@ -175,32 +179,62 @@ export class EngineClient {
     const buffer = context.createBuffer(channels.length, frames, sampleRate);
     channels.forEach((channel, i) => buffer.getChannelData(i).set(channel));
     this.stopPreview();
+    this.lastBuffer = buffer;
+    this.startPreview(buffer, fromSec);
+  }
+
+  private startPreview(buffer: AudioBuffer, fromSec: number): void {
+    const context = this.context!;
+    const offset = Math.max(0, Math.min(buffer.duration, fromSec));
     const node = context.createBufferSource();
     node.buffer = buffer;
     node.connect(context.destination);
+    // Only the node still in charge reports the end: a seek swaps nodes without ending the preview.
     node.onended = () => {
-      if (this.preview === node) this.preview = null;
+      if (this.preview !== node) return;
+      this.preview = null;
       this.onPreviewEnd();
     };
-    node.start();
+    node.start(0, offset);
     this.preview = node;
     this.previewStartedAt = context.currentTime;
-    this.previewDuration = frames / sampleRate;
+    this.previewOffset = offset;
+    this.previewDuration = buffer.duration;
   }
 
   /** Seconds into the preview that is playing, or null when none is. */
   previewPosition(): number | null {
     if (!this.preview || !this.context) return null;
-    return Math.min(this.previewDuration, Math.max(0, this.context.currentTime - this.previewStartedAt));
+    return Math.min(this.previewDuration, Math.max(0, this.previewOffset + this.context.currentTime - this.previewStartedAt));
   }
 
-  stopPreview(): void {
+  /** The length of the preview last played (seconds), or 0. */
+  get previewLength(): number {
+    return this.lastBuffer?.duration ?? 0;
+  }
+
+  /** Moves the playing preview to `sec` (nothing when none is playing). */
+  seekPreview(sec: number): void {
+    if (!this.preview || !this.lastBuffer) return;
+    this.halt();
+    this.startPreview(this.lastBuffer, sec);
+  }
+
+  /** Stops the node without reporting an end. */
+  private halt(): void {
+    const node = this.preview;
+    this.preview = null;
     try {
-      this.preview?.stop();
+      node?.stop();
     } catch {
       // already stopped
     }
-    this.preview = null;
+  }
+
+  stopPreview(): void {
+    const was = this.preview !== null;
+    this.halt();
+    if (was) this.onPreviewEnd();
   }
 
   /** The source last sent, and whether it was made for the engine's actual rate. */

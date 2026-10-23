@@ -38,7 +38,7 @@ import {
   type PresetId,
 } from "./instrument/types";
 import { demoSyllable } from "./testsignals/synthVoice";
-import { el } from "./ui/dom";
+import { el, isTypingTarget } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 import { clock, RangePicker } from "./ui/rangePicker";
@@ -363,6 +363,28 @@ function refreshFixBar(): void {
 // Trial playback from the head (with the playhead moving), and the view's zoom.
 const playOriginalButton = button("▶ 元の音", "small", () => void playOriginal());
 const playResultButton = button("▶ 書き出し後", "small", () => void listen());
+// Where to play from (seconds into the preview): set by the seek bar, follows the playhead while playing.
+let cue = 0;
+let lastPreview: "result" | "original" = "result";
+const seekBar = el("input", { type: "range", min: "0", max: "1", step: "0.01", value: "0", className: "seek-bar", ariaLabel: "再生位置" });
+const seekClock = el("span", { className: "fine num seek-clock" });
+let seekLength = 0;
+function showSeek(sec: number): void {
+  seekBar.value = String(Math.min(seekLength, sec));
+  seekClock.textContent = `${clock(Math.min(seekLength, sec))} / ${clock(seekLength)}`;
+}
+function setSeekLength(sec: number): void {
+  seekLength = Math.max(0.01, sec);
+  seekBar.max = String(seekLength);
+  if (cue > seekLength) cue = 0;
+  showSeek(cue);
+}
+seekBar.addEventListener("input", () => {
+  cue = Number(seekBar.value);
+  showSeek(cue);
+  if (playing) client.seekPreview(cue);
+});
+const seekRow = el("div", { className: "row tight seek-row" }, [seekBar, seekClock]);
 const zoomInButton = button("＋", "small", () => editor.zoom(1.6));
 const zoomOutButton = button("−", "small", () => editor.zoom(1 / 1.6));
 const zoomAllButton = button("全体", "small", () => editor.zoomAll());
@@ -384,8 +406,9 @@ const materialPanel = el("section", { className: "panel" }, [
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [el("span", { className: "fine", textContent: "判定した音程" }), rootLabel, rootSource]),
     el("div", { className: "row tight" }, [playOriginalButton, playResultButton, el("span", { className: "spacer" }), zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
+    seekRow,
   ]),
-  el("p", { className: "fine hint", textContent: "両端のハンドルで鳴らす範囲を切り出し、帯の端で頭部(伸ばさない)・持続区間(伸ばす)・語尾を直せます。点線(判定)は上下にドラッグで半音ずつ、Alt でセント単位、ダブルクリックで最寄りの半音に。拡大は Ctrl + ホイールかピンチ、横スクロールはホイールか 2 本指。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。" }),
+  el("p", { className: "fine hint", textContent: "両端のハンドルで鳴らす範囲を切り出し、帯の端で頭部(伸ばさない)・持続区間(伸ばす)・語尾を直せます。再生バーで途中から聴け、スペースキーで再生 / 停止(Shift + スペースで元の音)。点線(判定)は上下にドラッグで半音ずつ、Alt でセント単位、ダブルクリックで最寄りの半音に。拡大は Ctrl + ホイールかピンチ、横スクロールはホイールか 2 本指。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。" }),
   editor.element,
   el("p", { className: "legend fine" }, [
     el("span", { className: "swatch original" }), "元のピッチ  ",
@@ -1356,6 +1379,8 @@ function trackPlayhead(): void {
       return;
     }
     editor.setPlayhead(playing.kind === "result" ? { kind: "output", sec: pos } : { kind: "display", sec: playing.displayStart + pos });
+    cue = pos;
+    showSeek(pos);
     playheadFrame = requestAnimationFrame(step);
   };
   playheadFrame = requestAnimationFrame(step);
@@ -1379,9 +1404,11 @@ async function listen(): Promise<void> {
   const result = await buildCurrent();
   if (!result) return;
   exportStatus.textContent = exportSettings.format === "multisample" ? `試聴: 中央の音(${pitchLabel(note)})` : "";
+  lastPreview = "result";
+  setSeekLength(result.preview.channels[0].length / result.preview.sampleRate);
   playing = { kind: "result" };
   showPlaying();
-  client.playBuffer(result.preview.channels, result.preview.sampleRate);
+  client.playBuffer(result.preview.channels, result.preview.sampleRate, cue);
   trackPlayhead();
 }
 
@@ -1421,9 +1448,11 @@ async function playOriginal(): Promise<void> {
     }
     cursor += length;
   }
+  lastPreview = "original";
+  setSeekLength(total / rate);
   playing = { kind: "original", displayStart: editor.disp(markers.rangeStart) };
   showPlaying();
-  client.playBuffer(out, rate);
+  client.playBuffer(out, rate, cue);
   trackPlayhead();
 }
 
@@ -1432,7 +1461,26 @@ client.onPreviewEnd = () => {
   showPlaying();
   cancelAnimationFrame(playheadFrame);
   editor.setPlayhead(null);
+  if (cue >= seekLength - 0.02) cue = 0;
+  showSeek(cue);
 };
+
+// Space plays / stops the last preview (書き出し後 to begin with); Shift + Space the original. A song playing stops.
+window.addEventListener("keydown", (event) => {
+  if (event.code !== "Space" || isTypingTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+  if (!material) return;
+  event.preventDefault();
+  if (songPanel.playing) {
+    songPanel.stop();
+    return;
+  }
+  if (playing) {
+    client.stopPreview();
+    return;
+  }
+  if (event.shiftKey || lastPreview === "original") void playOriginal();
+  else void listen();
+});
 
 async function deliver(how: "share" | "download", all: boolean): Promise<void> {
   try {

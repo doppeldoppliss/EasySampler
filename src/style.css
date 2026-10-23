@@ -801,3 +801,18 @@ details.sub.fx > summary.on {
   margin: 2px 0 0;
   color: var(--accent);
 }
+
+/* The previews' seek bar under the play buttons. */
+.seek-row {
+  margin: 4px 0 6px;
+}
+
+.seek-bar {
+  flex: 1 1 160px;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.seek-clock {
+  white-space: nowrap;
+}

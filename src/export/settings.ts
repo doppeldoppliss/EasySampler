@@ -118,6 +118,7 @@ function sanitizeParams(raw: unknown): InstrumentParams {
     rootMode: raw.rootMode === "manual" ? "manual" : "auto",
     pitchMode: raw.pitchMode === "resample" ? "resample" : "preserve-length",
     flatten: clamp(num(raw.flatten, d.flatten), 0, 1),
+    unvoicedFollow: typeof raw.unvoicedFollow === "boolean" ? raw.unvoicedFollow : d.unvoicedFollow,
     formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
     formantFollow: typeof raw.formantFollow === "boolean" ? raw.formantFollow : d.formantFollow,
     sustainEnabled: typeof raw.sustainEnabled === "boolean" ? raw.sustainEnabled : d.sustainEnabled,

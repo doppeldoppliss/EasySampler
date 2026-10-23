@@ -591,6 +591,8 @@ const tunePanel = el("section", { className: "panel tune" }, [
   ),
   el("p", { className: "fine help", textContent: "拍は「長さ」の BPM で数えます(「曲で試す」の再生中は曲の BPM)。上限に来た語尾は短くフェードして切れます。" }),
   range("平坦化(抑揚の残し具合)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
+  check("音程なし(無声)の部分も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v), true),
+  el("p", { className: "fine help", textContent: "子音・息・ノイズなど音程のない部分は、ふつうは移調しても元のまま鳴ります。オンにすると、その部分も音名に応じて細く / 太くなります(長さは変わりません)。音程そのものを付けたいときは、選択して「有声に」。" }),
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
   lengthBlock,
   vibratoPanel,

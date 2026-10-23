@@ -498,8 +498,10 @@ export class Engine {
         gain *= 1 + (this.random() * 2 - 1) * SHIMMER;
       }
     } else {
-      spacing = period;
-      alpha = 1;
+      // No pitch here. Optionally the grains are read at the shift's rate (and laid down as densely),
+      // so the noise's colour follows the note while the length stays: a 音MAD-style "s" that goes up.
+      alpha = params.unvoicedFollow ? 2 ** (shift / 12) : 1;
+      spacing = period / alpha;
       // Repeated noise grains sound metallic (and read as a pitch); alternating their direction hides it.
       // That happens in the sustain, and wherever a slowed-down part reuses its grains.
       if (v.phase === Phase.Sustain || this.speedAt(v.srcTime) < 1) {

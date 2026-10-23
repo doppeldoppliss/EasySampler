@@ -37,6 +37,13 @@ export interface InstrumentParams {
   pitchMode: PitchMode;
   /** 0 = the material's own inflection, 1 = flat on the note (★3). */
   flatten: number;
+  /**
+   * Unvoiced grains (no pitch: consonants, breath, noise) are normally laid down
+   * as recorded whatever the note. On, they are read faster / slower with the
+   * shift — no pitch (there is none), but their colour follows the note, as in
+   * old-style speed-change 音MAD — while the length stays the same.
+   */
+  unvoicedFollow: boolean;
   /** Formant shift in semitones (0 = keep the voice's character). */
   formantSemitones: number;
   /** Let the formants follow a little on shifts beyond ±7 semitones. */
@@ -125,6 +132,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   rootMode: "auto",
   pitchMode: "preserve-length",
   flatten: 1,
+  unvoicedFollow: false,
   formantSemitones: 0,
   formantFollow: true,
   sustainEnabled: true,

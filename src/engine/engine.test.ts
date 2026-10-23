@@ -249,3 +249,65 @@ describe("フェード (fade in / fade out)", () => {
     expect(e(0.15)).toBeLessThan(e(0.4));
   });
 });
+
+describe("unvoicedFollow (音程なしの部分も移調に合わせる)", () => {
+  /** The demo syllable with its hiss replaced by noise peaked near 5 kHz (a consonant has a colour, white noise has none). */
+  function peakedMaterial(): Float32Array {
+    const material = demoSyllable(SR);
+    const hissEnd = Math.round(0.09 * SR);
+    // A two-pole resonator at 5 kHz driven by noise (seeded, so the test is stable).
+    let seed = 12345;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+    const r = 0.97;
+    const w = (2 * Math.PI * 5000) / SR;
+    let y1 = 0;
+    let y2 = 0;
+    for (let i = 0; i < hissEnd; i++) {
+      const y = rnd() * 0.3 + 2 * r * Math.cos(w) * y1 - r * r * y2;
+      y2 = y1;
+      y1 = y;
+      material[i] = y * 0.1 * Math.min(1, i / 200);
+    }
+    return material;
+  }
+
+  /** Spectral centroid (Hz) of the first `sec` seconds, by a plain DFT on a few hundred bins. */
+  function centroid(out: Float32Array, sec: number): number {
+    const n = Math.min(out.length, Math.round(sec * SR));
+    const bins = 256;
+    let num = 0;
+    let den = 0;
+    for (let b = 1; b < bins; b++) {
+      const hz = (b / bins) * (SR / 2);
+      let re = 0;
+      let im = 0;
+      for (let i = 0; i < n; i++) {
+        const ph = (2 * Math.PI * hz * i) / SR;
+        re += out[i] * Math.cos(ph);
+        im -= out[i] * Math.sin(ph);
+      }
+      const p = re * re + im * im;
+      num += hz * p;
+      den += p;
+    }
+    return den > 0 ? num / den : 0;
+  }
+
+  it("leaves a consonant's colour alone by default, and moves it with the note when on", () => {
+    const material = peakedMaterial();
+    const base = { sustainEnabled: false, tail: { enabled: false, limit: "unlimited" as const } };
+    const { analysis } = setup(material, base);
+    const root = Math.round(analysis.root!.midi);
+    const run = (follow: boolean, shift: number) => centroid(play(setup(material, { ...base, unvoicedFollow: follow }).engine, root + shift, 0.3, 0.1), 0.07);
+    const offLow = run(false, -12);
+    const offHigh = run(false, 12);
+    const onLow = run(true, -12);
+    const onHigh = run(true, 12);
+    // Off: the same colour whatever the note.
+    expect(Math.abs(offHigh - offLow) / offLow).toBeLessThan(0.1);
+    // On: an octave apart in the note is clearly apart in colour (not necessarily a full octave: windows and aliasing blur it).
+    expect(onHigh).toBeGreaterThan(onLow * 1.4);
+    expect(onHigh).toBeGreaterThan(offHigh * 1.15);
+    expect(onLow).toBeLessThan(offLow * 0.85);
+  });
+});

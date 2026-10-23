@@ -46,7 +46,7 @@ export class SongPanel {
   private readonly transposeLabel = el("output", { className: "num" });
   private readonly backingCheck = el("input", { type: "checkbox", checked: true });
   private readonly backingRange = el("input", { type: "range", min: "0", max: "1", step: "0.01", value: "0.5", ariaLabel: "伴奏の音量" });
-  private readonly playButton = button("▶ 再生", "big primary", () => this.toggle());
+  private readonly playButton = button("▶ 再生", "big", () => this.toggle());
   private readonly seek = el("input", { type: "range", min: "0", max: "1", step: "0.01", value: "0", className: "song-seek", ariaLabel: "再生位置" });
   private readonly position = el("span", { className: "num" });
 

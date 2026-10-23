@@ -334,10 +334,12 @@ function afterMarkersEdited(): void {
 }
 
 const correctionsLabel = el("span", { className: "fine" });
+/** What the fix bar's buttons just did (so the answer is next to the finger, not at the top of the page). */
+const fixStatus = el("span", { className: "fine fix-status", role: "status" });
 const undoCorrectionButton = button("最後の手直しを取り消す", "small", () => void setCorrections(material?.corrections.slice(0, -1) ?? []));
 const clearCorrectionsButton = button("すべて取り消す", "small", () => void setCorrections([]));
 const fixBar = el("div", { className: "fix-bar" }, [
-  el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, ...fixButtons, clearSelectionButton]),
+  el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, ...fixButtons, clearSelectionButton, fixStatus]),
   el("div", { className: "row tight" }, [removedLabel, undoRemoveButton, clearRemovedButton]),
   el("div", { className: "row tight" }, [correctionsLabel, undoCorrectionButton, clearCorrectionsButton]),
 ]);
@@ -360,31 +362,53 @@ function refreshFixBar(): void {
   correctionsLabel.parentElement!.hidden = count === 0;
 }
 
-// Trial playback from the head (with the playhead moving), and the view's zoom.
-const playOriginalButton = button("▶ 元の音", "small", () => void playOriginal());
-const playResultButton = button("▶ 書き出し後", "small", () => void listen());
-// Where to play from (seconds into the preview): set by the seek bar, follows the playhead while playing.
+// One transport: what to play (元の音 / 書き出し後, a visible mode), one ▶ / ■, the position. The ruler on
+// the editor is the seek bar (tap = set, double-tap = play from there, drag = scrub); Space = this ▶ / ■.
 let cue = 0;
-let lastPreview: "result" | "original" = "result";
-const seekBar = el("input", { type: "range", min: "0", max: "1", step: "0.01", value: "0", className: "seek-bar", ariaLabel: "再生位置" });
+/** Where the last playback started: ■ returns there (REAPER / Audacity), so the same spot can be heard again. */
+let playStartCue = 0;
+let previewMode: "result" | "original" = "result";
+const modeOriginal = el("button", { type: "button", className: "mode-button", textContent: "元の音" });
+const modeResult = el("button", { type: "button", className: "mode-button", textContent: "書き出し後" });
+const modeToggle = el("div", { className: "mode-toggle", role: "group", ariaLabel: "何を鳴らすか" }, [modeOriginal, modeResult]);
+const playButton = button("▶", "small play-button", () => void togglePreview());
+playButton.ariaLabel = "再生 / 停止(スペース)";
 const seekClock = el("span", { className: "fine num seek-clock" });
 let seekLength = 0;
 function showSeek(sec: number): void {
-  seekBar.value = String(Math.min(seekLength, sec));
   seekClock.textContent = `${clock(Math.min(seekLength, sec))} / ${clock(seekLength)}`;
 }
 function setSeekLength(sec: number): void {
   seekLength = Math.max(0.01, sec);
-  seekBar.max = String(seekLength);
   if (cue > seekLength) cue = 0;
   showSeek(cue);
 }
-seekBar.addEventListener("input", () => {
-  cue = Number(seekBar.value);
-  showSeek(cue);
-  if (playing) client.seekPreview(cue);
+function setPreviewMode(mode: "result" | "original"): void {
+  previewMode = mode;
+  modeOriginal.setAttribute("aria-pressed", String(mode === "original"));
+  modeResult.setAttribute("aria-pressed", String(mode === "result"));
+  if (!playing) {
+    // The clock shows the length of what would play now.
+    setSeekLength(mode === "original" ? originalPieces().reduce((n, p) => n + (p.to - p.from), 0) : markers ? outputLayout(markers, params, exportLengthSec(exportSettings)).totalSec : 0);
+  }
+}
+modeOriginal.addEventListener("click", () => {
+  if (playing) client.stopPreview();
+  setPreviewMode("original");
 });
-const seekRow = el("div", { className: "row tight seek-row" }, [seekBar, seekClock]);
+modeResult.addEventListener("click", () => {
+  if (playing) client.stopPreview();
+  setPreviewMode("result");
+});
+/** ▶ plays the mode from the cue; ■ stops and returns to where it started. */
+async function togglePreview(): Promise<void> {
+  if (playing) {
+    client.stopPreview();
+    return;
+  }
+  if (previewMode === "original") await playOriginal();
+  else await listen();
+}
 const zoomInButton = button("＋", "small", () => editor.zoom(1.6));
 const zoomOutButton = button("−", "small", () => editor.zoom(1 / 1.6));
 const zoomAllButton = button("全体", "small", () => editor.zoomAll());
@@ -405,10 +429,13 @@ const materialPanel = el("section", { className: "panel" }, [
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [el("span", { className: "fine", textContent: "判定した音程" }), rootLabel, rootSource]),
-    el("div", { className: "row tight" }, [playOriginalButton, playResultButton, el("span", { className: "spacer" }), zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
-    seekRow,
+    el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, el("span", { className: "spacer" }), zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
   ]),
-  el("p", { className: "fine hint", textContent: "両端のハンドルで鳴らす範囲を切り出し、帯の端で頭部(伸ばさない)・持続区間(伸ばす)・語尾を直せます。一番上の帯を押すか引くとそこから元の音が鳴り、下の「書き出し後」レーンを押すとそこから書き出し後が鳴ります(再生中は飛びます)。スペースキーで再生 / 停止(Shift + スペースで元の音)。点線(判定)は上下にドラッグで半音ずつ、Alt でセント単位、ダブルクリックで最寄りの半音に。拡大は Ctrl + ホイールかピンチ、横スクロールはホイールか 2 本指。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。" }),
+  el("details", { className: "fine hint" }, [
+    el("summary", { textContent: "使い方: 両端のハンドルで範囲、帯の端でマーカー、波形を横にドラッグで選択。上の目盛りを押すと再生位置、2 回押すと再生。" }),
+    el("p", { textContent: "目盛り: 1 回押すと再生位置を置き、2 回押すとそこから元の音が鳴ります。引くと位置をなぞれます(再生中は飛びます)。下の「書き出し後」レーンも同じで、こちらは書き出し後が鳴ります。▶ / ■(スペースキー)で再生と停止、■ は再生を始めた位置に戻ります。Shift + スペースは元の音。" }),
+    el("p", { textContent: "判定の点線は「判定 …」の札をつかんで上下にドラッグ(半音ずつ。Alt でセント単位、ダブルクリックで最寄りの半音)。拡大は Ctrl + ホイールかピンチ、横スクロールは Shift + ホイールか 2 本指。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。フェードのつまみは「エフェクト」の「フェード」を開いている間、レーンに出ます。" }),
+  ]),
   editor.element,
   el("p", { className: "legend fine" }, [
     el("span", { className: "swatch original" }), "元のピッチ  ",
@@ -641,6 +668,10 @@ const fadeGroup = el("details", { className: "sub fx" }, [
   range("終わりのフェード", 0, 3, 0.01, () => params.amp.fadeOut, (p, v) => (p.amp.fadeOut = v), ms, true),
 ]);
 fadeGroup.addEventListener("change", refreshFxSummaries);
+fadeGroup.addEventListener("toggle", () => refreshFadeGrips());
+function refreshFadeGrips(): void {
+  editor.setFadeGrips(fadeGroup.open || params.amp.attack >= 0.02 || params.amp.fadeOut > 0);
+}
 controlsRefreshers.push(refreshFxSummaries);
 
 const fxResetButton = button("すべてオフに戻す", "small", () => {
@@ -766,7 +797,13 @@ destinationSelect.addEventListener("change", () =>
 );
 const destinationHelp = el("p", { className: "fine help" });
 const fileNameLabel = el("code", { className: "file-name" });
-const listenButton = button("▶ 聴く", "big", () => void listen());
+const listenButton = button("▶ 書き出し後を聴く", "big", () => {
+  if (playing?.kind === "result") client.stopPreview();
+  else {
+    if (playing) client.stopPreview();
+    void listen();
+  }
+});
 const shareButton = button("共有", "big primary", () => void deliver("share", false));
 shareButton.hidden = !canShareFiles();
 const saveButton = button("保存", `big ${canShareFiles() ? "" : "primary"}`, () => void deliver("download", false));
@@ -1281,6 +1318,7 @@ function sendInstrument(): void {
   rootLabel.textContent = pitchLabel(params.root);
   rootSource.textContent = params.rootMode === "auto" ? "(自動判定)" : "(手動)";
   refreshExport();
+  if (!playing) setPreviewMode(previewMode);
 }
 
 /** The note and export settings → the note row, the length row, the file name, the help, the editor's target line. */
@@ -1322,6 +1360,7 @@ function refreshExport(): void {
   if (markers) {
     editor.setParts({ sustain: params.sustainEnabled, tail: params.tail.enabled && params.tail.limit !== "none" });
     editor.setState(markers, params.root, params.flatten, note);
+    refreshFadeGrips();
     editor.setLayout(
       outputLayout(markers, params, held),
       params.wobble.vibratoCents > 0 ? { depthCents: params.wobble.vibratoCents, rateHz: params.wobble.vibratoHz, delaySec: params.wobble.vibratoDelaySec } : null,
@@ -1438,10 +1477,9 @@ function trackPlayhead(): void {
 
 function showPlaying(): void {
   const result = playing?.kind === "result";
-  const original = playing?.kind === "original";
-  listenButton.textContent = result ? "■ 停止" : "▶ 聴く";
-  playResultButton.textContent = result ? "■ 停止" : "▶ 書き出し後";
-  playOriginalButton.textContent = original ? "■ 停止" : "▶ 元の音";
+  listenButton.textContent = result ? "■ 停止" : "▶ 書き出し後を聴く";
+  playButton.textContent = playing ? "■" : "▶";
+  playButton.classList.toggle("playing", playing !== null);
 }
 
 /** The result from the head: the file as it will be written (a multisample's centre zone, a wavetable's sweep). */
@@ -1454,8 +1492,9 @@ async function listen(): Promise<void> {
   const result = await buildCurrent();
   if (!result) return;
   exportStatus.textContent = exportSettings.format === "multisample" ? `試聴: 中央の音(${pitchLabel(note)})` : "";
-  lastPreview = "result";
+  setPreviewMode("result");
   setSeekLength(result.preview.channels[0].length / result.preview.sampleRate);
+  playStartCue = cue;
   playing = { kind: "result" };
   showPlaying();
   client.playBuffer(result.preview.channels, result.preview.sampleRate, cue);
@@ -1529,8 +1568,9 @@ async function playOriginal(): Promise<void> {
     }
     cursor += length;
   }
-  lastPreview = "original";
+  setPreviewMode("original");
   setSeekLength(total / rate);
+  playStartCue = cue;
   playing = { kind: "original" };
   showPlaying();
   client.playBuffer(out, rate, cue);
@@ -1544,12 +1584,15 @@ client.onPreviewEnd = () => {
     showPickerSeek(pickerCue);
     return;
   }
+  const was = playing;
   playing = null;
   showPlaying();
   cancelAnimationFrame(playheadFrame);
-  editor.setPlayhead(null);
-  if (cue >= seekLength - 0.02) cue = 0;
+  cue = cue >= seekLength - 0.02 ? 0 : playStartCue;
   showSeek(cue);
+  // Where the next ▶ starts, as a still playhead.
+  if (was && cue > 0) editor.setPlayhead(was.kind === "result" ? { kind: "output", sec: cue } : { kind: "display", sec: bufferToDisplay(cue) });
+  else editor.setPlayhead(null);
 };
 
 // Space plays / stops the last preview (書き出し後 to begin with); Shift + Space the original. A song playing stops.
@@ -1571,8 +1614,8 @@ window.addEventListener("keydown", (event) => {
     client.stopPreview();
     return;
   }
-  if (event.shiftKey || lastPreview === "original") void playOriginal();
-  else void listen();
+  if (event.shiftKey) setPreviewMode("original");
+  void togglePreview();
 });
 
 async function deliver(how: "share" | "download", all: boolean): Promise<void> {
@@ -1627,7 +1670,7 @@ async function setCorrections(corrections: PitchCorrection[]): Promise<void> {
   if (!material) return;
   const target = material;
   target.corrections = corrections;
-  status.textContent = corrections.length ? "手直しを反映しています…" : "判定を元に戻しています…";
+  fixStatus.textContent = corrections.length ? "手直しを反映しています…" : "判定を元に戻しています…";
   try {
     const track = applyCorrections(target.original.track, corrections);
     const { analysis, source } = await client.analyze(target.channels, target.sampleRate, undefined, track);
@@ -1645,9 +1688,9 @@ async function setCorrections(corrections: PitchCorrection[]): Promise<void> {
     }
     applyCurrentCut();
     refreshFixBar();
-    status.textContent = corrections.length ? `手直し ${corrections.length} 件を反映しました。判定 ${pitchLabel(params.root)}。` : "判定を元に戻しました。";
+    fixStatus.textContent = corrections.length ? `手直し ${corrections.length} 件を反映しました。判定 ${pitchLabel(params.root)}。` : "判定を元に戻しました。";
   } catch (error) {
-    status.textContent = `手直しを反映できませんでした: ${error instanceof Error ? error.message : error}`;
+    fixStatus.textContent = `手直しを反映できませんでした: ${error instanceof Error ? error.message : error}`;
   }
 }
 
@@ -1821,29 +1864,23 @@ editor.onLevelChange = (level, final) => {
 
 // Seeking on the editor: the top strip for the original (display time), the lane for the result (output time).
 // Playing the same thing: it jumps there. Playing the other: that stops and this starts from there. Stopped: the cue is set.
-editor.onSeek = (kind, sec, final) => {
+editor.onSeek = (kind, sec, how) => {
   if (!material || !markers) return;
   const bufferSec = kind === "original" ? displayToBuffer(sec) : sec;
   if (playing && playing.kind === kind) {
+    // Playing this already: jump there (and a double tap restarts there too).
     cue = bufferSec;
+    playStartCue = cue;
     showSeek(cue);
     client.seekPreview(cue);
     return;
   }
-  if (playing) {
-    client.stopPreview();
-    cue = bufferSec;
-    if (final) void (kind === "original" ? playOriginal() : listen());
-    return;
-  }
-  lastPreview = kind;
+  if (playing) client.stopPreview();
+  setPreviewMode(kind);
   cue = bufferSec;
-  // The length of what would play: the original's pieces, or the output as laid out (the build may differ a little).
-  if (kind === "original") setSeekLength(originalPieces().reduce((n, p) => n + (p.to - p.from), 0));
-  else setSeekLength(outputLayout(markers, params, exportLengthSec(exportSettings)).totalSec);
   showSeek(cue);
   editor.setPlayhead(kind === "result" ? { kind: "output", sec } : { kind: "display", sec });
-  if (final) void (kind === "original" ? playOriginal() : listen());
+  if (how === "play") void (kind === "original" ? playOriginal() : listen());
 };
 
 editor.onSelect = (next) => {

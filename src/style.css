@@ -816,3 +816,59 @@ details.sub.fx > summary.on {
 .seek-clock {
   white-space: nowrap;
 }
+
+/* The transport: ▶ / ■, the [元の音 | 書き出し後] mode, the position. */
+.transport {
+  gap: 8px;
+}
+
+.play-button {
+  min-width: 44px;
+  font-size: 16px;
+}
+
+.play-button.playing {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.mode-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mode-button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.fix-status {
+  color: var(--accent);
+}
+
+details.hint > summary {
+  cursor: pointer;
+}
+
+details.hint > p {
+  margin: 6px 0 0;
+}
+
+@media (pointer: coarse) {
+  .button.small {
+    min-height: 40px;
+  }
+}

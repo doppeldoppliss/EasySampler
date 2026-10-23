@@ -56,15 +56,20 @@ type LaneGrip = "fadeIn" | "fadeOut";
 const MAX_FADE_IN_SEC = 2;
 const MAX_FADE_OUT_SEC = 3;
 
-const STRIP_HEIGHT = 36;
+const STRIP_HEIGHT = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches ? 44 : 36;
 /** The "after" lane at the bottom: how the output lays out in time. */
 const LANE_HEIGHT = 30;
-/** The strip across the top of the plot: press or drag there to play the original from that point. */
-const SEEK_HEIGHT = 14;
+/** The time ruler across the top of the plot: tap to set the play position, double-tap to play from there, drag to scrub. */
+const RULER_HEIGHT = 24;
 const HANDLE_REACH_MOUSE = 8;
-const HANDLE_REACH_TOUCH = 22;
-/** A selection drag shorter than this (CSS px) is a tap: it clears the selection. */
-const TAP_PX = 4;
+/** On touch the nearest handle within this (CSS px) is grabbed — inside the marker strip only. */
+const HANDLE_REACH_TOUCH = 30;
+/** A drag shorter than this (CSS px) is a tap: it clears the selection (fingers wobble more than mice). */
+const TAP_PX_MOUSE = 4;
+const TAP_PX_TOUCH = 10;
+/** Two taps this close in time and space are a double tap. */
+const DOUBLE_TAP_MS = 350;
+const DOUBLE_TAP_PX = 24;
 /** The closest zoom: this many seconds across the plot. */
 const MIN_VIEW_SEC = 0.05;
 
@@ -97,7 +102,13 @@ export class MaterialEditor {
   private pinch: { span: number; start: number; distance: number; centerX: number } | null = null;
   private hover: Handle | "root" | LaneGrip | "seek" | null = null;
   /** Scrubbing: the top strip seeks the original (display seconds), the lane seeks the result (output seconds). */
-  private seekDrag: { kind: "original" | "result"; pointerId: number; sec: number } | null = null;
+  private seekDrag: { kind: "original" | "result"; pointerId: number; sec: number; startX: number; moved: boolean } | null = null;
+  /** The last tap on the ruler or lane, for double taps. */
+  private lastTap: { at: number; x: number; kind: "original" | "result" } | null = null;
+  /** Whether the fade grips are shown and grabbable (only while the user is working on the fades). */
+  private showGrips = false;
+  /** The "判定 …" label chip from the last draw (CSS px): the only place the root line can be grabbed. */
+  private rootChip = { x: 0, y: 0, w: 0, h: 0 };
   /** Dragging a fade grip in the "after" lane. */
   private laneDrag: { grip: LaneGrip; pointerId: number; startSec: number; startX: number } | null = null;
   /** The pitch scale of the last draw (CSS px), for turning a pointer's y into a pitch. */
@@ -109,7 +120,14 @@ export class MaterialEditor {
   /** A fade grip was dragged: the level with its new attack / fade-out (seconds). */
   onLevelChange: (level: LevelShape, final: boolean) => void = () => {};
   /** A press or drag in the seek strip (display seconds of the original) or in the lane (output seconds of the result). */
-  onSeek: (kind: "original" | "result", sec: number, final: boolean) => void = () => {};
+  onSeek: (kind: "original" | "result", sec: number, how: "tap" | "drag" | "end" | "play") => void = () => {};
+
+  /** Shows the fade grips in the lane (while the フェード group is open, or a fade is set). */
+  setFadeGrips(on: boolean): void {
+    if (on === this.showGrips) return;
+    this.showGrips = on;
+    this.draw();
+  }
   onSelect: (selection: TimeSelection | null) => void = () => {};
   onViewChange: (view: { start: number; end: number; total: number }) => void = () => {};
 
@@ -122,7 +140,7 @@ export class MaterialEditor {
     this.canvas.addEventListener("pointercancel", (event) => this.up(event));
     this.canvas.addEventListener("wheel", (event) => this.wheel(event), { passive: false });
     this.canvas.addEventListener("dblclick", (event) => {
-      if (this.nearRoot(event.clientX, event.clientY, "mouse")) this.onRootChange(Math.round(this.root), true);
+      if (this.nearRoot(event.clientX, event.clientY)) this.onRootChange(Math.round(this.root), true);
     });
     new ResizeObserver(() => this.draw()).observe(this.canvas);
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.draw());
@@ -269,15 +287,18 @@ export class MaterialEditor {
 
   private wheel(event: WheelEvent): void {
     if (!this.material) return;
-    event.preventDefault();
+    const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
     if (event.ctrlKey || event.metaKey) {
       // Pinch on a trackpad arrives as Ctrl + wheel too.
+      event.preventDefault();
       this.zoom(Math.exp(-event.deltaY * 0.01), this.displayAt(event.clientX));
-    } else {
+    } else if (event.shiftKey || horizontal) {
+      event.preventDefault();
       const span = this.view.end - this.view.start;
-      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      const delta = horizontal ? event.deltaX : event.deltaY;
       this.panBy((delta / this.canvas.clientWidth) * span * (event.deltaMode === 1 ? 20 : 1));
     }
+    // A plain vertical wheel scrolls the page, as everywhere else.
   }
 
   // ------------------------------------------------------------- pointer
@@ -289,6 +310,8 @@ export class MaterialEditor {
     const x = event.clientX - box.left;
     const y = event.clientY - box.top;
     if (y > box.height - LANE_HEIGHT) return null; // the "after" lane has nothing to grab
+    // A finger grabs handles only in the marker strip (the plot is for selecting); a mouse anywhere along the line.
+    if (event.pointerType !== "mouse" && y < box.height - LANE_HEIGHT - STRIP_HEIGHT) return null;
     const inStripLower = y > box.height - LANE_HEIGHT - STRIP_HEIGHT / 2;
     let best: Handle | null = null;
     let bestDistance = reach;
@@ -339,6 +362,7 @@ export class MaterialEditor {
   }
 
   private laneGripAt(event: PointerEvent): LaneGrip | null {
+    if (!this.showGrips) return null;
     const fadeIn = this.laneGrip("fadeIn");
     const fadeOut = this.laneGrip("fadeOut");
     if (!fadeIn || !fadeOut) return null;
@@ -353,19 +377,28 @@ export class MaterialEditor {
     return dIn <= dOut ? "fadeIn" : "fadeOut";
   }
 
+  /** Whether a handle's line runs within reach of the pointer (any height). */
+  private handleNear(event: PointerEvent): boolean {
+    if (!this.markers) return false;
+    const box = this.canvas.getBoundingClientRect();
+    const x = event.clientX - box.left;
+    return HANDLE_ORDER.some((h) => Math.abs(this.xCss(this.markers![h], box.width) - x) < HANDLE_REACH_MOUSE);
+  }
+
   /** Source time → CSS px within a width. */
   private xCss(t: number, width: number): number {
     return ((this.disp(t) - this.view.start) / (this.view.end - this.view.start)) * width;
   }
 
-  private nearRoot(clientX: number, clientY: number, pointerType: string): boolean {
+  /** Over the "判定 …" chip (with a finger's worth of padding): the only grab for the root line, so a selection drag never moves it. */
+  private nearRoot(clientX: number, clientY: number): boolean {
     if (!this.material) return false;
     const box = this.canvas.getBoundingClientRect();
+    const x = clientX - box.left;
     const y = clientY - box.top;
-    if (y > this.scale.plotHeightCss) return false;
-    const rootY = (1 - (this.root - this.scale.lo) / (this.scale.hi - this.scale.lo)) * this.scale.plotHeightCss;
-    const reach = pointerType === "mouse" ? HANDLE_REACH_MOUSE : HANDLE_REACH_TOUCH;
-    return Math.abs(rootY - y) < reach && clientX >= box.left && clientX <= box.right;
+    const pad = 8;
+    const c = this.rootChip;
+    return x >= c.x - pad && x <= c.x + c.w + pad && y >= c.y - pad && y <= c.y + c.h + pad;
   }
 
   private capture(event: PointerEvent): void {
@@ -395,11 +428,10 @@ export class MaterialEditor {
     }
     const boxAt = this.canvas.getBoundingClientRect();
     const yAt = event.clientY - boxAt.top;
-    if (yAt < SEEK_HEIGHT) {
+    if (yAt < RULER_HEIGHT) {
       this.capture(event);
       const sec = this.displaySecAt(event.clientX);
-      this.seekDrag = { kind: "original", pointerId: event.pointerId, sec };
-      this.onSeek("original", sec, false);
+      this.seekDrag = { kind: "original", pointerId: event.pointerId, sec, startX: event.clientX, moved: false };
       return;
     }
     const handle = this.handleAt(event);
@@ -412,8 +444,7 @@ export class MaterialEditor {
     if (!grip && yAt > boxAt.height - LANE_HEIGHT && this.layout && this.layout.totalSec > 0) {
       this.capture(event);
       const sec = this.laneOutputSecAt(event.clientX);
-      this.seekDrag = { kind: "result", pointerId: event.pointerId, sec };
-      this.onSeek("result", sec, false);
+      this.seekDrag = { kind: "result", pointerId: event.pointerId, sec, startX: event.clientX, moved: false };
       return;
     }
     if (grip) {
@@ -423,12 +454,13 @@ export class MaterialEditor {
       return;
     }
     this.capture(event);
-    if (this.nearRoot(event.clientX, event.clientY, event.pointerType)) {
+    if (this.nearRoot(event.clientX, event.clientY)) {
       this.rootDrag = { pointerId: event.pointerId };
       return;
     }
     const box = this.canvas.getBoundingClientRect();
     if (event.clientY - box.top > this.scale.plotHeightCss) return; // the strip: nothing to select there
+    if (event.pointerType !== "mouse" && this.handleNear(event)) return; // a finger near a handle's line in the plot: not a selection either
     this.selecting = { pointerId: event.pointerId, anchor: this.timeAt(event.clientX), anchorX: event.clientX, moved: false };
   }
 
@@ -457,9 +489,11 @@ export class MaterialEditor {
       return;
     }
     if (this.seekDrag?.pointerId === event.pointerId) {
-      const sec = this.seekDrag.kind === "original" ? this.displaySecAt(event.clientX) : this.laneOutputSecAt(event.clientX);
-      this.seekDrag.sec = sec;
-      this.onSeek(this.seekDrag.kind, sec, false);
+      const d = this.seekDrag;
+      if (!d.moved && Math.abs(event.clientX - d.startX) < (event.pointerType === "mouse" ? TAP_PX_MOUSE : TAP_PX_TOUCH)) return;
+      d.moved = true;
+      d.sec = d.kind === "original" ? this.displaySecAt(event.clientX) : this.laneOutputSecAt(event.clientX);
+      this.onSeek(d.kind, d.sec, "drag");
       return;
     }
     if (this.laneDrag?.pointerId === event.pointerId && this.level && this.layout) {
@@ -482,7 +516,7 @@ export class MaterialEditor {
       return;
     }
     if (this.selecting?.pointerId === event.pointerId) {
-      if (Math.abs(event.clientX - this.selecting.anchorX) >= TAP_PX) this.selecting.moved = true;
+      if (Math.abs(event.clientX - this.selecting.anchorX) >= (event.pointerType === "mouse" ? TAP_PX_MOUSE : TAP_PX_TOUCH)) this.selecting.moved = true;
       if (this.selecting.moved) {
         const t = this.timeAt(event.clientX);
         this.selection = { from: Math.min(this.selecting.anchor, t), to: Math.max(this.selecting.anchor, t) };
@@ -494,9 +528,9 @@ export class MaterialEditor {
     const boxH = this.canvas.getBoundingClientRect();
     const yH = event.clientY - boxH.top;
     let hover: Handle | "root" | LaneGrip | "seek" | null;
-    if (yH < SEEK_HEIGHT) hover = "seek";
+    if (yH < RULER_HEIGHT) hover = "seek";
     else {
-      hover = this.handleAt(event) ?? this.laneGripAt(event) ?? (this.nearRoot(event.clientX, event.clientY, event.pointerType) ? "root" : null);
+      hover = this.handleAt(event) ?? this.laneGripAt(event) ?? (this.nearRoot(event.clientX, event.clientY) ? "root" : null);
       if (!hover && yH > boxH.height - LANE_HEIGHT && this.layout) hover = "seek";
     }
     if (hover !== this.hover) {
@@ -523,9 +557,16 @@ export class MaterialEditor {
       return;
     }
     if (this.seekDrag?.pointerId === event.pointerId) {
-      const { kind, sec } = this.seekDrag;
+      const { kind, sec, moved } = this.seekDrag;
       this.seekDrag = null;
-      this.onSeek(kind, sec, true);
+      if (moved) {
+        this.onSeek(kind, sec, "end");
+        return;
+      }
+      const now = performance.now();
+      const again = this.lastTap && this.lastTap.kind === kind && now - this.lastTap.at < DOUBLE_TAP_MS && Math.abs(event.clientX - this.lastTap.x) < DOUBLE_TAP_PX;
+      this.lastTap = again ? null : { at: now, x: event.clientX, kind };
+      this.onSeek(kind, sec, again ? "play" : "tap");
       return;
     }
     if (this.laneDrag?.pointerId === event.pointerId) {
@@ -659,6 +700,7 @@ export class MaterialEditor {
       g.setLineDash([]);
       const labelWidth = g.measureText(label).width;
       const lx = side === "right" ? width - labelWidth - 8 * dpr : 36 * dpr;
+      if (side === "left") this.rootChip = { x: (lx - 4 * dpr) / dpr, y: (y(midi) - 16 * dpr) / dpr, w: (labelWidth + 8 * dpr) / dpr, h: (15 * dpr) / dpr };
       g.fillStyle = cssVar("--panel");
       g.fillRect(lx - 4 * dpr, y(midi) - 16 * dpr, labelWidth + 8 * dpr, 15 * dpr);
       g.fillStyle = color;
@@ -818,8 +860,8 @@ export class MaterialEditor {
           }
           g.stroke();
           g.globalAlpha = 1;
-          // The grips: where the fade-in ends and the fade-out starts, to drag.
-          for (const grip of ["fadeIn", "fadeOut"] as const) {
+          // The grips: where the fade-in ends and the fade-out starts, to drag (while the fades are being worked on).
+          for (const grip of this.showGrips ? (["fadeIn", "fadeOut"] as const) : []) {
             const at = this.laneGrip(grip)!;
             const gx = at.x * dpr;
             const gy = top + (1 - gainAt(at.sec)) * bandH;
@@ -896,16 +938,35 @@ export class MaterialEditor {
       }
     }
 
-    // The seek strip along the top: press or drag to play the original from there.
+    // The ruler along the top: time ticks (display time); tap to set the play position, double-tap to play, drag to scrub.
+    const rulerH = RULER_HEIGHT * dpr;
     g.fillStyle = cssVar("--strip");
-    g.globalAlpha = 0.7;
-    g.fillRect(0, 0, width, SEEK_HEIGHT * dpr);
+    g.globalAlpha = 0.85;
+    g.fillRect(0, 0, width, rulerH);
     g.globalAlpha = 1;
     g.fillStyle = cssVar("--line");
-    g.fillRect(0, SEEK_HEIGHT * dpr - 1 * dpr, width, 1 * dpr);
-    g.font = `${9 * dpr}px system-ui, sans-serif`;
-    g.fillStyle = cssVar("--muted");
-    g.fillText("▶ 再生位置", 4 * dpr, 10 * dpr);
+    g.fillRect(0, rulerH - 1 * dpr, width, 1 * dpr);
+    {
+      const steps = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30];
+      const minPx = 56 * dpr;
+      const step = steps.find((s) => (s / span) * width >= minPx) ?? steps[steps.length - 1];
+      const decimals = step < 0.1 ? 2 : step < 1 ? 1 : 0;
+      g.font = `${10 * dpr}px system-ui, sans-serif`;
+      g.textBaseline = "alphabetic";
+      for (let t = Math.ceil(view.start / step) * step; t <= view.end + 1e-9; t += step) {
+        const tx = Math.round(xd(t));
+        g.fillStyle = cssVar("--line");
+        g.fillRect(tx, rulerH - 7 * dpr, 1 * dpr, 6 * dpr);
+        g.fillStyle = cssVar("--muted");
+        g.fillText(t.toFixed(decimals), tx + 3 * dpr, rulerH - 9 * dpr);
+        // Half ticks.
+        const half = Math.round(xd(t + step / 2));
+        if (half < width) {
+          g.fillStyle = cssVar("--line");
+          g.fillRect(half, rulerH - 4 * dpr, 1 * dpr, 3 * dpr);
+        }
+      }
+    }
 
     // The playhead.
     if (this.playhead) {

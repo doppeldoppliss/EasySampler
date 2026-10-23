@@ -246,7 +246,7 @@ cutName.addEventListener("input", () => {
 });
 const addCutButton = button("＋ 区間を追加", "small", () => addCut("next"));
 const dupCutButton = button("複製", "small", () => addCut("copy"));
-const removeCutButton = button("削除", "small", () => removeCut());
+const removeCutButton = button("この区間を消す", "small", () => removeCut());
 const cutBar = el("div", { className: "cut-bar" }, [
   el("span", { className: "control-label", textContent: "区間" }),
   cutSelect,
@@ -374,6 +374,11 @@ const modeToggle = el("div", { className: "mode-toggle", role: "group", ariaLabe
 const playButton = button("▶", "small play-button", () => void togglePreview());
 playButton.ariaLabel = "再生 / 停止(スペース)";
 const seekClock = el("span", { className: "fine num seek-clock" });
+// Undo / redo (the history itself lives further down, with the settings).
+const undoButton = button("元に戻す", "small", () => undo());
+const redoButton = button("やり直す", "small", () => redo());
+undoButton.title = "Ctrl + Z";
+redoButton.title = "Ctrl + Y";
 let seekLength = 0;
 function showSeek(sec: number): void {
   seekClock.textContent = `${clock(Math.min(seekLength, sec))} / ${clock(seekLength)}`;
@@ -429,7 +434,7 @@ const materialPanel = el("section", { className: "panel" }, [
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [el("span", { className: "fine", textContent: "判定した音程" }), rootLabel, rootSource]),
-    el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, el("span", { className: "spacer" }), zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
+    el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, el("span", { className: "spacer" }), undoButton, redoButton, zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
   ]),
   el("details", { className: "fine hint" }, [
     el("summary", { textContent: "使い方: 両端のハンドルで範囲、帯の端でマーカー、波形を横にドラッグで選択。上の目盛りを押すと再生位置、2 回押すと再生。" }),
@@ -843,8 +848,10 @@ const saveSettingsButton = button("設定を保存(JSON)", "small", () => {
   downloadFile(new Blob([json], { type: "application/json" }), `${safeBaseName(material.name)}.maddaw.json`);
 });
 const loadSettingsButton = el("label", { className: "button small", htmlFor: "file", textContent: "設定を読み込む(JSON)" });
+const settingsStatus = el("span", { className: "fine fix-status", role: "status" });
 const resetSettingsButton = button("判定し直す(設定を捨てる)", "small", () => {
   if (!material) return;
+  if (!confirm("区間・マーカー・手直し・書き出し設定をすべて捨てて、解析結果から作り直します。よろしいですか?(元に戻すで戻せます)")) return;
   const hadCorrections = material.corrections.length > 0;
   material.corrections = [];
   freshCuts();
@@ -852,7 +859,7 @@ const resetSettingsButton = button("判定し直す(設定を捨てる)", "small
   applyCurrentCut();
   if (hadCorrections) void setCorrections([]);
   else refreshFixBar();
-  status.textContent = "解析結果から設定を作り直しました。";
+  settingsStatus.textContent = "解析結果から設定を作り直しました。";
 });
 
 const benchButton = button("負荷を測る", "small", () => benchmark());
@@ -905,7 +912,7 @@ const detailsPanel = el("details", { className: "panel params" }, [
     el("fieldset", {}, [
       el("legend", { textContent: "設定ファイル" }),
       el("p", { className: "fine", textContent: "区間・マーカー・つまみ・音名などの設定だけを保存します(音声は含みません)。同じ素材を開き直すと、この端末では自動で前回の設定に戻ります。" }),
-      el("div", { className: "row tight" }, [saveSettingsButton, loadSettingsButton, resetSettingsButton]),
+      el("div", { className: "row tight" }, [saveSettingsButton, loadSettingsButton, resetSettingsButton, settingsStatus]),
     ]),
     location.search.includes("bench") ? el("div", { className: "row" }, [benchButton, benchResult]) : el("span"),
   ]),
@@ -1694,12 +1701,76 @@ async function setCorrections(corrections: PitchCorrection[]): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------- undo / redo
+//
+// The settings (cuts, markers, params, export settings, corrections) are a
+// small JSON snapshot already; every settled change — a drag let go, a
+// slider at rest, a button — is one step. Restoring goes through
+// applySettings, the same path a loaded file takes.
+
+const HISTORY_MAX = 100;
+let history: string[] = [];
+let historyIndex = -1;
+let restoring = false;
+function refreshHistoryButtons(): void {
+  undoButton.disabled = historyIndex <= 0;
+  redoButton.disabled = historyIndex >= history.length - 1;
+}
+function recordHistory(json: string): void {
+  if (restoring) return;
+  if (history[historyIndex] === json) return;
+  history = history.slice(0, historyIndex + 1);
+  history.push(json);
+  if (history.length > HISTORY_MAX) history.shift();
+  historyIndex = history.length - 1;
+  refreshHistoryButtons();
+}
+function resetHistory(): void {
+  history = [];
+  historyIndex = -1;
+  refreshHistoryButtons();
+}
+function restoreHistory(index: number): void {
+  const json = history[index];
+  if (!material || json === undefined) return;
+  const file = parseSettings(json);
+  if (!file) return;
+  historyIndex = index;
+  restoring = true;
+  try {
+    applySettings(file);
+  } finally {
+    restoring = false;
+  }
+  refreshHistoryButtons();
+}
+function undo(): void {
+  if (historyIndex > 0) restoreHistory(historyIndex - 1);
+}
+function redo(): void {
+  if (historyIndex < history.length - 1) restoreHistory(historyIndex + 1);
+}
+window.addEventListener("keydown", (event) => {
+  if (isTypingTarget(event.target) || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+  const key = event.key.toLowerCase();
+  if (key === "z" && !event.shiftKey) {
+    event.preventDefault();
+    undo();
+  } else if (key === "y" || (key === "z" && event.shiftKey)) {
+    event.preventDefault();
+    redo();
+  }
+});
+
 let saveTimer = 0;
 function scheduleSave(): void {
   if (!material) return;
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
-    if (material) safeStorage(settingsKey(material.name, material.channels[0].length, material.sampleRate), serializeSettings(settingsBody()));
+    if (!material) return;
+    const json = serializeSettings(settingsBody());
+    safeStorage(settingsKey(material.name, material.channels[0].length, material.sampleRate), json);
+    recordHistory(json);
   }, 400);
 }
 
@@ -1736,6 +1807,7 @@ async function decode(file: File): Promise<{ channels: Float32Array[]; sampleRat
 
 async function load(name: string, channels: Float32Array[], sampleRate: number): Promise<void> {
   status.textContent = `「${name}」を解析しています…`;
+  resetHistory();
   try {
     const { analysis, source, elapsedMs } = await client.analyze(channels, sampleRate);
     material = { name, channels, sampleRate, mono: mixToMono(channels), analysis, original: analysis, corrections: [], source, exportSources: new Map([[source.sampleRate, source]]) };

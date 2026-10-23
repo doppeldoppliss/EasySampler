@@ -13,7 +13,8 @@ import { pitchLabel } from "./analysis/pitch";
 import { EngineClient } from "./audio/engineClient";
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
-import { buildBatch, buildOne, type Built, type BuildInput } from "./export/build";
+import type { PitchTrack } from "./analysis/pyin";
+import { buildBatch, buildKit, buildOne, type Built, type BuildInput } from "./export/build";
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
 import { exportFileName, safeBaseName } from "./export/render";
 import { parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
@@ -198,7 +199,7 @@ function safeStorage(key: string, value?: string | null): string | null {
 
 // ---------------------------------------------------------------- header, empty state
 
-const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json", className: "visually-hidden", id: "file" });
+const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json", multiple: true, className: "visually-hidden", id: "file" });
 const openButton = el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" });
 const demoButton = button("デモ素材", "", () => loadDemo());
 const status = el("p", { className: "status", role: "status" });
@@ -681,6 +682,164 @@ async function rePick(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------- several files at once: the queue (ワンショット一括)
+
+interface QueueItem {
+  file: File;
+  /** What is known about it so far (filled in when opened or analysed for a batch). */
+  info: string;
+}
+
+let queue: QueueItem[] = [];
+let queueIndex = -1;
+
+const queueList = el("ol", { className: "queue-list" });
+const queueOneShot = el("input", { type: "checkbox", checked: true });
+const queueFirstKey = el("select", { ariaLabel: "キットの最初の鍵" }, [24, 36, 48, 60].map((n) => el("option", { value: String(n), textContent: pitchLabel(n), selected: n === 36 })));
+const queueWavsButton = button("すべて単音 WAV で保存(zip)", "", () => void deliverQueue("wavs"));
+const queueKitButton = button("キット音源にする(zip: SFZ + Decent Sampler)", "primary", () => void deliverQueue("kit"));
+const queueStatus = el("p", { className: "fine", role: "status" });
+const queuePanel = el("section", { className: "panel queue-panel", hidden: true }, [
+  el("div", { className: "row" }, [el("strong", { textContent: "素材リスト" }), el("span", { className: "fine", textContent: "1 つずつ開いて調整できます(設定は素材ごとに残ります)。調整していないものは、そのまま一括で書き出せます。" })]),
+  queueList,
+  el("div", { className: "row" }, [
+    el("label", { className: "control check" }, [queueOneShot, el("span", { textContent: "調整していない素材はワンショット(録音のまま、伸ばさない)として扱う" })]),
+  ]),
+  el("div", { className: "row" }, [queueWavsButton, queueKitButton, el("label", { className: "row tight" }, [el("span", { className: "fine", textContent: "キットの最初の鍵" }), queueFirstKey])]),
+  queueStatus,
+]);
+
+function renderQueue(): void {
+  queuePanel.hidden = queue.length < 2;
+  queueList.replaceChildren(
+    ...queue.map((item, i) => {
+      const open = button(i === queueIndex ? "開いています" : "開く", "small", () => void openQueueItem(i));
+      open.disabled = i === queueIndex;
+      const remove = button("外す", "small", () => {
+        queue.splice(i, 1);
+        if (queueIndex === i) queueIndex = -1;
+        else if (queueIndex > i) queueIndex--;
+        renderQueue();
+      });
+      return el("li", { className: i === queueIndex ? "current" : "" }, [el("span", { className: "queue-name", textContent: item.file.name }), el("span", { className: "fine", textContent: item.info }), open, remove]);
+    }),
+  );
+}
+
+async function openQueueItem(i: number): Promise<void> {
+  if (!queue[i]) return;
+  queueIndex = i;
+  renderQueue();
+  await openFile(queue[i].file);
+  if (material) queue[i].info = `${material.analysis.durationSec.toFixed(2)} 秒 / ${cuts.map((c) => (c.params.sustainMode === "none" ? "ワンショット" : pitchLabel(c.note))).join("・")}`;
+  renderQueue();
+}
+
+/** Every item as build inputs: the open one from the editor, the others analysed now (with their stored settings when they have any). */
+async function queueInputs(): Promise<{ inputs: BuildInput[]; skipped: string[] }> {
+  const inputs: BuildInput[] = [];
+  const skipped: string[] = [];
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i];
+    queueStatus.textContent = `${i + 1} / ${queue.length}: 「${item.file.name}」を解析しています…`;
+    await yieldToScreen();
+    if (i === queueIndex && material) {
+      syncCut();
+      const source = exportSource();
+      inputs.push(...cuts.map((cut) => inputFor(cut, source)));
+      continue;
+    }
+    try {
+      const { channels, sampleRate } = await decode(item.file);
+      if (channels[0].length / sampleRate > MAX_MATERIAL_SEC) {
+        skipped.push(`${item.file.name}(${MAX_MATERIAL_SEC} 秒を超えるので、開いて範囲を選んでから)`);
+        item.info = "長いので、開いて範囲を選んでください";
+        continue;
+      }
+      let { analysis, source } = await client.analyze(channels, sampleRate, sampleRate);
+      const stored = safeStorage(settingsKey(item.file.name, channels[0].length, sampleRate));
+      let file: SettingsFile | null = null;
+      if (stored) {
+        try {
+          file = parseSettings(stored);
+        } catch {
+          file = null;
+        }
+      }
+      if (file?.corrections.length) {
+        ({ analysis, source } = await client.analyze(channels, sampleRate, sampleRate, applyCorrections(analysis.track, file.corrections)));
+      }
+      const itemCuts: CutSettings[] = file
+        ? file.cuts.map((c) => ({ ...c, markers: clampMarkers({ ...c.markers, rangeEnd: Math.min(c.markers.rangeEnd, analysis.durationSec) }) }))
+        : [cutFor(analysis.track, analysis.markers, "区間 1", DEFAULT_PARAMS, "synth", queueOneShot.checked)];
+      const itemCredit = file?.credit ?? { title: "", url: "", timecode: "", memo: "" };
+      const base = safeBaseName(item.file.name);
+      for (const cut of itemCuts) {
+        inputs.push({ baseName: itemCuts.length > 1 ? `${base}_${cut.name}` : base, source, cut, settings: { ...exportSettings, format: "single" }, credit: itemCredit });
+      }
+      item.info = `${analysis.durationSec.toFixed(2)} 秒 / ${itemCuts.map((c) => (c.params.sustainMode === "none" ? "ワンショット" : pitchLabel(c.note))).join("・")}${file ? "(調整済み)" : ""}`;
+    } catch (error) {
+      skipped.push(`${item.file.name}(${error instanceof Error ? error.message : error})`);
+      item.info = "読み込めませんでした";
+    }
+    renderQueue();
+  }
+  return { inputs, skipped };
+}
+
+async function deliverQueue(kind: "wavs" | "kit"): Promise<void> {
+  if (building || queue.length === 0) return;
+  building = true;
+  try {
+    const { inputs, skipped } = await queueInputs();
+    if (inputs.length === 0) {
+      queueStatus.textContent = `書き出せるものがありません。${skipped.join("、")}`;
+      return;
+    }
+    const progress = async (done: number, total: number) => {
+      queueStatus.textContent = `作成中… ${done} / ${total}`;
+      await yieldToScreen();
+    };
+    const kitName = `${safeBaseName(queue[0].file.name)}_kit`;
+    const built = kind === "kit" ? await buildKit(inputs, kitName, Number(queueFirstKey.value), progress) : await buildBatch(inputs, null, `${safeBaseName(queue[0].file.name)}_など${queue.length}件`, progress);
+    let outcome = "";
+    if (canShareFiles()) {
+      try {
+        outcome = (await shareFile(built.blob, built.fileName, built.fileName)) === "shared" ? "共有しました" : "";
+      } catch {
+        outcome = "";
+      }
+    }
+    if (!outcome) {
+      downloadFile(built.blob, built.fileName);
+      outcome = "保存しました";
+    }
+    queueStatus.textContent = `${outcome}: ${built.summary}${skipped.length ? ` — 飛ばしたもの: ${skipped.join("、")}` : ""}`;
+  } catch (error) {
+    queueStatus.textContent = `書き出せませんでした: ${error instanceof Error ? error.message : error}`;
+  } finally {
+    building = false;
+  }
+}
+
+/** Files dropped or chosen: one opens; several make a queue and open the first. Settings files are read on their own. */
+function openFiles(files: readonly File[]): void {
+  const isSettings = (f: File) => f.name.toLowerCase().endsWith(".json") || f.type === "application/json";
+  const settings = files.filter(isSettings);
+  const audio = files.filter((f) => !isSettings(f));
+  for (const f of settings) void openFile(f);
+  if (audio.length === 0) return;
+  if (audio.length === 1 && queue.length === 0) {
+    void openFile(audio[0]);
+    return;
+  }
+  // Add to the list (a single file dropped while a list exists joins it).
+  const known = new Set(queue.map((q) => `${q.file.name}:${q.file.size}`));
+  for (const f of audio) if (!known.has(`${f.name}:${f.size}`)) queue.push({ file: f, info: "" });
+  renderQueue();
+  if (queueIndex < 0) void openQueueItem(queue.length - audio.length);
+}
+
 // ---------------------------------------------------------------- page
 
 const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, exportPanel, detailsPanel]);
@@ -690,6 +849,7 @@ document.getElementById("app")!.append(
   fileInput,
   status,
   emptyState,
+  queuePanel,
   pickerPanel,
   workspace,
 );
@@ -697,10 +857,15 @@ document.getElementById("app")!.append(
 // ---------------------------------------------------------------- cuts
 
 function cutFromAnalysis(m: Markers, name: string, base: InstrumentParams): Cut {
-  const root = material ? rootForMarkers(material.analysis.track, m) : null;
+  return cutFor(material?.analysis.track ?? null, m, name, base, presetId || "synth", false);
+}
+
+/** A cut set up from an analysis: pitched → the preset hint (or "synth"), unpitched or forced → a one-shot from C4 / its own pitch. */
+function cutFor(track: PitchTrack | null, m: Markers, name: string, base: InstrumentParams, hint: PresetId | "", forceOneShot: boolean): Cut {
+  const root = track ? rootForMarkers(track, m) : null;
   const p = structuredClone(base);
-  let preset: PresetId | "" = presetId || "synth";
-  if (root) {
+  let preset: PresetId | "" = hint || "synth";
+  if (root && !forceOneShot) {
     p.root = root.midi;
     p.rootMode = "auto";
     if (preset === "drum") {
@@ -708,9 +873,9 @@ function cutFromAnalysis(m: Markers, name: string, base: InstrumentParams): Cut 
       preset = "synth";
     }
   } else {
-    // Nothing pitched (a hit, a noise): a one-shot from C4.
-    p.root = 60;
-    p.rootMode = "manual";
+    // Nothing pitched (a hit, a noise), or a one-shot by request: plays as recorded, from its own pitch (C4 when there is none).
+    p.root = root?.midi ?? 60;
+    p.rootMode = root ? "auto" : "manual";
     Object.assign(p, PRESETS.find((x) => x.id === "drum")!.apply(p));
     preset = "drum";
   }
@@ -1138,16 +1303,15 @@ async function openFile(file: File): Promise<void> {
 }
 
 fileInput.addEventListener("change", () => {
-  const file = fileInput.files?.[0];
+  const files = [...(fileInput.files ?? [])];
   fileInput.value = "";
-  if (file) void openFile(file);
+  openFiles(files);
 });
 
 document.addEventListener("dragover", (event) => event.preventDefault());
 document.addEventListener("drop", (event) => {
   event.preventDefault();
-  const file = event.dataTransfer?.files[0];
-  if (file) void openFile(file);
+  openFiles([...(event.dataTransfer?.files ?? [])]);
 });
 
 // ---------------------------------------------------------------- editor & keys

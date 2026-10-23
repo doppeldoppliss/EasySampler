@@ -6,7 +6,7 @@ import { analyzeMaterial, prepareSource } from "../engine/prepare";
 import { suggestMarkersWithin } from "../instrument/markers";
 import { DEFAULT_EXPORT, DEFAULT_PARAMS, PRESETS } from "../instrument/types";
 import { demoSyllable } from "../testsignals/synthVoice";
-import { buildBatch, buildOne } from "./build";
+import { buildBatch, buildKit, buildOne } from "./build";
 import { applyLoop } from "./loop";
 import { dspresetText, planZones, sfzText } from "./multisample";
 import { renderNote } from "./render";
@@ -197,5 +197,31 @@ describe("suggestMarkersWithin", () => {
     expect(m.sustainStart).toBeGreaterThanOrEqual(m.rangeStart);
     expect(m.sustainEnd).toBeGreaterThan(m.sustainStart);
     expect(m.sustainEnd).toBeLessThanOrEqual(m.rangeEnd);
+  });
+});
+
+describe("buildKit", () => {
+  it("puts every sample on its own key from the first key up, as one-shots, with unique file names", async () => {
+    const { source, cut, credit } = setup();
+    const drum = { ...cut, params: PRESETS.find((p) => p.id === "drum")!.apply(cut.params) };
+    const inputs = [
+      { baseName: "kick", source, cut: drum, settings: DEFAULT_EXPORT, credit },
+      { baseName: "kick", source, cut: drum, settings: DEFAULT_EXPORT, credit }, // a duplicate name
+      { baseName: "voice", source, cut, settings: DEFAULT_EXPORT, credit }, // kept pitched (the user set it up)
+    ];
+    const built = await buildKit(inputs, "my kit", 36);
+    expect(built.fileName).toBe("my kit.zip");
+    const list = listZip(new Uint8Array(await built.blob.arrayBuffer()));
+    const names = list.map((e) => e.name);
+    expect(names).toEqual(["my kit/samples/kick.wav", "my kit/samples/kick_2.wav", "my kit/samples/voice.wav", "my kit/my kit.sfz", "my kit/my kit.dspreset", "my kit/README.txt"]);
+    const sfz = new TextDecoder().decode(list[3].data);
+    expect(sfz).toContain("sample=kick.wav pitch_keycenter=36 lokey=36 hikey=36 loop_mode=one_shot");
+    expect(sfz).toContain("sample=kick_2.wav pitch_keycenter=37 lokey=37 hikey=37 loop_mode=one_shot");
+    expect(sfz).toContain("sample=voice.wav pitch_keycenter=38 lokey=38 hikey=38 loop_mode=no_loop");
+    expect(sfz).toContain("ampeg_release=1.500");
+    const ds = new TextDecoder().decode(list[4].data);
+    expect(ds).toContain(`rootNote="36" loNote="36" hiNote="36"`);
+    expect(readWavChunks(list[0].data.buffer.slice(list[0].data.byteOffset, list[0].data.byteOffset + list[0].data.byteLength) as ArrayBuffer).sampler?.unityNote).toBe(36);
+    expect(new TextDecoder().decode(list[5].data)).toContain("C2 = kick.wav");
   });
 });

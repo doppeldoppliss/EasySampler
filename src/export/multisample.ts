@@ -15,6 +15,16 @@ export interface Zone {
   highKey: number;
   fileName: string;
   loop: Loop | null;
+  /** A hit: plays to its end whatever the key does (SFZ loop_mode=one_shot). */
+  oneShot?: boolean;
+}
+
+/** A kit: each sample on one key, from `firstKey` upward, in order. */
+export function planKit(count: number, firstKey = 36): { lowKey: number; highKey: number; note: number }[] {
+  return [...Array(count).keys()].map((i) => {
+    const key = Math.min(127, firstKey + i);
+    return { lowKey: key, highKey: key, note: key };
+  });
 }
 
 /** Zones every `step` semitones from `center − below` to `center + above`, with the keys split between neighbours. */
@@ -54,7 +64,7 @@ export function sfzText(zones: readonly Zone[], meta: MultisampleMeta): string {
     "<group>",
   ].filter((line) => line !== null);
   for (const zone of zones) {
-    const loop = zone.loop ? ` loop_mode=loop_continuous loop_start=${zone.loop.start} loop_end=${zone.loop.end - 1}` : " loop_mode=no_loop";
+    const loop = zone.loop ? ` loop_mode=loop_continuous loop_start=${zone.loop.start} loop_end=${zone.loop.end - 1}` : zone.oneShot ? " loop_mode=one_shot" : " loop_mode=no_loop";
     lines.push(`<region> sample=${zone.fileName} pitch_keycenter=${zone.note} lokey=${zone.lowKey} hikey=${zone.highKey}${loop}`);
   }
   return `${lines.join("\n")}\n`;
@@ -92,11 +102,14 @@ export function dspresetText(zones: readonly Zone[], meta: MultisampleMeta): str
 }
 
 /** A short note for whoever opens the zip. */
-export function readmeText(meta: MultisampleMeta, zones: readonly Zone[]): string {
+export function readmeText(meta: MultisampleMeta, zones: readonly Zone[], kind: "multisample" | "kit" = "multisample"): string {
+  const keyName = (n: number) => `${["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"][n % 12]}${Math.floor(n / 12) - 1}`;
   return [
-    `${meta.name} — MADDAW で作ったマルチサンプル音源`,
+    `${meta.name} — MADDAW で作った${kind === "kit" ? "キット音源(1 鍵に 1 つの素材)" : "マルチサンプル音源"}`,
     "",
-    `${meta.samplesDir}/ に ${zones.length} 個の WAV(${zones.map((z) => z.fileName).join(", ")})、`,
+    kind === "kit"
+      ? `鍵盤の割り当て: ${zones.map((z) => `${keyName(z.note)} = ${z.fileName}`).join(", ")}`
+      : `${meta.samplesDir}/ に ${zones.length} 個の WAV(${zones.map((z) => z.fileName).join(", ")})、`,
     `${meta.name}.sfz(REAPER の ReaSamplOmatic5000 の代わりに sforzando など SFZ 対応サンプラーで)、`,
     `${meta.name}.dspreset(Decent Sampler。Windows / Mac / iPhone / iPad、無料)が入っています。`,
     "",

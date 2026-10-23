@@ -259,6 +259,39 @@ input:focus-visible {
   cursor: default;
 }
 
+/* The queue of several files. */
+.queue-list {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.queue-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.queue-list li.current {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+
+.queue-name {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.queue-list li .fine {
+  flex: 1 1 10em;
+}
+
 /* Picking a stretch of a long clip before analysis. */
 .picker-title {
   margin: 0 0 8px;

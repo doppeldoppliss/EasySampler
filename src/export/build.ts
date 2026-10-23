@@ -7,7 +7,7 @@ import { encodeWavBytes, type WavInfo } from "../audio/wav";
 import type { PreparedSource } from "../engine/engine";
 import { exportLengthSec, type Credit, type ExportSettings } from "../instrument/types";
 import { applyLoop, LOOP_MIN_HOLD_SEC } from "./loop";
-import { dspresetText, planZones, readmeText, sfzText, type Zone } from "./multisample";
+import { dspresetText, planKit, planZones, readmeText, sfzText, type Zone } from "./multisample";
 import { exportFileName, fileNoteName, renderNote, safeBaseName, type Rendered } from "./render";
 import type { CutSettings } from "./settings";
 import { buildWavetable, FRAME_SIZE, type Wavetable } from "./wavetable";
@@ -143,8 +143,47 @@ export async function buildOne(input: BuildInput, progress?: Progress): Promise<
   return { fileName: `${base}.zip`, blob: new Blob([zipStore(entries)], { type: "application/zip" }), preview, summary };
 }
 
-/** Every cut → one zip, with the settings file alongside. */
-export async function buildBatch(inputs: readonly BuildInput[], settingsJson: string, zipBaseName: string, progress?: Progress): Promise<Built> {
+/** A kit (design.md 5, ワンショット一括): every sample on its own key, as rendered by its own settings, in one zip. */
+export async function buildKit(inputs: readonly BuildInput[], kitName: string, firstKey: number, progress?: Progress): Promise<Built> {
+  const base = safeBaseName(kitName);
+  const samplesDir = "samples";
+  const plan = planKit(inputs.length, firstKey);
+  const zones: Zone[] = [];
+  const entries: ZipEntry[] = [];
+  let preview: Rendered | null = null;
+  let release = 0;
+  const used = new Set<string>();
+  for (let i = 0; i < inputs.length; i++) {
+    const { source, cut, settings, credit } = inputs[i];
+    const oneShot = cut.params.sustainMode === "none";
+    const rendered = renderNote(source, cut.markers, cut.params, cut.note, exportLengthSec(settings));
+    let fileName = `${safeBaseName(inputs[i].baseName)}.wav`;
+    for (let n = 2; used.has(fileName); n++) fileName = `${safeBaseName(inputs[i].baseName)}_${n}.wav`;
+    used.add(fileName);
+    entries.push({ name: `${base}/${samplesDir}/${fileName}`, data: new Uint8Array(encodeWavBytes(rendered.channels, rendered.sampleRate, wavInfo(credit), { unityNote: plan[i].note })) });
+    zones.push({ ...plan[i], fileName, loop: null, oneShot });
+    release = Math.max(release, cut.params.amp.release);
+    preview ??= rendered;
+    await progress?.(i + 1, inputs.length);
+  }
+  // A kit is mostly hits: a long enough release that a short tap still plays the hit out in players that cut at note-off.
+  const meta = { name: base, samplesDir, releaseSec: Math.max(release, 1.5) };
+  const encoder = new TextEncoder();
+  entries.push(
+    { name: `${base}/${base}.sfz`, data: encoder.encode(sfzText(zones, meta)) },
+    { name: `${base}/${base}.dspreset`, data: encoder.encode(dspresetText(zones, meta)) },
+    { name: `${base}/README.txt`, data: encoder.encode(readmeText(meta, zones, "kit")) },
+  );
+  return {
+    fileName: `${base}.zip`,
+    blob: new Blob([zipStore(entries)], { type: "application/zip" }),
+    preview: preview!,
+    summary: `${base}/(${zones.length} 個を ${fileNoteName(plan[0].note)} から 1 鍵ずつ。${base}.sfz、${base}.dspreset)`,
+  };
+}
+
+/** Every cut → one zip, with the settings file alongside when given. */
+export async function buildBatch(inputs: readonly BuildInput[], settingsJson: string | null, zipBaseName: string, progress?: Progress): Promise<Built> {
   const entries: ZipEntry[] = [];
   let preview: Rendered | null = null;
   const total = inputs.reduce((n, input) => n + (input.settings.format === "multisample" && input.cut.params.sustainMode !== "none" ? planZones(input.cut.note).length : 1), 0);
@@ -158,7 +197,7 @@ export async function buildBatch(inputs: readonly BuildInput[], settingsJson: st
     entries.push(...built.entries);
     preview ??= built.preview;
   }
-  entries.push({ name: "settings.json", data: new TextEncoder().encode(settingsJson) });
+  if (settingsJson !== null) entries.push({ name: "settings.json", data: new TextEncoder().encode(settingsJson) });
   const fileName = `${safeBaseName(zipBaseName)}_cuts.zip`;
-  return { fileName, blob: new Blob([zipStore(entries)], { type: "application/zip" }), preview: preview!, summary: `${fileName}(区間 ${inputs.length} 個 + settings.json)` };
+  return { fileName, blob: new Blob([zipStore(entries)], { type: "application/zip" }), preview: preview!, summary: `${fileName}(${inputs.length} 個${settingsJson !== null ? " + settings.json" : ""})` };
 }

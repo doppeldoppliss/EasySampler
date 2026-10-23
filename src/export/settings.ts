@@ -145,6 +145,7 @@ function sanitizeParams(raw: unknown): InstrumentParams {
       sustain: clamp(num(amp.sustain, d.amp.sustain), 0, 1),
       release: clamp(num(amp.release, d.amp.release), 0, 10),
       velocitySens: clamp(num(amp.velocitySens, d.amp.velocitySens), 0, 1),
+      fadeOut: clamp(num(amp.fadeOut, d.amp.fadeOut), 0, 10),
     },
     maxVoices: d.maxVoices,
     fx: sanitizeFx(raw.fx),

@@ -529,6 +529,48 @@ export class Engine {
     return true;
   }
 
+  /** Source samples in [from, to) that play (the removed stretches taken out). */
+  private playedBetween(from: number, to: number): number {
+    if (to <= from) return 0;
+    let n = to - from;
+    for (let i = 0; i < this.removedStart.length; i++) {
+      const a = Math.max(from, this.removedStart[i]);
+      const b = Math.min(to, this.removedEnd[i]);
+      if (b > a) n -= b - a;
+    }
+    return n;
+  }
+
+  /**
+   * Output samples left until the voice runs out of material, or Infinity
+   * while it may go on (an elastic sustain still held). What is left is
+   * walked part by part at each part's own speed; in resample mode the
+   * pitch shift speeds it all up or slows it down.
+   */
+  private playoutRemaining(v: Voice): number {
+    const params = this.params!;
+    const s = params.stretch;
+    const tailFrom = Math.max(this.tailStart, this.sustainStart);
+    const tail = () => this.playedBetween(Math.max(v.srcTime, tailFrom), this.rangeEnd) * Math.max(0.05, s.tail);
+    let out: number;
+    if (v.phase === Phase.Head) {
+      const head = this.playedBetween(v.srcTime, this.sustainStart) * Math.max(0.05, s.head);
+      if (!params.sustainEnabled) out = head + (this.tailOn() ? tail() : 0);
+      else if (params.sustainMode === "none") out = head + this.playedBetween(this.sustainStart, this.sustainEnd) * Math.max(0.05, s.sustain) + tail();
+      else if (v.released && this.tailOn()) out = head + tail();
+      else return Infinity;
+    } else if (v.phase === Phase.Run) {
+      out = this.playedBetween(v.srcTime, this.sustainEnd) * Math.max(0.05, s.sustain) + tail();
+    } else if (v.phase === Phase.Done) {
+      out = 0;
+    } else {
+      return Infinity;
+    }
+    if (params.pitchMode === "resample") out /= 2 ** ((v.note - params.root) / 12);
+    // The tail's length limit ends it sooner.
+    return Math.min(out, v.tailRemaining);
+  }
+
   private formantAlpha(shift: number): number {
     const params = this.params!;
     let semitones = params.formantSemitones;
@@ -580,7 +622,11 @@ export class Engine {
     const amp = params.amp;
     const attackStep = 1 / Math.max(1, amp.attack * sr);
     const decayCoef = Math.exp(-1 / Math.max(1, amp.decay * sr));
-    const releaseStep = 1 / Math.max(1, amp.release * sr);
+    // Letting go without a tail fades over the release, or the 終わりのフェード when that is longer.
+    const releaseStep = 1 / Math.max(1, Math.max(amp.release, amp.fadeOut) * sr);
+    // 終わりのフェード: over the last `fadeOut` seconds before the material runs out (when that is known).
+    const fadeOutSamples = amp.fadeOut * sr;
+    const remaining = fadeOutSamples > 0 ? this.playoutRemaining(v) : Infinity;
     for (let i = 0; i < frames; i++) {
       switch (v.env) {
         case Env.Attack:
@@ -605,7 +651,8 @@ export class Engine {
           break;
       }
       if (v.fadeStep > 0) v.fadeGain = Math.max(0, v.fadeGain - v.fadeStep);
-      const gain = v.level * v.fadeGain * v.velocityGain;
+      let gain = v.level * v.fadeGain * v.velocityGain;
+      if (remaining !== Infinity) gain *= Math.max(0, Math.min(1, (remaining - i) / fadeOutSamples));
       bufL[i] *= gain;
       bufR[i] *= gain;
     }

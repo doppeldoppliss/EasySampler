@@ -787,3 +787,17 @@ details.sub.fx > summary.on {
   text-decoration: line-through;
   opacity: 0.7;
 }
+
+/* エフェクト: sections in the order the rack applies them, and a line of what is on. */
+.fx-head {
+  margin: 14px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.fx-active {
+  margin: 2px 0 0;
+  color: var(--accent);
+}

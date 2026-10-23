@@ -61,8 +61,12 @@ export interface InstrumentParams {
     /** Tiny period/level irregularity, kept even when fully flattened. */
     micro: boolean;
   };
-  /** Release: the fade after the note is let go when the tail is off (default 20 ms). */
-  amp: { attack: number; decay: number; sustain: number; release: number; velocitySens: number };
+  /**
+   * Release: the fade after the note is let go when the tail is off (default 20 ms).
+   * fadeOut (終わりのフェード): the last seconds before the material runs out fade to silence,
+   * and a release is never shorter than it. The attack is the 入りのフェード.
+   */
+  amp: { attack: number; decay: number; sustain: number; release: number; velocitySens: number; fadeOut: number };
   maxVoices: number;
   /** The effect rack (エフェクト), after the voices: what the keyboard, 曲で試す and the file all get. */
   fx: FxSettings;
@@ -129,7 +133,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   stretch: { head: 1, sustain: 1, tail: 1 },
   tail: { enabled: true, limit: "unlimited" },
   wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, driftCents: 0, micro: true },
-  amp: { attack: 0.005, decay: 0.1, sustain: 1, release: 0.02, velocitySens: 0.5 },
+  amp: { attack: 0.005, decay: 0.1, sustain: 1, release: 0.02, velocitySens: 0.5, fadeOut: 0 },
   maxVoices: 24,
   fx: DEFAULT_FX,
 };

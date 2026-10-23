@@ -586,27 +586,59 @@ function fxGroup(key: FxKey, label: string, note: string, controls: HTMLElement[
   return group;
 }
 
+const fxActiveLine = el("p", { className: "fine fx-active" });
 function refreshFxSummaries(): void {
+  const on: string[] = [];
   for (const { key, summary, label } of fxSummaries) {
-    const on = params.fx[key].on;
-    summary.textContent = on ? `${label}(オン)` : label;
-    summary.classList.toggle("on", on);
+    const active = params.fx[key].on;
+    summary.textContent = active ? `${label}(オン)` : label;
+    summary.classList.toggle("on", active);
+    if (active) on.push(label.replace(/\(.*\)$/, ""));
   }
+  const fades: string[] = [];
+  if (params.amp.attack >= 0.02) fades.push(`入り ${ms(params.amp.attack)}`);
+  if (params.amp.fadeOut > 0) fades.push(`終わり ${ms(params.amp.fadeOut)}`);
+  fadeSummary.textContent = fades.length ? `フェード(${fades.join("・")})` : "フェード(入り・終わり)";
+  fadeSummary.classList.toggle("on", fades.length > 0);
+  const all = [...(fades.length ? ["フェード"] : []), ...on];
+  fxActiveLine.textContent = all.length ? `オン: ${all.join("、")}` : "すべてオフ(素材の音そのまま)";
 }
+
+/** A heading between the groups: the effects come in the order they are applied, in sections. */
+function fxHead(text: string): HTMLElement {
+  return el("h3", { className: "fx-head", textContent: text });
+}
+
+// フェード: the voice's own attack and a fade before the material runs out — not in the rack, but where it reads best.
+const fadeSummary = el("summary");
+const fadeGroup = el("details", { className: "sub fx" }, [
+  fadeSummary,
+  el("p", { className: "fine help", textContent: "入りは音の頭から、終わりは素材が尽きる手前(語尾の最後、または頭部だけのとき)と、音を離したあとにかかります。0 でなし。「書き出し後」レーンの水位に出ます。" }),
+  range("入りのフェード", 0, 2, 0.005, () => params.amp.attack, (p, v) => (p.amp.attack = Math.max(0.001, v)), ms, true),
+  range("終わりのフェード", 0, 3, 0.01, () => params.amp.fadeOut, (p, v) => (p.amp.fadeOut = v), ms, true),
+]);
+fadeGroup.addEventListener("change", refreshFxSummaries);
 controlsRefreshers.push(refreshFxSummaries);
 
 const fxResetButton = button("すべてオフに戻す", "small", () => {
-  update((p) => (p.fx = structuredClone(DEFAULT_FX)), true);
+  update((p) => {
+    p.fx = structuredClone(DEFAULT_FX);
+    p.amp = { ...p.amp, attack: DEFAULT_PARAMS.amp.attack, fadeOut: DEFAULT_PARAMS.amp.fadeOut };
+  }, true);
   refreshControls();
 });
 
 const fxPanel = el("section", { className: "panel fx-panel" }, [
   el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxResetButton]),
+  fxActiveLine,
   el("p", { className: "fine", textContent: "上から順にかかります。試し弾き・「曲で試す」・書き出す WAV のすべてに入ります(Vital 用ウェーブテーブルを除く)。区間ごとの設定です。" }),
+  fxHead("音量と立ち上がり"),
+  fadeGroup,
   fxGroup("transient", "トランジェント(立ち上がり)", "音の頭(アタック)と、そのあとの伸び(サステイン)を別々に上げ下げします。", [
     range("アタック", -12, 12, 0.5, () => params.fx.transient.attackDb, (p, v) => (p.fx.transient.attackDb = v), db, true),
     range("サステイン", -12, 12, 0.5, () => params.fx.transient.sustainDb, (p, v) => (p.fx.transient.sustainDb = v), db, true),
   ]),
+  fxHead("音色"),
   fxGroup("eq", "EQ", "低域カット・低域・中域(ベル)・高域・高域カット。", [
     fxFreq("低域カット", 20, 2000, () => params.fx.eq.lowCutHz, (p, v) => (p.fx.eq.lowCutHz = v <= 20 ? 0 : v), { at: 20, text: "オフ" }),
     range("低域", -18, 18, 0.5, () => params.fx.eq.lowDb, (p, v) => (p.fx.eq.lowDb = v), db, true),
@@ -625,6 +657,7 @@ const fxPanel = el("section", { className: "panel fx-panel" }, [
   fxGroup("air", "エア(高域の抜け)", "高い音を持ち上げ、少し倍音を足して抜けをよくします。上げすぎると耳に痛くなります。", [
     range("量", 0, 1, 0.01, () => params.fx.air.amount, (p, v) => (p.fx.air.amount = v), pct, true),
   ]),
+  fxHead("飛び道具"),
   fxGroup("filter", "フィルター(LFO)", "カットオフを拍に合わせて揺らします。揺れの幅を 0 にすれば、ふつうのフィルターです。", [
     select("種類", [["lowpass", "ローパス"], ["highpass", "ハイパス"], ["bandpass", "バンドパス"]], () => params.fx.filter.type, (p, v) => (p.fx.filter.type = v), true),
     fxFreq("カットオフ", 40, 18000, () => params.fx.filter.cutoffHz, (p, v) => (p.fx.filter.cutoffHz = v)),
@@ -637,6 +670,7 @@ const fxPanel = el("section", { className: "panel fx-panel" }, [
     range("間引き", 1, 32, 1, () => params.fx.crush.downsample, (p, v) => (p.fx.crush.downsample = v), (v) => (v === 1 ? "なし" : `1/${v}`), true),
     range("かかり具合(ミックス)", 0, 1, 0.01, () => params.fx.crush.mix, (p, v) => (p.fx.crush.mix = v), pct, true),
   ]),
+  fxHead("広がり"),
   fxGroup("chorus", "コーラス", "少しずらした音を左右に重ねて、厚みと広がりを出します。モノラルの素材もステレオになります。", [
     range("速さ", 0.1, 5, 0.05, () => params.fx.chorus.rateHz, (p, v) => (p.fx.chorus.rateHz = v), (v) => `${v.toFixed(2)} Hz`, true),
     range("深さ", 0, 12, 0.1, () => params.fx.chorus.depthMs, (p, v) => (p.fx.chorus.depthMs = v), (v) => `${v.toFixed(1)} ms`, true),
@@ -650,6 +684,7 @@ const fxPanel = el("section", { className: "panel fx-panel" }, [
     range("深さ", 0, 1, 0.01, () => params.fx.pan.depth, (p, v) => (p.fx.pan.depth = v), pct, true),
     select("周期", BEATS, () => String(params.fx.pan.beats), (p, v) => (p.fx.pan.beats = Number(v) as FxBeats), true),
   ]),
+  fxHead("仕上げ"),
   fxGroup("limiter", "リミッター", "最後に音量を上げつつ、天井を超えないように抑えます。", [
     range("入力ゲイン", 0, 18, 0.5, () => params.fx.limiter.gainDb, (p, v) => (p.fx.limiter.gainDb = v), db, true),
     range("天井", -12, 0, 0.1, () => params.fx.limiter.ceilingDb, (p, v) => (p.fx.limiter.ceilingDb = v), (v) => `${v.toFixed(1)} dBFS`, true),
@@ -797,7 +832,7 @@ const detailsPanel = el("details", { className: "panel params" }, [
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "エンベロープ" }),
-      range("アタック", 0.001, 0.5, 0.001, () => params.amp.attack, (p, v) => (p.amp.attack = v), ms),
+      range("アタック(= 入りのフェード)", 0.001, 0.5, 0.001, () => params.amp.attack, (p, v) => (p.amp.attack = v), ms),
       range("ディケイ", 0.01, 2, 0.01, () => params.amp.decay, (p, v) => (p.amp.decay = v), ms),
       range("サステイン", 0, 1, 0.01, () => params.amp.sustain, (p, v) => (p.amp.sustain = v), pct),
       range("リリース", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms),
@@ -1214,7 +1249,17 @@ function refreshExport(): void {
   if (markers) {
     editor.setParts({ sustain: params.sustainEnabled, tail: params.tail.enabled && params.tail.limit !== "none" });
     editor.setState(markers, params.root, params.flatten, note);
-    editor.setLayout(outputLayout(markers, params, held), params.wobble.vibratoCents > 0 ? { depthCents: params.wobble.vibratoCents, rateHz: params.wobble.vibratoHz, delaySec: params.wobble.vibratoDelaySec } : null);
+    editor.setLayout(
+      outputLayout(markers, params, held),
+      params.wobble.vibratoCents > 0 ? { depthCents: params.wobble.vibratoCents, rateHz: params.wobble.vibratoHz, delaySec: params.wobble.vibratoDelaySec } : null,
+      {
+        attackSec: params.amp.attack,
+        decaySec: params.amp.decay,
+        sustain: params.amp.sustain,
+        // Without a tail the file ends on the release (never shorter than the fade); with one, the fade runs out with the material.
+        fadeOutSec: params.tail.enabled && params.tail.limit !== "none" ? params.amp.fadeOut : Math.max(params.amp.release, params.amp.fadeOut),
+      },
+    );
   }
   sustainStretchRow.classList.toggle("disabled", !oneShot);
   refreshFixBar();

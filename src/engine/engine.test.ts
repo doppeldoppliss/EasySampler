@@ -206,3 +206,46 @@ describe("sustain off: letting go early", () => {
     expect(last / SR).toBeGreaterThan(headSec * 0.8);
   });
 });
+
+describe("フェード (fade in / fade out)", () => {
+  function envelope(out: Float32Array, windowSec: number): (atSec: number) => number {
+    const w = Math.round(windowSec * SR);
+    return (atSec) => {
+      const from = Math.round(atSec * SR);
+      return rms(out, from, Math.min(out.length, from + w));
+    };
+  }
+
+  it("fades out over the last stretch of a head-only playout", () => {
+    const material = demoSyllable(SR);
+    const base = { sustainEnabled: false, tail: { enabled: false, limit: "unlimited" as const } };
+    const plain = play(setup(material, { ...base }).engine, 62, 1, 1);
+    const faded = play(setup(material, { ...base, amp: { ...DEFAULT_PARAMS.amp, fadeOut: 0.15 } }).engine, 62, 1, 1);
+    // The head is about 0.245 s; the fade covers its last 0.15 s.
+    const p = envelope(plain, 0.03);
+    const f = envelope(faded, 0.03);
+    expect(f(0.05)).toBeCloseTo(p(0.05), 2); // before the fade: untouched
+    expect(f(0.2)).toBeLessThan(p(0.2) * 0.6); // inside it: quieter
+    expect(f(0.23)).toBeLessThan(p(0.23) * 0.3); // nearly out
+  });
+
+  it("makes the release at least as long as the fade when the note is let go without a tail", () => {
+    const material = demoSyllable(SR);
+    const base = { tail: { enabled: false, limit: "unlimited" as const } };
+    const short = play(setup(material, { ...base }).engine, 62, 0.5, 1);
+    const long = play(setup(material, { ...base, amp: { ...DEFAULT_PARAMS.amp, fadeOut: 0.3 } }).engine, 62, 0.5, 1);
+    const s = envelope(short, 0.03);
+    const l = envelope(long, 0.03);
+    expect(s(0.6)).toBeLessThan(1e-3); // the 20 ms release is long over
+    expect(l(0.6)).toBeGreaterThan(s(0.6) + 0.01); // still fading
+    expect(l(0.85)).toBeLessThan(1e-3); // and gone by 0.3 s after
+  });
+
+  it("fades in over the attack", () => {
+    const material = demoSyllable(SR);
+    const out = play(setup(material, { amp: { ...DEFAULT_PARAMS.amp, attack: 0.3 } }).engine, 62, 1, 0.2);
+    const e = envelope(out, 0.03);
+    expect(e(0.02)).toBeLessThan(e(0.4) * 0.3);
+    expect(e(0.15)).toBeLessThan(e(0.4));
+  });
+});

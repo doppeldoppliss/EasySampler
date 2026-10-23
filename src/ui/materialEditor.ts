@@ -38,6 +38,14 @@ export interface Vibrato {
   delaySec: number;
 }
 
+/** The level over the output (the 水位 in the "after" lane): attack, decay to the sustain level, and the fade at the end. */
+export interface LevelShape {
+  attackSec: number;
+  decaySec: number;
+  sustain: number;
+  fadeOutSec: number;
+}
+
 /** Where playback is: in display time (the material as shown) or in output time (the "after" lane). */
 export type Playhead = { kind: "display"; sec: number } | { kind: "output"; sec: number } | null;
 
@@ -70,6 +78,7 @@ export class MaterialEditor {
   private selection: TimeSelection | null = null;
   private layout: OutputLayout | null = null;
   private vibrato: Vibrato | null = null;
+  private level: LevelShape | null = null;
   private playhead: Playhead = null;
   /** The visible window, in display seconds. */
   private view = { start: 0, end: 1 };
@@ -138,10 +147,11 @@ export class MaterialEditor {
     this.draw();
   }
 
-  /** What the output will look like (the lane at the bottom), and the vibrato drawn over its sustain. */
-  setLayout(layout: OutputLayout | null, vibrato: Vibrato | null): void {
+  /** What the output will look like (the lane at the bottom), the vibrato drawn over its sustain, and the level. */
+  setLayout(layout: OutputLayout | null, vibrato: Vibrato | null, level: LevelShape | null = null): void {
     this.layout = layout;
     this.vibrato = vibrato;
+    this.level = level;
     this.draw();
   }
 
@@ -646,6 +656,46 @@ export class MaterialEditor {
         if (Math.min(px(to), width) - textX > textWidth + 2 * dpr) {
           g.fillStyle = cssVar("--band-text");
           g.fillText(text, textX, stripBottom + lane / 2 + 4 * dpr);
+        }
+      }
+      // The level (水位): the part colours are "filled" only up to the gain at that moment —
+      // the attack rising, the decay settling, the fade at the end sinking to nothing.
+      const level = this.level;
+      if (level) {
+        const top = stripBottom + 4 * dpr;
+        const bandH = lane - 8 * dpr;
+        const gainAt = (sec: number) => {
+          let g = 1;
+          if (level.attackSec > 0 && sec < level.attackSec) g = sec / level.attackSec;
+          else if (level.decaySec > 0) g = level.sustain + (1 - level.sustain) * Math.exp(-(sec - level.attackSec) / level.decaySec);
+          const left = layout.totalSec - sec;
+          if (level.fadeOutSec > 0 && left < level.fadeOutSec) g *= Math.max(0, left / level.fadeOutSec);
+          return Math.max(0, Math.min(1, g));
+        };
+        const x0 = Math.max(0, px(0));
+        const x1 = Math.min(width, px(layout.totalSec));
+        if (x1 > x0) {
+          // Above the level: the strip colour, nearly solid, so the colour below reads as the amount.
+          g.fillStyle = cssVar("--strip");
+          g.globalAlpha = 0.82;
+          g.beginPath();
+          g.moveTo(x0, top);
+          for (let xx = x0; xx <= x1; xx += 1 * dpr) g.lineTo(xx, top + (1 - gainAt((xx - laneX) / pxPerSec)) * bandH);
+          g.lineTo(x1, top);
+          g.closePath();
+          g.fill();
+          g.globalAlpha = 1;
+          g.strokeStyle = cssVar("--text");
+          g.globalAlpha = 0.55;
+          g.lineWidth = 1 * dpr;
+          g.beginPath();
+          for (let xx = x0; xx <= x1; xx += 1 * dpr) {
+            const yy = top + (1 - gainAt((xx - laneX) / pxPerSec)) * bandH;
+            if (xx === x0) g.moveTo(xx, yy);
+            else g.lineTo(xx, yy);
+          }
+          g.stroke();
+          g.globalAlpha = 1;
         }
       }
       // The lane's name, over whatever is under it; and how much runs on past the right edge.

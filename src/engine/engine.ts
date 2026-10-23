@@ -31,6 +31,7 @@
 // Nothing here allocates while rendering.
 
 import { normalizeRemoved } from "../instrument/layout";
+import { quantizeToScale } from "../instrument/scale";
 import type { InstrumentParams, Markers } from "../instrument/types";
 
 export interface PreparedSource {
@@ -119,6 +120,8 @@ class Voice {
   tailRemaining = Infinity;
   /** "stretch": the slowed pass through the sustain reached its end; the pool carries on. */
   stretchDone = false;
+  /** Voice seconds at which the note was let go (for the vibrato's release). */
+  releasedAt = Infinity;
 
   driftValue = 0;
   driftTarget = 0;
@@ -144,6 +147,8 @@ export class Engine {
   private left = new Float32Array(0);
   private right = new Float32Array(0);
   private period = new Float32Array(0);
+  /** The material's pitch per mark as the engine uses it: as detected, or averaged over smoothSec (平滑化). */
+  private f0 = new Float32Array(0);
   private pool = new Int32Array(0);
   private voices: Voice[] = [];
   private order = 0;
@@ -179,6 +184,40 @@ export class Engine {
       }
     }
     this.rebuildPool();
+    this.rebuildF0();
+  }
+
+  /** The per-mark pitch, smoothed over wobble.smoothSec when asked (a mean over the voiced marks around each). */
+  private rebuildF0(): void {
+    const source = this.source;
+    if (!source) {
+      this.f0 = new Float32Array(0);
+      return;
+    }
+    const n = source.marks.length;
+    const raw = Float32Array.from({ length: n }, (_, k) => source.f0[k]);
+    this.f0 = raw;
+    const window = this.params?.wobble.smoothSec ?? 0;
+    if (window <= 0) return;
+    const half = (window / 2) * source.sampleRate;
+    const out = new Float32Array(n);
+    let lo = 0;
+    for (let k = 0; k < n; k++) {
+      out[k] = raw[k];
+      if (!source.voiced[k] || !Number.isFinite(raw[k])) continue;
+      const at = source.marks[k];
+      while (lo < n && source.marks[lo] < at - half) lo++;
+      let sum = 0;
+      let count = 0;
+      for (let j = lo; j < n && source.marks[j] <= at + half; j++) {
+        if (source.voiced[j] && Number.isFinite(raw[j])) {
+          sum += raw[j];
+          count++;
+        }
+      }
+      if (count > 0) out[k] = sum / count;
+    }
+    this.f0 = out;
   }
 
   setInstrument(markers: Markers, params: InstrumentParams): void {
@@ -191,10 +230,12 @@ export class Engine {
     const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
     this.removedStart = Float64Array.from(removed, (r) => r.start * sr);
     this.removedEnd = Float64Array.from(removed, (r) => r.end * sr);
+    const smoothChanged = this.params?.wobble.smoothSec !== params.wobble.smoothSec;
     this.params = params;
     this.ensureVoices(params.maxVoices);
     this.rebuildPool();
     this.refreshStretch();
+    if (smoothChanged) this.rebuildF0();
   }
 
   /** The note length a "stretch" sustain fills (seconds of output). */
@@ -347,6 +388,7 @@ export class Engine {
     v.note = note;
     v.velocityGain = 1 - params.amp.velocitySens + params.amp.velocitySens * Math.max(0, Math.min(1, velocity));
     v.released = false;
+    v.releasedAt = Infinity;
     v.startOrder = this.order++;
     v.phase = Phase.Head;
     v.cycleIndex = 0;
@@ -375,6 +417,7 @@ export class Engine {
 
   private release(v: Voice): void {
     v.released = true;
+    v.releasedAt = v.clock / this.sampleRate;
     const params = this.params!;
     // Sustain off: the head (and the tail) play out whatever the key does.
     if (!params.sustainEnabled) return;
@@ -467,8 +510,7 @@ export class Engine {
     const w = this.params!.wobble;
     let cents = 0;
     if (w.vibratoCents > 0) {
-      const fadeIn = Math.max(0, Math.min(1, (seconds - w.vibratoDelaySec) / 0.15));
-      cents += w.vibratoCents * fadeIn * Math.sin(2 * Math.PI * w.vibratoHz * seconds);
+      cents += w.vibratoCents * this.vibratoEnvelope(v, seconds) * Math.sin(2 * Math.PI * (w.vibratoHz * seconds + w.vibratoPhase));
     }
     if (w.driftCents > 0) {
       if (v.driftCountdown <= 0) {
@@ -478,6 +520,14 @@ export class Engine {
       v.driftValue += (v.driftTarget - v.driftValue) * 0.02;
     }
     return (cents + v.driftValue) / 100;
+  }
+
+  /** 0–1: the vibrato (and tremolo) coming in after its delay over its attack, and going out after the release. */
+  private vibratoEnvelope(v: Voice, seconds: number): number {
+    const w = this.params!.wobble;
+    let env = Math.max(0, Math.min(1, (seconds - w.vibratoDelaySec) / Math.max(0.001, w.vibratoAttackSec)));
+    if (w.vibratoReleaseSec > 0 && seconds > v.releasedAt) env *= Math.max(0, 1 - (seconds - v.releasedAt) / w.vibratoReleaseSec);
+    return env;
   }
 
   /** Places the voice's next grain; false when the material has run out. */
@@ -525,8 +575,17 @@ export class Engine {
       alpha = 2 ** ((shift + wobble) / 12);
       spacing = period / alpha;
     } else if (voiced) {
-      const f0 = source.f0[k];
-      const flattened = Number.isFinite(f0) ? params.flatten * (f0 - params.root) : 0;
+      const f0 = this.f0[k];
+      let flattened = 0;
+      if (Number.isFinite(f0)) {
+        if (params.tune.mode === "scale") {
+          // Frame by frame toward the nearest scale note of the pitch as played (transposed first, so the scale is absolute).
+          const transposed = f0 + shift;
+          flattened = params.flatten * (transposed - quantizeToScale(transposed, params.tune.scale, params.tune.key));
+        } else {
+          flattened = params.flatten * (f0 - params.root);
+        }
+      }
       const offset = shift + wobble - flattened;
       spacing = period * 2 ** (-offset / 12);
       alpha = this.formantAlpha(shift);
@@ -667,6 +726,8 @@ export class Engine {
     // 終わりのフェード: over the last `fadeOut` seconds before the material runs out (when that is known).
     const fadeOutSamples = amp.fadeOut * sr;
     const remaining = fadeOutSamples > 0 ? this.playoutRemaining(v) : Infinity;
+    const w = params.wobble;
+    const tremolo = w.tremoloDepth;
     for (let i = 0; i < frames; i++) {
       switch (v.env) {
         case Env.Attack:
@@ -693,6 +754,11 @@ export class Engine {
       if (v.fadeStep > 0) v.fadeGain = Math.max(0, v.fadeGain - v.fadeStep);
       let gain = v.level * v.fadeGain * v.velocityGain;
       if (remaining !== Infinity) gain *= Math.max(0, Math.min(1, (remaining - i) / fadeOutSamples));
+      if (tremolo > 0) {
+        // Amplitude vibrato at the vibrato's rate and envelope (VocalShifter's DYN ビブラート).
+        const t = (blockStart + i) / sr;
+        gain *= 1 - tremolo * this.vibratoEnvelope(v, t) * 0.5 * (1 - Math.sin(2 * Math.PI * (w.vibratoHz * t + w.vibratoPhase)));
+      }
       bufL[i] *= gain;
       bufR[i] *= gain;
     }

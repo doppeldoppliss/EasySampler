@@ -42,6 +42,7 @@ import { el, isTypingTarget } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 import { clock, RangePicker } from "./ui/rangePicker";
+import { KEY_NAMES, quantizeToScale, SCALE_LABELS, type ScaleId } from "./instrument/scale";
 import { isMidiFile, SongPanel } from "./ui/songPanel";
 
 /** The most material one analysis takes; a longer clip goes through the range picker first. */
@@ -545,11 +546,22 @@ const timePanel = el("details", { className: "sub" }, [
   sustainStretchRow,
   range("語尾の速度", 0.25, 4, 0.05, () => params.stretch.tail, (p, v) => (p.stretch.tail = v), stretchFormat),
 ]);
+// 音階: the key and the scale (shown in "scale" mode).
+const tuneScaleRow = el("div", { className: "row tight" }, [
+  select("キー", KEY_NAMES.map((n, i) => [String(i), n] as [string, string]), () => String(params.tune.key), (p, v) => (p.tune.key = Number(v))),
+  select("音階", (Object.keys(SCALE_LABELS) as ScaleId[]).map((id) => [id, SCALE_LABELS[id]] as [ScaleId, string]), () => params.tune.scale, (p, v) => (p.tune.scale = v)),
+]);
+
 const vibratoPanel = el("details", { className: "sub" }, [
   el("summary", { textContent: "ビブラート" }),
   range("深さ", 0, 100, 1, () => params.wobble.vibratoCents, (p, v) => (p.wobble.vibratoCents = v), (v) => `${v}¢`),
   range("速さ", 3, 9, 0.1, () => params.wobble.vibratoHz, (p, v) => (p.wobble.vibratoHz = v), (v) => `${v.toFixed(1)} Hz`),
   range("かかり始め(音の頭から)", 0, 1, 0.01, () => params.wobble.vibratoDelaySec, (p, v) => (p.wobble.vibratoDelaySec = v), ms),
+  range("立ち上がり(深さが出切るまで)", 0, 2, 0.01, () => params.wobble.vibratoAttackSec, (p, v) => (p.wobble.vibratoAttackSec = v), ms),
+  range("離したあとの消え方(0 で続く)", 0, 2, 0.01, () => params.wobble.vibratoReleaseSec, (p, v) => (p.wobble.vibratoReleaseSec = v), (v) => (v === 0 ? "続く" : ms(v))),
+  range("位相(始まる位置)", 0, 1, 0.05, () => params.wobble.vibratoPhase, (p, v) => (p.wobble.vibratoPhase = v), (v) => `${Math.round(v * 360)}°`),
+  range("音量の揺れ(トレモロ)", 0, 1, 0.01, () => params.wobble.tremoloDepth, (p, v) => (p.wobble.tremoloDepth = v), pct),
+  range("素材自身の揺れをならす(平滑化)", 0, 0.3, 0.005, () => params.wobble.smoothSec, (p, v) => (p.wobble.smoothSec = v), (v) => (v === 0 ? "なし" : ms(v))),
 ]);
 
 // Which parts of the material play: switches in the colours of the editor's bands.
@@ -621,6 +633,9 @@ const tunePanel = el("section", { className: "panel tune" }, [
   ),
   el("p", { className: "fine help", textContent: "拍は「長さ」の BPM で数えます(「曲で試す」の再生中は曲の BPM)。上限に来た語尾は短くフェードして切れます。" }),
   range("平坦化(抑揚の残し具合)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
+  select("音程の整え方", [["flatten", "判定した 1 音に寄せる"], ["scale", "音階の最寄りの音に、場所ごとに寄せる(複数の音を残す)"]], () => params.tune.mode, (p, v) => (p.tune.mode = v)),
+  tuneScaleRow,
+  el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなしでケロケロになります(プリセット「ケロケロ」)。" }),
   check("音程なし(無声)の部分も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v), true),
   el("p", { className: "fine help", textContent: "子音・息・ノイズなど音程のない部分は、ふつうは移調しても元のまま鳴ります。オンにすると、その部分も音名に応じて細く / 太くなります(長さは変わりません)。音程そのものを付けたいときは、選択して「有声に」。" }),
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
@@ -1428,6 +1443,7 @@ function refreshExport(): void {
   // The tail limit counts in the export BPM (the song's own while one plays); a "stretch" sustain fills the export length.
   if (!songPanel.playing) client.setTempo(exportSettings.bpm);
   client.setHold(exportLengthSec(exportSettings));
+  tuneScaleRow.hidden = params.tune.mode !== "scale";
   if (noteMode === "auto") note = Math.max(24, Math.min(96, Math.round(params.root)));
   noteSelect.value = String(note);
   noteAutoButton.hidden = noteMode === "auto";
@@ -1462,7 +1478,14 @@ function refreshExport(): void {
 
   if (markers) {
     editor.setParts({ sustain: params.sustainEnabled, tail: params.tail.enabled && params.tail.limit !== "none" });
-    editor.setState(markers, params.root, params.flatten, note);
+    const shaper =
+      params.tune.mode === "scale"
+        ? (p: number) => {
+            const transposed = p + (note - params.root);
+            return transposed - params.flatten * (transposed - quantizeToScale(transposed, params.tune.scale, params.tune.key));
+          }
+        : null;
+    editor.setState(markers, params.root, params.flatten, note, shaper);
     refreshFadeGrips();
     editor.setLayout(
       outputLayout(markers, params, held),

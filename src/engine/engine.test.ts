@@ -347,3 +347,39 @@ describe("sustain mode \"stretch\"", () => {
     expect(level(0.4)).toBeLessThan(level(1.6) * 0.6);
   });
 });
+
+describe("音階に合わせる (tune mode \"scale\")", () => {
+  it("lands the note on the scale's nearest note instead of the root", () => {
+    const material = demoSyllable(SR); // D4 −6¢
+    const { analysis } = setup(material);
+    const root = analysis.root!.midi;
+    const played = Math.round(root);
+    // E major: the material's D4 −6¢ (61.94) sits nearest C#4 (61).
+    const out = play(setup(material, { tune: { mode: "scale", scale: "major", key: 4 } }).engine, played, 1.2, 0.1);
+    const pitch = rootPitch(analyzePitch(out.slice(Math.round(0.3 * SR), Math.round(1.1 * SR)), SR))!;
+    expect(Math.abs(pitch.midi - 61)).toBeLessThan(0.2);
+    // Chromatic: on the nearest semitone, D4.
+    const chroma = play(setup(material, { tune: { mode: "scale", scale: "chromatic", key: 0 } }).engine, played, 1.2, 0.1);
+    const p2 = rootPitch(analyzePitch(chroma.slice(Math.round(0.3 * SR), Math.round(1.1 * SR)), SR))!;
+    expect(Math.abs(p2.midi - 62)).toBeLessThan(0.2);
+  });
+
+  it("vibrato: a release fades it, a phase moves it; tremolo shakes the level", () => {
+    const material = demoSyllable(SR);
+    const base = { wobble: { ...DEFAULT_PARAMS.wobble, vibratoCents: 80, vibratoHz: 6, vibratoDelaySec: 0, vibratoAttackSec: 0.01 } };
+    const kept = play(setup(material, base).engine, 62, 0.5, 0.6);
+    const released = play(setup(material, { wobble: { ...base.wobble, vibratoReleaseSec: 0.1 } }).engine, 62, 0.5, 0.6);
+    // After the release (plus the 0.1 s fade) the released one is steady while the kept one still wobbles.
+    const spread = (out: Float32Array, from: number, to: number) => rootPitch(analyzePitch(out.slice(Math.round(from * SR), Math.round(to * SR)), SR))?.spread ?? 0;
+    expect(spread(released, 0.7, 1.0)).toBeLessThan(spread(kept, 0.7, 1.0) * 0.5);
+    const trem = play(setup(material, { wobble: { ...DEFAULT_PARAMS.wobble, vibratoHz: 4, vibratoDelaySec: 0, tremoloDepth: 0.9 } }).engine, 62, 1, 0.1);
+    const plain = play(setup(material).engine, 62, 1, 0.1);
+    const ripple = (out: Float32Array) => {
+      const win = Math.round(0.02 * SR);
+      const levels: number[] = [];
+      for (let at = Math.round(0.3 * SR); at + win < Math.round(0.9 * SR); at += win) levels.push(rms(out, at, at + win));
+      return Math.max(...levels) / Math.max(1e-6, Math.min(...levels));
+    };
+    expect(ripple(trem)).toBeGreaterThan(ripple(plain) * 2);
+  });
+});

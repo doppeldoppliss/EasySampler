@@ -6,10 +6,12 @@
 
 /** How the sustain fills the note: a random walk over steady periods, a loop, a wavetable of a few periods,
  * the whole region slowed to fit ("stretch": its natural change kept, VocalShifter-style), or not at all. */
+import type { ScaleId } from "./scale";
+
 export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
 export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
-export type PresetId = "synth" | "synth-lead" | "stretch" | "wavetable" | "bass" | "jinriki" | "original" | "drum";
+export type PresetId = "synth" | "synth-lead" | "stretch" | "kerokero" | "wavetable" | "bass" | "jinriki" | "original" | "drum";
 
 /** Seconds within the material, [start, end). */
 export interface TimeRange {
@@ -40,6 +42,12 @@ export interface InstrumentParams {
   /** 0 = the material's own inflection, 1 = flat on the note (★3). */
   flatten: number;
   /**
+   * What the pitch is flattened toward: the one root (one note out of the clip),
+   * or the nearest note of a scale, frame by frame (a clip with several notes
+   * keeps them; with flatten = 1 and no wobble it is VocalShifter's ケロケロ).
+   */
+  tune: { mode: "flatten" | "scale"; scale: ScaleId; key: number };
+  /**
    * Unvoiced grains (no pitch: consonants, breath, noise) are normally laid down
    * as recorded whatever the note. On, they are read faster / slower with the
    * shift — no pitch (there is none), but their colour follows the note, as in
@@ -65,6 +73,16 @@ export interface InstrumentParams {
     vibratoCents: number;
     vibratoHz: number;
     vibratoDelaySec: number;
+    /** How long the vibrato takes to reach full depth after its delay. */
+    vibratoAttackSec: number;
+    /** After the note is let go, the vibrato fades out over this long (0 = it keeps going). */
+    vibratoReleaseSec: number;
+    /** Where in its cycle the vibrato starts (0–1). */
+    vibratoPhase: number;
+    /** Amplitude vibrato (tremolo) at the vibrato's rate, 0–1 of the level. */
+    tremoloDepth: number;
+    /** The material's own pitch wobble is averaged over this long before use (0 = as detected): VocalShifter's 平滑化. */
+    smoothSec: number;
     /** Slow wander (cents). */
     driftCents: number;
     /** Tiny period/level irregularity, kept even when fully flattened. */
@@ -134,6 +152,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   rootMode: "auto",
   pitchMode: "preserve-length",
   flatten: 1,
+  tune: { mode: "flatten", scale: "chromatic", key: 0 },
   unvoicedFollow: false,
   formantSemitones: 0,
   formantFollow: true,
@@ -142,7 +161,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   wavetableCycles: 1,
   stretch: { head: 1, sustain: 1, tail: 1 },
   tail: { enabled: true, limit: "unlimited" },
-  wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, driftCents: 0, micro: true },
+  wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, vibratoAttackSec: 0.15, vibratoReleaseSec: 0, vibratoPhase: 0, tremoloDepth: 0, driftCents: 0, micro: true, smoothSec: 0 },
   amp: { attack: 0.005, decay: 0.1, sustain: 1, release: 0.02, velocitySens: 0.5, fadeOut: 0 },
   maxVoices: 24,
   fx: DEFAULT_FX,
@@ -159,6 +178,7 @@ export const PRESETS: Preset[] = [
   { id: "synth", label: "シンセ化(平坦)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
   { id: "synth-lead", label: "シンセ化リード(ビブラート)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 25, vibratoHz: 5.8, vibratoDelaySec: 0.2, driftCents: 0, micro: true } }) },
   { id: "stretch", label: "引き延ばし(変化を残す)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "stretch", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
+  { id: "kerokero", label: "ケロケロ(音階に貼り付け)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, tune: { ...p.tune, mode: "scale" }, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false, smoothSec: 0 } }) },
   { id: "wavetable", label: "ウェーブテーブル(無機質)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "wavetable", wavetableCycles: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false } }) },
   { id: "bass", label: "ベース", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, amp: { ...p.amp, attack: 0.003, release: 0.04 } }) },
   { id: "jinriki", label: "人力(抑揚を少し整える)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0.3, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 15, vibratoHz: 5.5, vibratoDelaySec: 0.3, driftCents: 4, micro: true } }) },

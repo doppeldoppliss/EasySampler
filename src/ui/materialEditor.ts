@@ -87,6 +87,8 @@ export class MaterialEditor {
   /** The note the file is tuned to: where the edited curve is drawn. */
   private target = 60;
   private flatten = 0;
+  /** How a detected pitch becomes the output pitch (the yellow curve); null = flatten toward the target. */
+  private shaper: ((pitch: number) => number) | null = null;
   private selection: TimeSelection | null = null;
   private layout: OutputLayout | null = null;
   private vibrato: Vibrato | null = null;
@@ -158,8 +160,9 @@ export class MaterialEditor {
     this.announceView();
   }
 
-  setState(markers: Markers, root: number, flatten: number, target = root): void {
+  setState(markers: Markers, root: number, flatten: number, target = root, shaper: ((pitch: number) => number) | null = null): void {
     this.markers = markers;
+    this.shaper = shaper;
     this.removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
     this.root = root;
     this.target = target;
@@ -753,7 +756,7 @@ export class MaterialEditor {
     // After flattening, as it will be written (on the target note): yellow, thick, solid — within the range.
     g.strokeStyle = cssVar("--pitch-edited");
     g.lineWidth = 3 * dpr;
-    curve((p) => this.target + (1 - this.flatten) * (p - this.root), markers.rangeStart, markers.rangeEnd);
+    curve(this.shaper ?? ((p) => this.target + (1 - this.flatten) * (p - this.root)), markers.rangeStart, markers.rangeEnd);
 
     // Marker strip: head / sustain / tail bands with labels.
     const bands: [number, number, string, string][] = [

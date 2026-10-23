@@ -133,6 +133,7 @@ function sanitizeParams(raw: unknown): InstrumentParams {
     rootMode: raw.rootMode === "manual" ? "manual" : "auto",
     pitchMode: raw.pitchMode === "resample" ? "resample" : "preserve-length",
     flatten: clamp(num(raw.flatten, d.flatten), 0, 1),
+    tune: sanitizeTune(raw.tune, d.tune),
     unvoicedFollow: typeof raw.unvoicedFollow === "boolean" ? raw.unvoicedFollow : d.unvoicedFollow,
     formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
     formantFollow: typeof raw.formantFollow === "boolean" ? raw.formantFollow : d.formantFollow,
@@ -152,6 +153,11 @@ function sanitizeParams(raw: unknown): InstrumentParams {
       vibratoCents: clamp(num(wobble.vibratoCents, d.wobble.vibratoCents), 0, 200),
       vibratoHz: clamp(num(wobble.vibratoHz, d.wobble.vibratoHz), 1, 12),
       vibratoDelaySec: clamp(num(wobble.vibratoDelaySec, d.wobble.vibratoDelaySec), 0, 5),
+      vibratoAttackSec: clamp(num(wobble.vibratoAttackSec, d.wobble.vibratoAttackSec), 0, 5),
+      vibratoReleaseSec: clamp(num(wobble.vibratoReleaseSec, d.wobble.vibratoReleaseSec), 0, 5),
+      vibratoPhase: clamp(num(wobble.vibratoPhase, d.wobble.vibratoPhase), 0, 1),
+      tremoloDepth: clamp(num(wobble.tremoloDepth, d.wobble.tremoloDepth), 0, 1),
+      smoothSec: clamp(num(wobble.smoothSec, d.wobble.smoothSec), 0, 1),
       driftCents: clamp(num(wobble.driftCents, d.wobble.driftCents), 0, 100),
       micro: typeof wobble.micro === "boolean" ? wobble.micro : d.wobble.micro,
     },
@@ -216,6 +222,16 @@ function sanitizeFx(raw: unknown): FxSettings {
     width: { on: on(w), side: clamp(num(w.side, d.width.side), 0, 3), midDb: clamp(num(w.midDb, d.width.midDb), -24, 12) },
     pan: { on: on(p), depth: clamp(num(p.depth, d.pan.depth), 0, 1), beats: beats(p.beats, d.pan.beats) },
     limiter: { on: on(l), gainDb: clamp(num(l.gainDb, d.limiter.gainDb), 0, 24), ceilingDb: clamp(num(l.ceilingDb, d.limiter.ceilingDb), -24, 0), releaseMs: clamp(num(l.releaseMs, d.limiter.releaseMs), 5, 1000) },
+  };
+}
+
+function sanitizeTune(raw: unknown, d: InstrumentParams["tune"]): InstrumentParams["tune"] {
+  const r = isRecord(raw) ? raw : {};
+  const scales = ["chromatic", "major", "minor", "pentatonic"] as const;
+  return {
+    mode: r.mode === "scale" ? "scale" : "flatten",
+    scale: scales.includes(r.scale as never) ? (r.scale as InstrumentParams["tune"]["scale"]) : d.scale,
+    key: clamp(Math.round(num(r.key, d.key)), 0, 11),
   };
 }
 

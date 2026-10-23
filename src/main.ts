@@ -1090,8 +1090,17 @@ const pickerPanel = el("section", { className: "panel picker-panel", hidden: tru
   picker.element,
   el("div", { className: "row" }, [el("span", { className: "fine" }, ["使う範囲: ", pickerRange]), pickerListen, pickerUse]),
   el("div", { className: "row tight seek-row" }, [pickerSeek, pickerClock]),
-  el("p", { className: "fine", textContent: "ハンドルをドラッグして範囲を決めます。帯の中をドラッグすると範囲ごと動き、外をタップするとそこへ移ります。一度に使えるのは 60 秒までですが、あとから「別の範囲を選ぶ」で何度でも選び直せます。" }),
+  el("p", { className: "fine", textContent: "ハンドルをドラッグして範囲を決めます。帯の中をドラッグすると範囲ごと動き、外を押すとそこへ移ります。波形を 1 回押すと再生位置、2 回押すとそこから再生。一度に使えるのは 60 秒までですが、あとから「別の範囲を選ぶ」で何度でも選び直せます。" }),
 ]);
+// A tap on the picker's waveform: the play position (within the selection); a second tap plays from there.
+picker.onSeek = (sec, how) => {
+  const r = picker.value;
+  pickerCue = Math.max(0, Math.min(r.to - r.from, sec - r.from));
+  showPickerSeek(pickerCue);
+  if (pickerPlaying) client.seekPreview(pickerCue);
+  else picker.setPlayhead(r.from + pickerCue);
+  if (how === "play" && !pickerPlaying) pickerListen.click();
+};
 picker.onChange = (r) => {
   pickerRange.textContent = `${clock(r.from)} – ${clock(r.to)}(${(r.to - r.from).toFixed(1)} 秒)`;
   // A new selection: playback (of the old one) stops, and the cue goes back to its start.

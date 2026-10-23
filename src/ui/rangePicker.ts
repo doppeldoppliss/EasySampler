@@ -13,6 +13,11 @@ export interface PickedRange {
 
 const HANDLE_REACH_MOUSE = 10;
 const HANDLE_REACH_TOUCH = 24;
+/** A press that moves less than this (CSS px) is a tap: it sets the play position (a second tap plays). */
+const TAP_PX_MOUSE = 4;
+const TAP_PX_TOUCH = 10;
+const DOUBLE_TAP_MS = 350;
+const DOUBLE_TAP_PX = 24;
 
 export class RangePicker {
   readonly element: HTMLElement;
@@ -22,7 +27,10 @@ export class RangePicker {
   private durationSec = 1;
   private maxSec = 60;
   private range: PickedRange = { from: 0, to: 1 };
-  private dragging: { which: "from" | "to" | "both"; pointerId: number; grabOffset: number } | null = null;
+  private dragging: { which: "from" | "to" | "both"; pointerId: number; grabOffset: number; startX: number; moved: boolean; outside: boolean; t: number } | null = null;
+  private lastTap: { at: number; x: number } | null = null;
+  /** A tap on the waveform (seconds within the clip): "tap" sets the play position, "play" (a second tap) plays from there. */
+  onSeek: (sec: number, how: "tap" | "play") => void = () => {};
   /** Where playback is (seconds within the clip), or null. */
   private playhead: number | null = null;
   onChange: (range: PickedRange, final: boolean) => void = () => {};
@@ -105,15 +113,14 @@ export class RangePicker {
     const x = e.clientX - box.left;
     const t = this.timeAt(e.clientX);
     let which: "from" | "to" | "both";
+    let outside = false;
     if (Math.abs(px(this.range.from) - x) < reach) which = "from";
     else if (Math.abs(px(this.range.to) - x) < reach) which = "to";
     else if (t > this.range.from && t < this.range.to) which = "both";
     else {
-      // A press outside: the selection jumps there, keeping its length.
-      const length = this.range.to - this.range.from;
-      const from = Math.max(0, Math.min(this.durationSec - length, t - length / 2));
-      this.range = { from, to: from + length };
+      // A press outside: once it moves (or on a tap), the selection jumps there, keeping its length.
       which = "both";
+      outside = true;
     }
     e.preventDefault();
     try {
@@ -121,9 +128,14 @@ export class RangePicker {
     } catch {
       // gone already
     }
-    this.dragging = { which, pointerId: e.pointerId, grabOffset: t - this.range.from };
-    this.draw();
-    this.onChange(this.range, false);
+    this.dragging = { which, pointerId: e.pointerId, grabOffset: t - this.range.from, startX: e.clientX, moved: false, outside, t };
+  }
+
+  /** The selection, kept at its length, centred on `t`. */
+  private jumpTo(t: number): void {
+    const length = this.range.to - this.range.from;
+    const from = Math.max(0, Math.min(this.durationSec - length, t - length / 2));
+    this.range = { from, to: from + length };
   }
 
   private move(e: PointerEvent): void {
@@ -136,8 +148,16 @@ export class RangePicker {
       this.canvas.style.cursor = nearHandle ? "ew-resize" : "grab";
       return;
     }
-    const t = this.timeAt(e.clientX);
     const d = this.dragging;
+    if (!d.moved) {
+      if (Math.abs(e.clientX - d.startX) < (e.pointerType === "mouse" ? TAP_PX_MOUSE : TAP_PX_TOUCH)) return;
+      d.moved = true;
+      if (d.outside) {
+        this.jumpTo(d.t);
+        d.grabOffset = d.t - this.range.from;
+      }
+    }
+    const t = this.timeAt(e.clientX);
     if (d.which === "both") {
       const length = this.range.to - this.range.from;
       const from = Math.max(0, Math.min(this.durationSec - length, t - d.grabOffset));
@@ -151,8 +171,22 @@ export class RangePicker {
 
   private up(e: PointerEvent): void {
     if (!this.dragging || this.dragging.pointerId !== e.pointerId) return;
+    const d = this.dragging;
     this.dragging = null;
-    this.onChange(this.range, true);
+    if (d.moved) {
+      this.onChange(this.range, true);
+      return;
+    }
+    // A tap: outside the selection it comes along; then the play position goes to the tap (a second tap plays).
+    if (d.outside) {
+      this.jumpTo(d.t);
+      this.draw();
+      this.onChange(this.range, true);
+    }
+    const now = performance.now();
+    const again = this.lastTap !== null && now - this.lastTap.at < DOUBLE_TAP_MS && Math.abs(e.clientX - this.lastTap.x) < DOUBLE_TAP_PX;
+    this.lastTap = again ? null : { at: now, x: e.clientX };
+    this.onSeek(Math.max(this.range.from, Math.min(this.range.to, d.t)), again ? "play" : "tap");
   }
 
   draw(): void {

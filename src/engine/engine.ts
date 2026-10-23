@@ -122,6 +122,10 @@ class Voice {
   stretchDone = false;
   /** Voice seconds at which the note was let go (for the vibrato's release). */
   releasedAt = Infinity;
+  /** The pitch correction as it has glided in so far (semitones), for tune.retuneSec. */
+  retuneCorr = 0;
+  /** The last grain's spacing (samples): the time step the glide advances by. */
+  lastStep = 0;
 
   driftValue = 0;
   driftTarget = 0;
@@ -148,7 +152,9 @@ export class Engine {
   private right = new Float32Array(0);
   private period = new Float32Array(0);
   /** The material's pitch per mark as the engine uses it: as detected, or averaged over smoothSec (平滑化). */
-  private f0 = new Float32Array(0);
+  private f0: Float32Array = new Float32Array(0);
+  /** The slow part of the pitch per mark (a 0.2 s mean): the drift; what is left is the modulation. */
+  private f0slow: Float32Array = new Float32Array(0);
   private pool = new Int32Array(0);
   /** RMS of the material around each mark (one grain's worth), and the sustain's median of it. */
   private markRms = new Float32Array(0);
@@ -211,7 +217,14 @@ export class Engine {
     const raw = Float32Array.from({ length: n }, (_, k) => source.f0[k]);
     this.f0 = raw;
     const window = this.params?.wobble.smoothSec ?? 0;
-    if (window <= 0) return;
+    if (window > 0) this.f0 = this.meanOverWindow(raw, window);
+    this.f0slow = this.meanOverWindow(this.f0, 0.2);
+  }
+
+  /** Each voiced mark's pitch replaced by the mean over the voiced marks within ±window/2 around it. */
+  private meanOverWindow(raw: Float32Array, window: number): Float32Array {
+    const source = this.source!;
+    const n = raw.length;
     const half = (window / 2) * source.sampleRate;
     const out = new Float32Array(n);
     let lo = 0;
@@ -230,7 +243,7 @@ export class Engine {
       }
       if (count > 0) out[k] = sum / count;
     }
-    this.f0 = out;
+    return out;
   }
 
   setInstrument(markers: Markers, params: InstrumentParams): void {
@@ -405,6 +418,8 @@ export class Engine {
     v.velocityGain = 1 - params.amp.velocitySens + params.amp.velocitySens * Math.max(0, Math.min(1, velocity));
     v.released = false;
     v.releasedAt = Infinity;
+    v.retuneCorr = 0;
+    v.lastStep = 0;
     v.startOrder = this.order++;
     v.phase = Phase.Head;
     v.cycleIndex = 0;
@@ -592,17 +607,23 @@ export class Engine {
       spacing = period / alpha;
     } else if (voiced) {
       const f0 = this.f0[k];
-      let flattened = 0;
+      let correction = 0;
       if (Number.isFinite(f0)) {
-        if (params.tune.mode === "scale") {
-          // Frame by frame toward the nearest scale note of the pitch as played (transposed first, so the scale is absolute).
-          const transposed = f0 + shift;
-          flattened = params.flatten * (transposed - quantizeToScale(transposed, params.tune.scale, params.tune.key));
-        } else {
-          flattened = params.flatten * (f0 - params.root);
-        }
+        // The target in the material's own pitch space: the root, or the nearest scale note of the pitch as played.
+        const target = params.tune.mode === "scale" ? quantizeToScale(f0 + shift, params.tune.scale, params.tune.key) - shift : params.root;
+        // What is kept of the material's movement: the slow drift and the fast modulation, each by its own amount; 平坦化 scales both.
+        const slow = Number.isFinite(this.f0slow[k]) ? this.f0slow[k] : f0;
+        const kept = params.wobble.keepDrift * (slow - target) + params.wobble.keepModulation * (f0 - slow);
+        correction = target + (1 - params.flatten) * kept - f0;
       }
-      const offset = shift + wobble - flattened;
+      // The correction glides in over the retune time (Auto-Tune's Retune Speed); 0 = at once.
+      const tau = params.tune.retuneSec;
+      if (tau > 0) {
+        const a = 1 - Math.exp(-(v.lastStep / this.sampleRate) / tau);
+        v.retuneCorr += (correction - v.retuneCorr) * a;
+        correction = v.retuneCorr;
+      } else v.retuneCorr = correction;
+      const offset = shift + wobble + correction;
       spacing = period * 2 ** (-offset / 12);
       alpha = this.formantAlpha(shift);
       gain = Math.sqrt((spacing * alpha) / period);
@@ -615,6 +636,7 @@ export class Engine {
       // so the noise's colour follows the note while the length stays: a 音MAD-style "s" that goes up.
       alpha = params.unvoicedFollow ? 2 ** (shift / 12) : 1;
       spacing = period / alpha;
+      gain = params.unvoicedGainDb <= -60 ? 0 : 10 ** (params.unvoicedGainDb / 20);
       // Repeated noise grains sound metallic (and read as a pitch); alternating their direction hides it.
       // That happens in the sustain, and wherever a slowed-down part reuses its grains.
       if (v.phase === Phase.Sustain || this.speedAt(v.srcTime) < 1) {
@@ -641,6 +663,7 @@ export class Engine {
 
     const step = Math.max(1, spacing);
     v.nextCenter += step;
+    v.lastStep = step;
     v.lastLeft = grain.left;
     v.driftCountdown -= step / this.sampleRate;
     // The read position moves with real time (or faster/slower when resampling), at the part's own speed, past anything cut out.
@@ -695,8 +718,8 @@ export class Engine {
   private formantAlpha(shift: number): number {
     const params = this.params!;
     let semitones = params.formantSemitones;
-    if (params.formantFollow && Math.abs(shift) > FORMANT_FOLLOW_FROM) {
-      semitones += Math.sign(shift) * (Math.abs(shift) - FORMANT_FOLLOW_FROM) * FORMANT_FOLLOW_POWER;
+    if (params.formantFollow > 0 && Math.abs(shift) > FORMANT_FOLLOW_FROM) {
+      semitones += Math.sign(shift) * (Math.abs(shift) - FORMANT_FOLLOW_FROM) * FORMANT_FOLLOW_POWER * 2 * params.formantFollow;
     }
     return 2 ** (semitones / 12);
   }

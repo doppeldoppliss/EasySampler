@@ -356,11 +356,11 @@ describe("音階に合わせる (tune mode \"scale\")", () => {
     const root = analysis.root!.midi;
     const played = Math.round(root);
     // E major: the material's D4 −6¢ (61.94) sits nearest C#4 (61).
-    const out = play(setup(material, { tune: { mode: "scale", scale: "major", key: 4 } }).engine, played, 1.2, 0.1);
+    const out = play(setup(material, { tune: { ...DEFAULT_PARAMS.tune, mode: "scale", scale: "major", key: 4 } }).engine, played, 1.2, 0.1);
     const pitch = rootPitch(analyzePitch(out.slice(Math.round(0.3 * SR), Math.round(1.1 * SR)), SR))!;
     expect(Math.abs(pitch.midi - 61)).toBeLessThan(0.2);
     // Chromatic: on the nearest semitone, D4.
-    const chroma = play(setup(material, { tune: { mode: "scale", scale: "chromatic", key: 0 } }).engine, played, 1.2, 0.1);
+    const chroma = play(setup(material, { tune: { ...DEFAULT_PARAMS.tune, mode: "scale", scale: "chromatic", key: 0 } }).engine, played, 1.2, 0.1);
     const p2 = rootPitch(analyzePitch(chroma.slice(Math.round(0.3 * SR), Math.round(1.1 * SR)), SR))!;
     expect(Math.abs(p2.midi - 62)).toBeLessThan(0.2);
   });
@@ -409,5 +409,71 @@ describe("levelEven (持続部の音量を揃える)", () => {
     const even = unevenness(1);
     expect(even).toBeLessThan(raw * 0.6);
     expect(even).toBeLessThan(0.15);
+  });
+});
+
+describe("Melodyne-style controls", () => {
+  function vibratoMaterial(): Float32Array {
+    return synthVoice({ sampleRate: SR, durationSec: 1.2, pitch: (t) => 62 + 0.4 * Math.sin(2 * Math.PI * 5.5 * t) + 0.3 * Math.sin(2 * Math.PI * 0.4 * t) });
+  }
+  const measure = (out: Float32Array, from: number, to: number) => rootPitch(analyzePitch(out.slice(Math.round(from * SR), Math.round(to * SR)), SR))!;
+
+  it("keepModulation 0 removes the vibrato while keepDrift keeps the slow wander (flatten 0)", () => {
+    const material = vibratoMaterial();
+    const both = measure(play(setup(material, { flatten: 0, sustainMode: "none" }).engine, 62, 1, 0.1), 0.2, 1.0);
+    const noMod = measure(play(setup(material, { flatten: 0, sustainMode: "none", wobble: { ...DEFAULT_PARAMS.wobble, keepModulation: 0 } }).engine, 62, 1, 0.1), 0.2, 1.0);
+    expect(noMod.spread).toBeLessThan(both.spread * 0.5);
+  });
+
+  it("retuneSec makes the correction glide in instead of snapping", () => {
+    // A step from D4 to F4 half way; flattened to D4 with and without a 0.2 s retune.
+    const material = synthVoice({ sampleRate: SR, durationSec: 1, pitch: (t) => (t < 0.5 ? 62 : 65) });
+    const analysis = analyzeMaterial([material], SR);
+    const run = (retuneSec: number) => {
+      const engine = new Engine(SR);
+      engine.setSource(prepareSource([material], analysis, SR));
+      engine.setInstrument({ ...analysis.markers, rangeStart: 0, rangeEnd: 1, attack: 0.05, sustainStart: 0.1, sustainEnd: 0.9, tailStart: 0.9 }, { ...DEFAULT_PARAMS, root: 62, flatten: 1, sustainMode: "none", tune: { ...DEFAULT_PARAMS.tune, retuneSec } });
+      return play(engine, 62, 1, 0.1);
+    };
+    const snap = measure(run(0), 0.55, 0.65).midi;
+    const glide = measure(run(0.2), 0.55, 0.65).midi;
+    expect(Math.abs(snap - 62)).toBeLessThan(0.3);
+    expect(glide - 62).toBeGreaterThan(0.8); // still on its way down from F4
+    expect(measure(run(0.2), 0.9, 1.0).midi - 62).toBeLessThan(0.4); // and arrived by the end
+  });
+
+  it("unvoicedGainDb −60 silences the hiss; formantFollow is a continuous amount", () => {
+    const material = demoSyllable(SR);
+    const base = { sustainEnabled: false, tail: { enabled: false, limit: "unlimited" as const } };
+    const loud = play(setup(material, base).engine, 62, 0.3, 0.1);
+    const muted = play(setup(material, { ...base, unvoicedGainDb: -60 }).engine, 62, 0.3, 0.1);
+    expect(rms(muted, 0, Math.round(0.06 * SR))).toBeLessThan(rms(loud, 0, Math.round(0.06 * SR)) * 0.05);
+    // Spectral centroid of the sustain (a plain DFT), played 19 semitones up: the formants follow by 0 / 4.8 / 9.6 semitones.
+    const centroidOf = (out: Float32Array) => {
+      const from = Math.round(0.3 * SR);
+      const n = Math.min(out.length - from, Math.round(0.4 * SR));
+      let num = 0;
+      let den = 0;
+      // (Stride 2 keeps the DFT honest up to 11 kHz; the bins stop at 5 kHz.)
+      for (let b = 1; b < 100; b++) {
+        const hz = b * 50;
+        let re = 0;
+        let im = 0;
+        for (let i = 0; i < n; i += 2) {
+          const ph = (2 * Math.PI * hz * i) / SR;
+          re += out[from + i] * Math.cos(ph);
+          im -= out[from + i] * Math.sin(ph);
+        }
+        const p = re * re + im * im;
+        num += hz * p;
+        den += p;
+      }
+      return num / den;
+    };
+    const keep = centroidOf(play(setup(material, { formantFollow: 0 }).engine, 62 + 19, 1, 0.1));
+    const half = centroidOf(play(setup(material, { formantFollow: 0.5 }).engine, 62 + 19, 1, 0.1));
+    const full = centroidOf(play(setup(material, { formantFollow: 1 }).engine, 62 + 19, 1, 0.1));
+    expect(half).toBeGreaterThan(keep * 1.05);
+    expect(full).toBeGreaterThan(half * 1.05);
   });
 });

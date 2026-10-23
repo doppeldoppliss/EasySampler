@@ -46,7 +46,16 @@ export interface InstrumentParams {
    * or the nearest note of a scale, frame by frame (a clip with several notes
    * keeps them; with flatten = 1 and no wobble it is VocalShifter's ケロケロ).
    */
-  tune: { mode: "flatten" | "scale"; scale: ScaleId; key: number };
+  tune: {
+    mode: "flatten" | "scale";
+    scale: ScaleId;
+    key: number;
+    /**
+     * How fast the pitch is pulled toward its target, as a time constant in seconds
+     * (Auto-Tune's Retune Speed): 0 = at once (ケロケロ), ~0.03 = natural, long = only slow drift goes.
+     */
+    retuneSec: number;
+  };
   /**
    * Unvoiced grains (no pitch: consonants, breath, noise) are normally laid down
    * as recorded whatever the note. On, they are read faster / slower with the
@@ -62,8 +71,10 @@ export interface InstrumentParams {
   levelEven: number;
   /** Formant shift in semitones (0 = keep the voice's character). */
   formantSemitones: number;
-  /** Let the formants follow a little on shifts beyond ±7 semitones. */
-  formantFollow: boolean;
+  /** How much the formants follow the shift beyond ±7 semitones: 0 = keep the voice's character, 1 = chipmunk / giant. */
+  formantFollow: number;
+  /** The unvoiced part's level (consonants, breath, noise), in dB; −60 = gone (Melodyne's sibilant balance). */
+  unvoicedGainDb: number;
   /** Whether the sustain plays at all; off: the head goes straight on to the tail (or the note ends). */
   sustainEnabled: boolean;
   sustainMode: SustainMode;
@@ -89,6 +100,13 @@ export interface InstrumentParams {
     tremoloDepth: number;
     /** The material's own pitch wobble is averaged over this long before use (0 = as detected): VocalShifter's 平滑化. */
     smoothSec: number;
+    /**
+     * How much of the material's own slow wander (drift, below ~5 Hz) and fast movement (vibrato,
+     * modulation) is kept, −1 … 1 (negative inverts): Melodyne's Pitch Drift and Pitch Modulation tools.
+     * 平坦化 scales what is left of both.
+     */
+    keepDrift: number;
+    keepModulation: number;
     /** Slow wander (cents). */
     driftCents: number;
     /** Tiny period/level irregularity, kept even when fully flattened. */
@@ -158,17 +176,18 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   rootMode: "auto",
   pitchMode: "preserve-length",
   flatten: 1,
-  tune: { mode: "flatten", scale: "chromatic", key: 0 },
+  tune: { mode: "flatten", scale: "chromatic", key: 0, retuneSec: 0 },
   unvoicedFollow: false,
   levelEven: 1,
   formantSemitones: 0,
-  formantFollow: true,
+  formantFollow: 0.5,
+  unvoicedGainDb: 0,
   sustainEnabled: true,
   sustainMode: "pool",
   wavetableCycles: 1,
   stretch: { head: 1, sustain: 1, tail: 1 },
   tail: { enabled: true, limit: "unlimited" },
-  wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, vibratoAttackSec: 0.15, vibratoReleaseSec: 0, vibratoPhase: 0, tremoloDepth: 0, driftCents: 0, micro: true, smoothSec: 0 },
+  wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, vibratoAttackSec: 0.15, vibratoReleaseSec: 0, vibratoPhase: 0, tremoloDepth: 0, driftCents: 0, micro: true, smoothSec: 0, keepDrift: 1, keepModulation: 1 },
   amp: { attack: 0.005, decay: 0.1, sustain: 1, release: 0.02, velocitySens: 0.5, fadeOut: 0 },
   maxVoices: 24,
   fx: DEFAULT_FX,

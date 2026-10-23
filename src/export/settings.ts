@@ -137,7 +137,9 @@ function sanitizeParams(raw: unknown): InstrumentParams {
     unvoicedFollow: typeof raw.unvoicedFollow === "boolean" ? raw.unvoicedFollow : d.unvoicedFollow,
     levelEven: clamp(num(raw.levelEven, d.levelEven), 0, 1),
     formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
-    formantFollow: typeof raw.formantFollow === "boolean" ? raw.formantFollow : d.formantFollow,
+    // (Older files stored on / off.)
+    formantFollow: typeof raw.formantFollow === "boolean" ? (raw.formantFollow ? 0.5 : 0) : clamp(num(raw.formantFollow, d.formantFollow), 0, 1),
+    unvoicedGainDb: clamp(num(raw.unvoicedGainDb, d.unvoicedGainDb), -60, 12),
     sustainEnabled: typeof raw.sustainEnabled === "boolean" ? raw.sustainEnabled : d.sustainEnabled,
     sustainMode: raw.sustainMode === "loop" || raw.sustainMode === "none" || raw.sustainMode === "wavetable" || raw.sustainMode === "stretch" ? raw.sustainMode : "pool",
     wavetableCycles: clamp(Math.round(num(raw.wavetableCycles, d.wavetableCycles)), 1, 16),
@@ -159,6 +161,8 @@ function sanitizeParams(raw: unknown): InstrumentParams {
       vibratoPhase: clamp(num(wobble.vibratoPhase, d.wobble.vibratoPhase), 0, 1),
       tremoloDepth: clamp(num(wobble.tremoloDepth, d.wobble.tremoloDepth), 0, 1),
       smoothSec: clamp(num(wobble.smoothSec, d.wobble.smoothSec), 0, 1),
+      keepDrift: clamp(num(wobble.keepDrift, d.wobble.keepDrift), -1, 1),
+      keepModulation: clamp(num(wobble.keepModulation, d.wobble.keepModulation), -1, 1),
       driftCents: clamp(num(wobble.driftCents, d.wobble.driftCents), 0, 100),
       micro: typeof wobble.micro === "boolean" ? wobble.micro : d.wobble.micro,
     },
@@ -233,6 +237,7 @@ function sanitizeTune(raw: unknown, d: InstrumentParams["tune"]): InstrumentPara
     mode: r.mode === "scale" ? "scale" : "flatten",
     scale: scales.includes(r.scale as never) ? (r.scale as InstrumentParams["tune"]["scale"]) : d.scale,
     key: clamp(Math.round(num(r.key, d.key)), 0, 11),
+    retuneSec: clamp(num(r.retuneSec, d.retuneSec), 0, 1),
   };
 }
 

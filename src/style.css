@@ -259,6 +259,27 @@ input:focus-visible {
   cursor: default;
 }
 
+/* Picking a stretch of a long clip before analysis. */
+.picker-title {
+  margin: 0 0 8px;
+}
+
+.picker-canvas {
+  display: block;
+  width: 100%;
+  height: 120px;
+  border-radius: 8px;
+  background: var(--bg);
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.picker-panel .row {
+  margin-top: 10px;
+}
+
 /* Folded groups inside a panel (vibrato, speeds). */
 details.sub {
   margin: 8px 0 0;

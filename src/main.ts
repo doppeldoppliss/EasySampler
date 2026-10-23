@@ -37,8 +37,12 @@ import { demoSyllable } from "./testsignals/synthVoice";
 import { el } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
+import { clock, RangePicker } from "./ui/rangePicker";
 
+/** The most material one analysis takes; a longer clip goes through the range picker first. */
 const MAX_MATERIAL_SEC = 60;
+/** Longer files are cut here when decoded (memory: 10 minutes of stereo 48 kHz is about 230 MB). */
+const MAX_DECODE_SEC = 600;
 const DEMO_RATE = 44100;
 const GUIDE_KEY = "maddaw.guide.v2";
 const SMALL_SCREEN = window.matchMedia("(max-width: 600px)").matches;
@@ -611,15 +615,82 @@ const detailsPanel = el("details", { className: "panel params" }, [
   ]),
 ]);
 
+// ---------------------------------------------------------------- long clips: pick a stretch first
+
+/** The long file last opened (kept as a File, not as audio, so another stretch can be picked later). */
+let longClip: { file: File; truncated: boolean } | null = null;
+/** The decoded long clip while the picker is open; dropped once a stretch is taken. */
+let pickerClip: { channels: Float32Array[]; sampleRate: number } | null = null;
+
+const picker = new RangePicker();
+const pickerTitle = el("p", { className: "picker-title" });
+const pickerRange = el("span", { className: "num" });
+const pickerListen = button("▶ 選択範囲を聴く", "", () => {
+  if (!pickerClip) return;
+  const r = picker.value;
+  const rate = pickerClip.sampleRate;
+  client.playBuffer(pickerClip.channels.map((c) => c.slice(Math.round(r.from * rate), Math.round(r.to * rate))), rate);
+});
+const pickerUse = button("この範囲を使う", "primary", () => void usePickedRange());
+const pickerPanel = el("section", { className: "panel picker-panel", hidden: true }, [
+  pickerTitle,
+  picker.element,
+  el("div", { className: "row" }, [el("span", { className: "fine" }, ["使う範囲: ", pickerRange]), pickerListen, pickerUse]),
+  el("p", { className: "fine", textContent: "ハンドルをドラッグして範囲を決めます。帯の中をドラッグすると範囲ごと動き、外をタップするとそこへ移ります。一度に使えるのは 60 秒までですが、あとから「別の範囲を選ぶ」で何度でも選び直せます。" }),
+]);
+picker.onChange = (r) => (pickerRange.textContent = `${clock(r.from)} – ${clock(r.to)}(${(r.to - r.from).toFixed(1)} 秒)`);
+const rePickButton = button("別の範囲を選ぶ", "", () => void rePick());
+rePickButton.hidden = true;
+
+function showPicker(name: string, channels: Float32Array[], sampleRate: number): void {
+  pickerClip = { channels, sampleRate };
+  const total = channels[0].length / sampleRate;
+  pickerTitle.replaceChildren(el("strong", { textContent: `「${name}」は ${clock(total)} あります。` }), ` 使う範囲(最大 ${MAX_MATERIAL_SEC} 秒)を選んでください。`);
+  picker.setClip(mixToMono(channels), sampleRate, MAX_MATERIAL_SEC);
+  picker.onChange(picker.value, true);
+  emptyState.hidden = true;
+  workspace.hidden = true;
+  pickerPanel.hidden = false;
+  status.textContent = longClip?.truncated ? `長いので最初の ${MAX_DECODE_SEC / 60} 分だけを読み込みました。` : "";
+}
+
+async function usePickedRange(): Promise<void> {
+  if (!pickerClip || !longClip) return;
+  const r = picker.value;
+  const rate = pickerClip.sampleRate;
+  const channels = pickerClip.channels.map((c) => c.slice(Math.round(r.from * rate), Math.round(r.to * rate)));
+  pickerClip = null; // the whole clip is not needed any more
+  pickerPanel.hidden = true;
+  const base = longClip.file.name.replace(/\.[^.]+$/, "");
+  await load(`${base} (${clock(r.from)}-${clock(r.to)})`, channels, rate);
+  rePickButton.hidden = false;
+}
+
+/** Decodes the long file again and shows the picker, with the stretch in use selected. */
+async function rePick(): Promise<void> {
+  if (!longClip) return;
+  status.textContent = `「${longClip.file.name}」を読み込んでいます…`;
+  try {
+    const { channels, sampleRate } = await decode(longClip.file);
+    const current = material?.name.match(/\((\d+):(\d+(?:\.\d)?)-(\d+):(\d+(?:\.\d)?)\)$/);
+    showPicker(longClip.file.name, channels, sampleRate);
+    if (current) picker.setRange({ from: Number(current[1]) * 60 + Number(current[2]), to: Number(current[3]) * 60 + Number(current[4]) });
+    picker.onChange(picker.value, true);
+  } catch (error) {
+    status.textContent = `読み込めませんでした: ${error instanceof Error ? error.message : error}`;
+  }
+}
+
 // ---------------------------------------------------------------- page
 
 const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, exportPanel, detailsPanel]);
 
 document.getElementById("app")!.append(
-  el("header", { className: "top" }, [el("h1", { textContent: "MADDAW" }), el("div", { className: "row" }, [openButton, demoButton])]),
+  el("header", { className: "top" }, [el("h1", { textContent: "MADDAW" }), el("div", { className: "row" }, [rePickButton, openButton, demoButton])]),
   fileInput,
   status,
   emptyState,
+  pickerPanel,
   workspace,
 );
 
@@ -976,14 +1047,14 @@ function applySettings(file: SettingsFile): void {
 
 // ---------------------------------------------------------------- loading
 
-async function decode(file: File): Promise<{ channels: Float32Array[]; sampleRate: number }> {
+async function decode(file: File): Promise<{ channels: Float32Array[]; sampleRate: number; truncated: boolean }> {
   const bytes = await file.arrayBuffer();
   // An offline context decodes without needing a user gesture.
   const context = new OfflineAudioContext(1, 1, 44100);
   const buffer = await context.decodeAudioData(bytes);
-  const frames = Math.min(buffer.length, Math.round(MAX_MATERIAL_SEC * buffer.sampleRate));
+  const frames = Math.min(buffer.length, Math.round(MAX_DECODE_SEC * buffer.sampleRate));
   const channels = [...Array(Math.min(2, buffer.numberOfChannels)).keys()].map((c) => buffer.getChannelData(c).slice(0, frames));
-  return { channels, sampleRate: buffer.sampleRate };
+  return { channels, sampleRate: buffer.sampleRate, truncated: frames < buffer.length };
 }
 
 async function load(name: string, channels: Float32Array[], sampleRate: number): Promise<void> {
@@ -1003,8 +1074,6 @@ async function load(name: string, channels: Float32Array[], sampleRate: number):
     let text =
       `「${name}」 ${seconds} 秒 — 解析 ${Math.round(elapsedMs)} ms。` +
       (root ? ` 音程 ${pitchLabel(root.midi)}(信頼度 ${Math.round(root.confidence * 100)}%)。` : " 音程が見つからなかったので、ワンショット(ドラム・効果音)として扱います。");
-    if (channels[0].length >= MAX_MATERIAL_SEC * sampleRate) text += ` 最初の ${MAX_MATERIAL_SEC} 秒だけを使っています。`;
-
     const stored = safeStorage(settingsKey(name, channels[0].length, sampleRate));
     let restored = false;
     if (stored) {
@@ -1029,6 +1098,10 @@ async function load(name: string, channels: Float32Array[], sampleRate: number):
 function loadDemo(): void {
   Object.assign(credit, { title: "MADDAW デモ素材(合成音声「さー」)", url: "", timecode: "", memo: "" });
   setCreditInputs();
+  longClip = null;
+  pickerClip = null;
+  rePickButton.hidden = true;
+  pickerPanel.hidden = true;
   void load("デモ素材", [demoSyllable(DEMO_RATE)], DEMO_RATE);
 }
 
@@ -1048,7 +1121,16 @@ async function openFile(file: File): Promise<void> {
     return;
   }
   try {
-    const { channels, sampleRate } = await decode(file);
+    status.textContent = `「${file.name}」を読み込んでいます…`;
+    const { channels, sampleRate, truncated } = await decode(file);
+    if (channels[0].length / sampleRate > MAX_MATERIAL_SEC) {
+      longClip = { file, truncated };
+      showPicker(file.name, channels, sampleRate);
+      return;
+    }
+    longClip = null;
+    rePickButton.hidden = true;
+    pickerPanel.hidden = true;
     await load(file.name, channels, sampleRate);
   } catch (error) {
     status.textContent = `読み込めませんでした(対応していない形式かもしれません): ${error instanceof Error ? error.message : error}`;

@@ -912,3 +912,58 @@ details.fx-panel[open] > summary::before {
     display: none;
   }
 }
+
+/* Usability round: nothing wider than the phone; the bands' legend; the canvas takes focus quietly. */
+.editor-canvas:focus {
+  outline: none;
+}
+
+.length-row {
+  flex-wrap: wrap;
+}
+
+.length-row input[type="number"] {
+  width: 4.5em;
+  min-width: 0;
+}
+
+.params-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+}
+
+fieldset,
+.panel select,
+.row,
+.control {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.root-help {
+  flex-basis: 100%;
+}
+
+.band-legend {
+  margin: 4px 0 0;
+}
+
+.band-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+.band-dot.head {
+  background: var(--band-head);
+}
+
+.band-dot.sustain {
+  background: var(--band-sustain);
+}
+
+.band-dot.tail {
+  background: var(--band-tail);
+}

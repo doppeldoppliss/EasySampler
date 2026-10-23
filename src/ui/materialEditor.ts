@@ -135,6 +135,7 @@ export class MaterialEditor {
 
   constructor() {
     this.canvas = el("canvas", { className: "editor-canvas", ariaLabel: "素材の波形とピッチカーブ" });
+    this.canvas.tabIndex = -1;
     this.element = el("div", { className: "editor" }, [this.canvas]);
     this.canvas.addEventListener("pointerdown", (event) => this.down(event));
     this.canvas.addEventListener("pointermove", (event) => this.move(event));
@@ -309,12 +310,14 @@ export class MaterialEditor {
   private handleAt(event: PointerEvent): Handle | null {
     if (!this.markers) return null;
     const box = this.canvas.getBoundingClientRect();
-    const reach = event.pointerType === "mouse" ? HANDLE_REACH_MOUSE : HANDLE_REACH_TOUCH;
     const x = event.clientX - box.left;
     const y = event.clientY - box.top;
     if (y > box.height - LANE_HEIGHT) return null; // the "after" lane has nothing to grab
-    // A finger grabs handles only in the marker strip (the plot is for selecting); a mouse anywhere along the line.
-    if (event.pointerType !== "mouse" && y < box.height - LANE_HEIGHT - STRIP_HEIGHT) return null;
+    const inPlot = y < box.height - LANE_HEIGHT - STRIP_HEIGHT;
+    // A finger grabs handles only in the marker strip (the plot is for selecting); a mouse grabs a line in the
+    // plot only right on it (a drag that starts a few px beside a marker is a selection), and in the strip with reach.
+    if (event.pointerType !== "mouse" && inPlot) return null;
+    const reach = event.pointerType === "mouse" ? (inPlot ? 3 : HANDLE_REACH_MOUSE) : HANDLE_REACH_TOUCH;
     const inStripLower = y > box.height - LANE_HEIGHT - STRIP_HEIGHT / 2;
     let best: Handle | null = null;
     let bestDistance = reach;
@@ -341,7 +344,8 @@ export class MaterialEditor {
     const sec = grip === "fadeIn" ? level.attackSec : layout.totalSec - level.fadeOutSec;
     const x = (this.laneMap.x + (sec / layout.totalSec) * this.laneMap.width) / dpr;
     const width = this.canvas.clientWidth;
-    return { sec, x: Math.max(8, Math.min(width - 8, x)) };
+    const laneEnd = (this.laneMap.x + this.laneMap.width) / dpr;
+    return { sec, x: Math.max(Math.min(8, laneEnd), Math.min(width - 8, laneEnd, x)) };
   }
 
   /** Output seconds under a pointer's x in the lane (clamped to the output). */
@@ -416,6 +420,7 @@ export class MaterialEditor {
   private down(event: PointerEvent): void {
     if (event.button !== 0 && event.pointerType === "mouse") return;
     if (!this.markers || !this.material) return;
+    this.canvas.focus({ preventScroll: true });
     this.pointers.set(event.pointerId, event.clientX);
     if (this.pointers.size === 2) {
       // A second finger: whatever the first was doing becomes a pinch / pan.
@@ -668,8 +673,8 @@ export class MaterialEditor {
       minPitch = Math.min(minPitch, v);
       maxPitch = Math.max(maxPitch, v);
     }
-    let lo = Math.floor(minPitch) - 1;
-    let hi = Math.ceil(maxPitch) + 1;
+    let lo = Math.floor(minPitch) - 2;
+    let hi = Math.ceil(maxPitch) + 2;
     if (hi - lo < 8) {
       const centre = (hi + lo) / 2;
       lo = Math.floor(centre - 4);
@@ -981,6 +986,10 @@ export class MaterialEditor {
         }
       }
     }
+
+    g.font = `${9 * dpr}px system-ui, sans-serif`;
+    g.fillStyle = cssVar("--muted");
+    g.fillText("元の音", 4 * dpr, 9 * dpr);
 
     // The playhead.
     if (this.playhead) {

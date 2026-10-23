@@ -113,6 +113,12 @@ songPanel.onPlayingChange = (playing) => {
 };
 songPanel.onUseBpm = (bpm) => updateExport((s) => (s.bpm = Math.max(20, Math.min(400, Math.round(bpm * 10) / 10))));
 
+// A control that was just changed gives the focus back, so Space / Ctrl+Z keep working after a dropdown.
+document.addEventListener("change", (event) => {
+  const t = event.target;
+  if (t instanceof HTMLSelectElement || (t instanceof HTMLInputElement && ["range", "checkbox", "radio"].includes(t.type))) t.blur();
+});
+
 // ---------------------------------------------------------------- audio start
 
 /** Every first gesture (tap, key) may be the one allowed to start the sound. */
@@ -228,9 +234,9 @@ const emptyState = el("section", { className: "empty" }, [
 
 const guide = el("aside", { className: "steps", hidden: safeStorage(GUIDE_KEY) === "seen" }, [
   el("ol", {}, [
-    el("li", {}, [el("strong", { textContent: "音名を選ぶ" }), " — 判定された音程に近い音名が入っています"]),
-    el("li", {}, [el("strong", { textContent: "長さを決める" }), " — 拍数と BPM、または秒。鍵盤で試し弾きできます"]),
-    el("li", {}, [el("strong", { textContent: "共有 / 保存" }), " — できた WAV を DAW のサンプラーに読み込みます"]),
+    el("li", {}, [el("strong", { textContent: "聴いて確かめる" }), " — ▶ で鳴らし、判定した高さと帯(頭部・持続区間・語尾)がずれていれば直します"]),
+    el("li", {}, [el("strong", { textContent: "音名と長さを決める" }), " — 鍵盤は DAW で弾いたときの音の確認。●が書き出す音名です"]),
+    el("li", {}, [el("strong", { textContent: "共有 / 保存" }), " — 1 音の WAV ができます。DAW のサンプラーに読み込んで曲にします"]),
   ]),
   button("閉じる", "small", () => {
     guide.hidden = true;
@@ -262,7 +268,7 @@ const cutBar = el("div", { className: "cut-bar" }, [
 
 const rootLabel = el("strong", { className: "root-label num", textContent: "—" });
 const rootSource = el("span", { className: "fine" });
-const detectedButton = button("判定に戻す", "small", () => {
+const detectedButton = button("自動判定の値に戻す", "small", () => {
   const detected = cuts[current]?.detectedRoot;
   if (detected == null) return;
   update((p) => {
@@ -357,7 +363,7 @@ const undoCorrectionButton = button("最後の手直しを取り消す", "small"
 const clearCorrectionsButton = button("すべて取り消す", "small", () => void setCorrections([]));
 const fixBar = el("div", { className: "fix-bar" }, [
   el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, clearSelectionButton, fixStatus]),
-  el("div", { className: "row tight fix-pitch" }, [el("span", { className: "fine", textContent: "判定を直す:" }), ...fixButtons, ...shiftButtons, setNoteButton]),
+  el("div", { className: "row tight fix-pitch" }, [el("span", { className: "fine", textContent: "判定の手直し:" }), ...fixButtons, ...shiftButtons, setNoteButton]),
   el("div", { className: "row tight" }, [removedLabel, undoRemoveButton, clearRemovedButton]),
   el("div", { className: "row tight" }, [correctionsLabel, undoCorrectionButton, clearCorrectionsButton]),
 ]);
@@ -454,9 +460,10 @@ const materialPanel = el("section", { className: "panel" }, [
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [
-      el("span", { className: "fine", textContent: "判定した音程" }),
+      el("span", { className: "fine", textContent: "判定した高さ" }),
       rootLabel,
       rootSource,
+      el("span", { className: "fine root-help", textContent: "素材はこの高さで鳴っているとみなし、音名との差だけ移調します(自動のときは持続区間に追従)。" }),
       el("span", { className: "row tight root-nudge" }, [rootButton("基準 −1半音", -1), rootButton("基準 −5¢", -0.05), rootButton("基準 +5¢", 0.05), rootButton("基準 +1半音", 1), detectedButton]),
     ]),
     el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, el("span", { className: "spacer" }), undoButton, redoButton, zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
@@ -464,12 +471,18 @@ const materialPanel = el("section", { className: "panel" }, [
   el("details", { className: "fine hint" }, [
     el("summary", { textContent: "使い方: 両端のハンドルで範囲、帯の端でマーカー、波形を横にドラッグで選択。波形や目盛りを押すと再生位置、2 回押すと再生。" }),
     el("p", { textContent: "波形か目盛り: 1 回押すと再生位置を置き、2 回押すとそこから元の音が鳴ります。引くと位置をなぞれます(再生中は飛びます)。下の「書き出し後」レーンも同じで、こちらは書き出し後が鳴ります。▶ / ■(スペースキー)で再生と停止、■ は再生を始めた位置に戻ります。Shift + スペースは元の音。" }),
-    el("p", { textContent: "判定の点線は「判定 …」の札をつかんで上下にドラッグ(半音ずつ。Alt でセント単位、ダブルクリックで最寄りの半音)。拡大は Ctrl + ホイールかピンチ、横スクロールは Shift + ホイールか 2 本指。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。フェードのつまみは「エフェクト」の「フェード」を開いている間、レーンに出ます。" }),
+    el("p", { textContent: "判定の点線は「判定 …」の札をつかんで上下にドラッグ(半音ずつ。Alt でセント単位、ダブルクリックで最寄りの半音。動かすと手動になり、「自動判定の値に戻す」で戻ります)。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。" }),
+    el("p", { textContent: "ショートカット: スペース = 再生 / 停止、Shift + スペース = 元の音、Ctrl + Z / Y = 元に戻す / やり直す、M = PC 鍵盤、Z / X = オクターブ、C / V = 強さ、Ctrl + ホイール = 拡大、Shift + ホイール = 横移動。" }),
   ]),
   editor.element,
   el("p", { className: "legend fine" }, [
     el("span", { className: "swatch original" }), "元のピッチ  ",
     el("span", { className: "swatch edited" }), "整えたあと(選んだ音名で鳴らしたとき)",
+  ]),
+  el("p", { className: "fine band-legend" }, [
+    el("span", { className: "band-dot head" }), "頭部 = 1 回だけ鳴る出だし　",
+    el("span", { className: "band-dot sustain" }), "持続区間 = 押している間くり返す部分　",
+    el("span", { className: "band-dot tail" }), "語尾 = 離したあとに鳴る終わり",
   ]),
   fixBar,
 ]);
@@ -483,7 +496,7 @@ function noteStep(text: string, delta: number): HTMLButtonElement {
   b.ariaLabel = delta > 0 ? "1半音上げる" : "1半音下げる";
   return b;
 }
-const noteAutoButton = button("判定に合わせる", "small", () => setNote(note, "auto"));
+const noteAutoButton = button("音名を判定と同じに", "small", () => setNote(note, "auto"));
 const noteShift = el("span", { className: "fine num" });
 
 function setNote(n: number, mode: "auto" | "manual"): void {
@@ -538,13 +551,13 @@ const lengthBlock = el("div", { className: "length" }, [
 
 // Speeds (VocalShifter's TIME, as one factor per part) and the vibrato (VIB), in the open where they are reached for.
 const stretchFormat = (v: number) => `×${v.toFixed(2)}`;
-const sustainStretchRow = range("持続区間の速度(ワンショットのとき)", 0.25, 8, 0.05, () => params.stretch.sustain, (p, v) => (p.stretch.sustain = v), stretchFormat);
+const sustainStretchRow = range("持続区間 ×(ワンショットのとき)", 0.25, 8, 0.05, () => params.stretch.sustain, (p, v) => (p.stretch.sustain = v), stretchFormat);
 const timePanel = el("details", { className: "sub" }, [
-  el("summary", { textContent: "速度(頭部は等速のまま、など)" }),
+  el("summary", { textContent: "各部分の長さ(倍率。×2 = 2 倍ゆっくり)" }),
   el("p", { className: "fine", textContent: "各部分の長さの倍率。1.00 が録音のまま。持続区間は普段「音の長さまで伸ばす」ので、倍率が効くのはワンショット(伸ばさない)のときだけです。" }),
-  range("頭部の速度", 0.25, 4, 0.05, () => params.stretch.head, (p, v) => (p.stretch.head = v), stretchFormat),
+  range("頭部 ×", 0.25, 4, 0.05, () => params.stretch.head, (p, v) => (p.stretch.head = v), stretchFormat),
   sustainStretchRow,
-  range("語尾の速度", 0.25, 4, 0.05, () => params.stretch.tail, (p, v) => (p.stretch.tail = v), stretchFormat),
+  range("語尾 ×", 0.25, 4, 0.05, () => params.stretch.tail, (p, v) => (p.stretch.tail = v), stretchFormat),
 ]);
 // 音階: the key and the scale (shown in "scale" mode).
 const tuneScaleRow = el("div", { className: "row tight" }, [
@@ -573,7 +586,7 @@ function partSwitch(label: string, band: string, get: () => boolean, set: (p: In
   const refresh = () => {
     const on = get();
     b.setAttribute("aria-checked", String(on));
-    b.replaceChildren(el("span", { className: "part-name", textContent: label }), el("span", { className: "part-state", textContent: on ? "ON" : "OFF" }));
+    b.replaceChildren(el("span", { className: "part-name", textContent: label }), el("span", { className: "part-state", textContent: on ? "オン" : "オフ" }));
   };
   b.addEventListener("click", () => {
     update((p) => set(p, !get()), true);
@@ -603,15 +616,30 @@ const partsRow = el("div", { className: "parts-row" }, [
   partSwitch("語尾", "--band-tail", () => params.tail.enabled, (p, on) => (p.tail = { ...p.tail, enabled: on })),
 ]);
 
+/** What the chosen 伸ばし方 does (or that it is unused with the sustain off). */
+const sustainHelp = el("p", { className: "fine help" });
+function refreshSustainHelp(): void {
+  const texts: Record<string, string> = {
+    pool: "持続区間の安定した周期をつなぎ合わせて、押している間いくらでも伸ばします(自然)。",
+    stretch: "持続区間全体を「長さ」に収まるようゆっくり鳴らします(VocalShifter の TIME のように、声の変化が残る)。長さを超えて押すと持続区間の終わりから「自然」で続きます。",
+    loop: "持続区間をそのまま繰り返します。",
+    wavetable: "持続区間の 1〜数周期だけを繰り返します(無機質)。",
+    none: "伸ばしません。持続区間を録音のまま 1 回鳴らします(長さの倍率は効きます)。",
+  };
+  sustainHelp.textContent = params.sustainEnabled ? (texts[params.sustainMode] ?? "") : "持続区間がオフなので、伸ばし方は使われません。";
+}
+
 const tunePanel = el("section", { className: "panel tune" }, [
   el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "音名" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]),
+  el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
+  el("p", { className: "fine help", textContent: "プリセットは出発点です。つまみを動かすと「(カスタム)」になります。伸ばし方・フェード・エフェクトは変えません。" }),
   partsRow,
   partsHelp,
   select(
     "持続区間の伸ばし方",
     [
-      ["pool", "周期プール(自然)"],
-      ["stretch", "引き延ばし(区間全体をゆっくり通して鳴らす)"],
+      ["pool", "自然(周期をつなぎ合わせて伸ばす)"],
+      ["stretch", "引き延ばし(ゆっくり通して鳴らす)"],
       ["loop", "ループ"],
       ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"],
       ["none", "伸ばさない(ワンショット)"],
@@ -619,7 +647,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
     () => params.sustainMode,
     (p, v) => (p.sustainMode = v),
   ),
-  el("p", { className: "fine help", textContent: "引き延ばしは、持続区間を「長さ」に収まるよう遅く再生します(VocalShifter の TIME のように、声の変化を残したまま伸びる)。長さを超えて押し続けると、区間の終わりから周期プールで続きます。" }),
+  sustainHelp,
   range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
   select(
     "語尾の長さ",
@@ -632,13 +660,12 @@ const tunePanel = el("section", { className: "panel tune" }, [
     (p, v) => (p.tail = { enabled: p.tail.enabled, limit: v }),
   ),
   el("p", { className: "fine help", textContent: "拍は「長さ」の BPM で数えます(「曲で試す」の再生中は曲の BPM)。上限に来た語尾は短くフェードして切れます。" }),
-  range("平坦化(抑揚の残し具合)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
+  range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
   select("音程の整え方", [["flatten", "判定した 1 音に寄せる"], ["scale", "音階の最寄りの音に、場所ごとに寄せる(複数の音を残す)"]], () => params.tune.mode, (p, v) => (p.tune.mode = v)),
   tuneScaleRow,
   el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなしでケロケロになります(プリセット「ケロケロ」)。" }),
-  check("音程なし(無声)の部分も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v), true),
+  check("子音や息(音程なし)も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v), true),
   el("p", { className: "fine help", textContent: "子音・息・ノイズなど音程のない部分は、ふつうは移調しても元のまま鳴ります。オンにすると、その部分も音名に応じて細く / 太くなります(長さは変わりません)。音程そのものを付けたいときは、選択して「有声に」。" }),
-  el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
   lengthBlock,
   vibratoPanel,
   timePanel,
@@ -648,7 +675,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
 
 const voiceCount = el("span", { className: "num", textContent: "0" });
 const pcState = el("span", { className: "fine" });
-const pcToggle = button("PCキーボード演奏: オン (M)", "small", () => pcKeys.toggle());
+const pcToggle = button("PC キーボード演奏: オン(M)", "small", () => pcKeys.toggle());
 pcToggle.hidden = SMALL_SCREEN;
 const imeWarning = el("p", { className: "warn", hidden: true, textContent: "日本語入力がオンになっています。鍵盤として弾くには、半角英数に切り替えてください。" });
 
@@ -744,7 +771,7 @@ function fxHead(text: string): HTMLElement {
 const fadeSummary = el("summary");
 const fadeGroup = el("details", { className: "sub fx" }, [
   fadeSummary,
-  el("p", { className: "fine help", textContent: "入りは音の頭から、終わりは素材が尽きる手前(語尾の最後、または頭部だけのとき)と、音を離したあとにかかります。0 でなし。「書き出し後」レーンの水位に出ます。" }),
+  el("p", { className: "fine help", textContent: "入り = 音の頭(アタック)。終わり = 素材が尽きる手前と、音を離したあと。0 でなし。このグループを開いている間は「書き出し後」レーンの塗りの端につまみが出て、引いても変えられます。" }),
   range("入りのフェード", 0, 2, 0.005, () => params.amp.attack, (p, v) => (p.amp.attack = Math.max(0.001, v)), ms, true),
   range("終わりのフェード", 0, 3, 0.01, () => params.amp.fadeOut, (p, v) => (p.amp.fadeOut = v), ms, true),
 ]);
@@ -864,16 +891,23 @@ const DESTINATIONS: { id: Destination; label: string; help: (n: string, format: 
   },
 ];
 const formatSelect = el("select", { ariaLabel: "形式" }, FORMATS.map((f) => el("option", { value: f.id, textContent: f.label })));
-formatSelect.addEventListener("change", () => updateExport((s) => (s.format = formatSelect.value as ExportFormat)));
+formatSelect.addEventListener("change", () => {
+  formatNotice = "";
+  updateExport((s) => (s.format = formatSelect.value as ExportFormat));
+});
 const formatNote = el("p", { className: "fine help" });
 const destinationSelect = el("select", { ariaLabel: "渡す先" }, DESTINATIONS.map((d) => el("option", { value: d.id, textContent: d.label })));
+/** Set when choosing a destination switched the format, shown once in the destination's help. */
+let formatNotice = "";
 destinationSelect.addEventListener("change", () =>
   updateExport((s) => {
+    const before = s.format;
     s.destination = destinationSelect.value as Destination;
     // The destination says what it can take.
     if (s.destination === "decent") s.format = "multisample";
     else if (s.destination === "garageband" && (s.format === "multisample" || s.format === "wavetable")) s.format = "single";
     else if (s.destination === "vital" && s.format === "multisample") s.format = "wavetable";
+    formatNotice = s.format === before ? "" : `形式を「${FORMATS.find((f) => f.id === s.format)!.label}」に切り替えました。`;
   }),
 );
 const destinationHelp = el("p", { className: "fine help" });
@@ -892,9 +926,10 @@ const batchButton = button("すべての区間をまとめて保存(zip)", "", (
 const exportStatus = el("p", { className: "fine", role: "status" });
 
 const exportPanel = el("section", { className: "panel export" }, [
-  el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "渡す先" }), destinationSelect]),
+  el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "書き出し" })]),
+  el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "読み込む先(DAW / サンプラー)" }), destinationSelect]),
   destinationHelp,
-  el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "形式" }), formatSelect]),
+  el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "ファイルの形式" }), formatSelect]),
   formatNote,
   el("div", { className: "export-actions" }, [listenButton, shareButton, saveButton]),
   el("p", { className: "fine" }, ["ファイル名: ", fileNameLabel]),
@@ -969,9 +1004,9 @@ async function setPitchRange(range: { low: number; high: number } | null): Promi
     rangeStatus.textContent = `判定し直せませんでした: ${error instanceof Error ? error.message : error}`;
   }
 }
-const resetSettingsButton = button("判定し直す(設定を捨てる)", "small", () => {
+const resetSettingsButton = button("設定を捨てて最初から", "small", () => {
   if (!material) return;
-  if (!confirm("区間・マーカー・手直し・書き出し設定をすべて捨てて、解析結果から作り直します。よろしいですか?(元に戻すで戻せます)")) return;
+  if (!confirm("区間・マーカー・手直し・書き出し設定をすべて捨てて、解析結果から作り直します(探索範囲と出典メモは残ります)。よろしいですか?(元に戻すで戻せます)")) return;
   const hadCorrections = material.corrections.length > 0;
   material.corrections = [];
   freshCuts();
@@ -992,7 +1027,7 @@ const detailsPanel = el("details", { className: "panel params" }, [
       el("legend", { textContent: "基準ピッチ(素材そのものの高さ)" }),
       el("div", { className: "row tight" }, [el("span", { className: "control-label", textContent: "判定の探索範囲" }), rangeLowSelect, el("span", { className: "fine", textContent: "〜" }), rangeHighSelect, rangeStatus]),
       el("p", { className: "fine help", textContent: "判定がオクターブや 5 度で外れるときは、素材の実際の高さだけに絞って判定し直すと直ることがあります(初期値 G1〜B5)。" }),
-      el("p", { className: "fine", textContent: "判定が外れているときは、編集画面の「判定した音程」の横のボタンか、点線の「判定 …」の札のドラッグで直します。素材がこの高さで鳴っているものとして、音名との差だけ移調します。" }),
+      el("p", { className: "fine", textContent: "判定が外れているときは、編集画面の「判定した高さ」の横のボタンか、点線の「判定 …」の札のドラッグで直します。" }),
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "鳴らし方" }),
@@ -1453,9 +1488,16 @@ function refreshExport(): void {
   if (!songPanel.playing) client.setTempo(exportSettings.bpm);
   client.setHold(exportLengthSec(exportSettings));
   tuneScaleRow.hidden = params.tune.mode !== "scale";
+  refreshSustainHelp();
   if (noteMode === "auto") note = Math.max(24, Math.min(96, Math.round(params.root)));
   noteSelect.value = String(note);
   noteAutoButton.hidden = noteMode === "auto";
+  // On a phone the two octaves shown follow the note, so its ● is never off the edge.
+  if (SMALL_SCREEN && (note < piano.low || note > piano.high)) {
+    const span = piano.high - piano.low;
+    const low = Math.max(24, Math.min(96 - span, Math.floor(note / 12) * 12 - 12));
+    piano.setRange(low, low + span);
+  }
   const shift = note - params.root;
   noteShift.textContent = `判定から ${shift >= 0 ? "+" : "−"}${Math.abs(shift).toFixed(2)} 半音`;
   noteShift.classList.toggle("warn", Math.abs(shift) > 7);
@@ -1480,7 +1522,7 @@ function refreshExport(): void {
   formatSelect.value = exportSettings.format;
   formatNote.textContent = FORMATS.find((f) => f.id === exportSettings.format)!.note;
   destinationSelect.value = exportSettings.destination;
-  destinationHelp.textContent = DESTINATIONS.find((d) => d.id === exportSettings.destination)!.help(pitchLabel(note), exportSettings.format);
+  destinationHelp.textContent = (formatNotice ? `${formatNotice} ` : "") + DESTINATIONS.find((d) => d.id === exportSettings.destination)!.help(pitchLabel(note), exportSettings.format);
   fileNameLabel.textContent = material ? currentFileName() : "";
   exportStatus.textContent = "";
   built = null;
@@ -1524,8 +1566,9 @@ function currentFileName(): string {
   const cut = cuts[current];
   if (!material || !cut) return "";
   const base = safeBaseName(baseNameFor(cut));
-  if (cut.params.sustainMode === "none" || exportSettings.format === "single") return exportFileName(base, cut.note, exportSettings, cut.params.sustainMode === "none");
-  if (exportSettings.format === "loop") return `${base}_${pitchLabel(cut.note).replace("#", "s")}_loop.wav`;
+  // (The working state, not the cut's copy, which is only synced on save.)
+  if (params.sustainMode === "none" || exportSettings.format === "single") return exportFileName(base, note, exportSettings, params.sustainMode === "none");
+  if (exportSettings.format === "loop") return `${base}_${pitchLabel(note).replace("#", "s")}_loop.wav`;
   if (exportSettings.format === "wavetable") return `${base}_wavetable.wav`;
   return `${base}.zip`;
 }
@@ -1723,7 +1766,7 @@ client.onPreviewEnd = () => {
   playing = null;
   showPlaying();
   cancelAnimationFrame(playheadFrame);
-  cue = cue >= seekLength - 0.02 ? 0 : playStartCue;
+  cue = playStartCue;
   showSeek(cue);
   // Where the next ▶ starts, as a still playhead.
   if (was && cue > 0) editor.setPlayhead(was.kind === "result" ? { kind: "output", sec: cue } : { kind: "display", sec: bufferToDisplay(cue) });
@@ -1790,10 +1833,9 @@ function settingsBody(): Omit<SettingsFile, "app" | "version" | "savedAt"> {
 
 // ---------------------------------------------------------------- hand corrections → a new analysis
 
+/** Adds a correction over the selection; the selection stays, so another button can follow on the same stretch. */
 async function addCorrection(c: PitchCorrection): Promise<void> {
   if (!material) return;
-  selection = null;
-  editor.setSelection(null);
   await setCorrections([...material.corrections, c]);
 }
 
@@ -1817,6 +1859,7 @@ async function setCorrections(corrections: PitchCorrection[]): Promise<void> {
     target.exportSources = new Map([[source.sampleRate, source]]);
     client.setSource(source);
     editor.setMaterial({ mono: target.mono, sampleRate: target.sampleRate, track: analysis.track });
+    editor.setSelection(selection);
     for (const cut of cuts) {
       const root = rootForMarkers(analysis.track, cut.markers);
       cut.detectedRoot = root?.midi ?? null;
@@ -1974,7 +2017,7 @@ async function load(name: string, channels: Float32Array[], sampleRate: number):
       applyCurrentCut();
     }
     status.replaceChildren(text + (restored ? " 前回の設定を復元しました。" : ""));
-    if (restored) status.append(" ", button("判定し直す", "small", () => resetSettingsButton.click()));
+    if (restored) status.append(" ", button("最初から", "small", () => resetSettingsButton.click()));
   } catch (error) {
     status.textContent = `読み込めませんでした: ${error instanceof Error ? error.message : error}`;
   }
@@ -2101,7 +2144,7 @@ client.onError = (message) => (status.textContent = `音声を開始できませ
 
 function showPcState(): void {
   const s = pcKeys.state;
-  pcToggle.textContent = `PCキーボード演奏: ${s.enabled ? "オン" : "オフ"} (M)`;
+  pcToggle.textContent = `PC キーボード演奏: ${s.enabled ? "オン" : "オフ"}(M)`;
   pcState.textContent = s.enabled && !SMALL_SCREEN ? `A = ${pitchLabel(s.baseNote)}(Z/X でオクターブ)・強さ ${Math.round(s.velocity * 100)}%(C/V)` : "";
   if (!s.enabled) imeWarning.hidden = true;
 }

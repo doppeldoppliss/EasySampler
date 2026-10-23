@@ -28,8 +28,11 @@ export class SongPanel {
   onPlayingChange: (playing: boolean) => void = () => {};
   /** "この曲の BPM を長さに使う": the song's tempo for the export length (and the beat-synced effects). */
   onUseBpm: (bpm: number) => void = () => {};
+  private readonly useBpmStatus = el("span", { className: "fine", role: "status" });
   private readonly useBpmButton = button("この曲の BPM を長さに使う", "small", () => {
-    if (this.song) this.onUseBpm(this.song.bpm);
+    if (!this.song) return;
+    this.onUseBpm(this.song.bpm);
+    this.useBpmStatus.textContent = `長さの BPM を ${Math.round(this.song.bpm * 10) / 10} にしました(語尾の長さと拍同期のエフェクトも変わります)。`;
   });
 
   private song: Song | null = null;
@@ -121,6 +124,7 @@ export class SongPanel {
         el("span", { className: "control-label", textContent: "曲で試す" }),
         button("MIDI を開く", "small", () => this.fileInput.click()),
         this.useBpmButton,
+        this.useBpmStatus,
         this.fileInput,
       ]),
       this.info,

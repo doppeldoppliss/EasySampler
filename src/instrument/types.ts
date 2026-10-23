@@ -175,14 +175,14 @@ export interface Preset {
 
 /** Starting points (design.md 4.5); the root and markers stay as they are. */
 export const PRESETS: Preset[] = [
-  { id: "synth", label: "シンセ化(平坦)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
-  { id: "synth-lead", label: "シンセ化リード(ビブラート)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 25, vibratoHz: 5.8, vibratoDelaySec: 0.2, driftCents: 0, micro: true } }) },
+  { id: "synth", label: "シンセ化(平坦)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
+  { id: "synth-lead", label: "シンセ化リード(ビブラート)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, wobble: { ...p.wobble, vibratoCents: 25, vibratoHz: 5.8, vibratoDelaySec: 0.2, driftCents: 0, micro: true } }) },
   { id: "stretch", label: "引き延ばし(変化を残す)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "stretch", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
-  { id: "kerokero", label: "ケロケロ(音階に貼り付け)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, tune: { ...p.tune, mode: "scale" }, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false, smoothSec: 0 } }) },
+  { id: "kerokero", label: "ケロケロ(音階に貼り付け)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, tune: { ...p.tune, mode: "scale" }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false, smoothSec: 0 } }) },
   { id: "wavetable", label: "ウェーブテーブル(無機質)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "wavetable", wavetableCycles: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false } }) },
-  { id: "bass", label: "ベース", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, amp: { ...p.amp, attack: 0.003, release: 0.04 } }) },
-  { id: "jinriki", label: "人力(抑揚を少し整える)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0.3, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 15, vibratoHz: 5.5, vibratoDelaySec: 0.3, driftCents: 4, micro: true } }) },
-  { id: "original", label: "原型(抑揚そのまま)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
+  { id: "bass", label: "ベース", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, amp: { ...p.amp, attack: 0.003, release: 0.04 } }) },
+  { id: "jinriki", label: "人力(抑揚を少し整える)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0.3, wobble: { ...p.wobble, vibratoCents: 15, vibratoHz: 5.5, vibratoDelaySec: 0.3, driftCents: 4, micro: true } }) },
+  { id: "original", label: "原型(抑揚そのまま)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
   { id: "drum", label: "ドラム・効果音(ワンショット)", apply: (p) => ({ ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, amp: { ...p.amp, attack: 0.001, sustain: 1, release: 0.03 } }) },
 ];
 

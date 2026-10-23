@@ -183,7 +183,7 @@ describe("sustain on / off", () => {
   });
 
   it("off, tail off: only the head plays, however long the key is held", () => {
-    const { sec, headSec } = soundingSec({ sustainEnabled: false }, 1.5);
+    const { sec, headSec } = soundingSec({ sustainEnabled: false, tail: { enabled: false, limit: "unlimited" } }, 1.5);
     expect(sec).toBeLessThan(headSec + 0.05);
     expect(sec).toBeGreaterThan(headSec * 0.8);
   });

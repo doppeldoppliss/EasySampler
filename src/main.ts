@@ -473,8 +473,49 @@ const vibratoPanel = el("details", { className: "sub" }, [
   range("かかり始め(音の頭から)", 0, 1, 0.01, () => params.wobble.vibratoDelaySec, (p, v) => (p.wobble.vibratoDelaySec = v), ms),
 ]);
 
+// Which parts of the material play: switches in the colours of the editor's bands.
+// (The head always plays; switching a part keeps the preset.)
+function partSwitch(label: string, band: string, get: () => boolean, set: (p: InstrumentParams, on: boolean) => void): HTMLButtonElement {
+  const b = el("button", { type: "button", className: "part-switch" });
+  b.style.setProperty("--part", `var(${band})`);
+  b.setAttribute("role", "switch");
+  const refresh = () => {
+    const on = get();
+    b.setAttribute("aria-checked", String(on));
+    b.replaceChildren(el("span", { className: "part-name", textContent: label }), el("span", { className: "part-state", textContent: on ? "ON" : "OFF" }));
+  };
+  b.addEventListener("click", () => {
+    update((p) => set(p, !get()), true);
+    refresh();
+    refreshPartsHelp();
+  });
+  controlsRefreshers.push(refresh);
+  return b;
+}
+const partsHelp = el("p", { className: "fine help" });
+function refreshPartsHelp(): void {
+  const sustain = params.sustainEnabled;
+  const tail = params.tail.enabled;
+  partsHelp.textContent = sustain
+    ? tail
+      ? "押している間は持続区間で伸ばし、離すと語尾が鳴ります。書き出す WAV は、指定した長さのあとに語尾が付きます。"
+      : "押している間は持続区間で伸ばし、離すと短くフェードして終わります。"
+    : tail
+      ? "頭部のあと、すぐ語尾が鳴って終わります(押している長さに関係なく)。"
+      : "頭部だけ鳴って終わります(押している長さに関係なく)。";
+}
+controlsRefreshers.push(refreshPartsHelp);
+const partsRow = el("div", { className: "parts-row" }, [
+  el("span", { className: "control-label", textContent: "鳴らす部分" }),
+  el("span", { className: "part-fixed", textContent: "頭部" }),
+  partSwitch("持続区間", "--band-sustain", () => params.sustainEnabled, (p, on) => (p.sustainEnabled = on)),
+  partSwitch("語尾", "--band-tail", () => params.tail.enabled, (p, on) => (p.tail = { ...p.tail, enabled: on })),
+]);
+
 const tunePanel = el("section", { className: "panel tune" }, [
   el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "音名" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]),
+  partsRow,
+  partsHelp,
   range("平坦化(抑揚の残し具合)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
   lengthBlock,
@@ -735,9 +776,6 @@ const detailsPanel = el("details", { className: "panel params" }, [
       select("ピッチの変え方", [["preserve-length", "長さ保持(PSOLA)"], ["resample", "速度連動(昔ながら)"]], () => params.pitchMode, (p, v) => (p.pitchMode = v)),
       select("持続区間の伸ばし方", [["pool", "周期プール(自然)"], ["loop", "ループ"], ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"], ["none", "伸ばさない(ワンショット)"]], () => params.sustainMode, (p, v) => (p.sustainMode = v)),
       range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
-      check("持続区間を鳴らす", () => params.sustainEnabled, (p, v) => (p.sustainEnabled = v)),
-      el("p", { className: "fine help", textContent: "オフにすると持続区間を飛ばし、頭部のあとすぐ語尾(オンのとき)へ進みます。鍵盤を押している長さに関係なく、そこで音が終わります。" }),
-      check("語尾を末尾に付ける", () => params.tail.enabled, (p, v) => (p.tail.enabled = v)),
       select(
         "語尾の長さ",
         [

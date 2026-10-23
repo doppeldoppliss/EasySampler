@@ -51,7 +51,7 @@ describe("outputLayout", () => {
     expect(layout.sustainRatio).toBeCloseTo(6);
     expect(layout.elastic).toBe(true);
     expect(layout.totalSec).toBeCloseTo(2.5);
-    expect(outputLayout(markers, DEFAULT_PARAMS, 2).tailSec).toBe(0);
+    expect(outputLayout(markers, { ...DEFAULT_PARAMS, tail: { enabled: false, limit: "unlimited" } }, 2).tailSec).toBe(0);
   });
 
   it("head and tail stretch; a one-shot plays every part at its own speed and ignores the hold", () => {

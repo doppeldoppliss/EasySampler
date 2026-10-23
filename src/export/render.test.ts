@@ -23,8 +23,8 @@ function rms(x: Float32Array, from: number, to: number): number {
 }
 
 describe("renderNote (the exported file)", () => {
-  it("comes out at the target note, flat, and about as long as asked", () => {
-    const { analysis, source, params } = setup();
+  it("comes out at the target note, flat, and about as long as asked (no tail)", () => {
+    const { analysis, source, params } = setup({ tail: { enabled: false, limit: "unlimited" } });
     const out = renderNote(source, analysis.markers, params, 64, 1.5);
     expect(out.sampleRate).toBe(SR);
     expect(out.channels).toHaveLength(1);
@@ -124,5 +124,15 @@ describe("renderNote with effects", () => {
     fx.limiter.gainDb = 0;
     const limited = renderNote(source, analysis.markers, { ...params, fx }, 62, 1);
     expect(Math.abs(onset(limited.channels[0]) - onset(plain.channels[0]))).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("renderNote with the tail (on by default)", () => {
+  it("runs on past the asked length by the tail", () => {
+    const { analysis, source, params } = setup();
+    expect(params.tail.enabled).toBe(true);
+    const withTail = renderNote(source, analysis.markers, params, 64, 1.5);
+    const without = renderNote(source, analysis.markers, { ...params, tail: { enabled: false, limit: "unlimited" } }, 64, 1.5);
+    expect(withTail.channels[0].length).toBeGreaterThan(without.channels[0].length);
   });
 });

@@ -12,9 +12,19 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-/** The value of a CSS custom property on the root element (for Canvas drawing in the current theme). */
+/** The value of a CSS custom property on the root element (for Canvas drawing in the current theme).
+ *  Read once and kept: a redraw asks for dozens, and a computed style is not free. The theme change empties the store. */
+const cssVars = new Map<string, string>();
 export function cssVar(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  let value = cssVars.get(name);
+  if (value === undefined) {
+    value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    cssVars.set(name, value);
+  }
+  return value;
+}
+if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => cssVars.clear());
 }
 
 /** True when the event comes from somewhere the user types (keys there are text, not notes or shortcuts). */

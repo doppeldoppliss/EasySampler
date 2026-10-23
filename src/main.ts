@@ -51,7 +51,13 @@ const MAX_MATERIAL_SEC = 60;
 const MAX_DECODE_SEC = 600;
 const DEMO_RATE = 44100;
 const GUIDE_KEY = "maddaw.guide.v2";
-const SMALL_SCREEN = window.matchMedia("(max-width: 600px)").matches;
+const SMALL_SCREEN = window.matchMedia("(max-width: 600px)").matches || (window.matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) <= 600);
+/** iPhone / iPad (an iPad calls itself a Mac, with touch). */
+const IOS = /iP(hone|ad|od)/.test(navigator.platform) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+/** Opened from the home screen: no browser bars, and on an iPhone no download sheet either. */
+const STANDALONE = window.matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+/** A file is decoded whole, in memory, so a very long one is refused up front (an iPhone would run out and reload the page). */
+const DECODE_REFUSE_SEC = IOS ? 300 : 1800;
 
 // ---------------------------------------------------------------- state
 
@@ -127,8 +133,8 @@ function onGesture(): void {
   client.unlock();
   if (!wasStarted) void matchEngineRate();
 }
-window.addEventListener("pointerdown", onGesture, { capture: true });
-window.addEventListener("keydown", onGesture, { capture: true });
+// (iPhone: a touch's "down" has not always counted as the gesture that may start sound; its "up" and the click do.)
+for (const type of ["pointerdown", "pointerup", "touchend", "click", "keydown"]) window.addEventListener(type, onGesture, { capture: true, passive: true });
 // (iOS "interrupts" the audio when another app takes over; unlock() on the next gesture resumes it.)
 
 /** The material was prepared before the audio started (at a guessed rate): redo it at the real one. */
@@ -713,6 +719,11 @@ const keysPanel = el("section", { className: "panel keys-panel" }, [
   piano.element,
   el("p", { className: "fine", textContent: "●の付いた鍵が、選んだ音名(書き出す高さ)です。" }),
 ]);
+// The room left at the end of the page follows the panel's real height (its control row wraps on a phone).
+new ResizeObserver(() => document.body.style.setProperty("--keys-height", `${keysPanel.offsetHeight}px`)).observe(keysPanel);
+// While something is being typed, a phone's own keyboard takes the bottom of the screen: the pinned piano steps aside.
+document.addEventListener("focusin", (event) => document.body.classList.toggle("typing", isTypingTarget(event.target)));
+document.addEventListener("focusout", () => document.body.classList.remove("typing"));
 showPinned();
 
 // ---------------------------------------------------------------- panel 3b: effects
@@ -942,6 +953,7 @@ const listenButton = button("▶ 書き出し後を聴く", "big", () => {
 const shareButton = button("共有", "big primary", () => void deliver("share", false));
 shareButton.hidden = !canShareFiles();
 const saveButton = button("保存", `big ${canShareFiles() ? "" : "primary"}`, () => void deliver("download", false));
+saveButton.hidden = IOS && STANDALONE; // a home-screen app on an iPhone has no download sheet: the share sheet is the way
 const batchButton = button("すべての区間をまとめて保存(zip)", "", () => void deliver(canShareFiles() ? "share" : "download", true));
 const exportStatus = el("p", { className: "fine", role: "status" });
 
@@ -976,7 +988,10 @@ function setCreditInputs(): void {
 const saveSettingsButton = button("設定を保存(JSON)", "small", () => {
   if (!material) return;
   const json = serializeSettings(settingsBody());
-  downloadFile(new Blob([json], { type: "application/json" }), `${safeBaseName(material.name)}.maddaw.json`);
+  const blob = new Blob([json], { type: "application/json" });
+  const name = `${safeBaseName(material.name)}.maddaw.json`;
+  if (IOS && canShareFiles()) shareFile(blob, name, name).catch(() => downloadFile(blob, name));
+  else downloadFile(blob, name);
 });
 const loadSettingsButton = el("label", { className: "button small", htmlFor: "file", textContent: "設定を読み込む(JSON)" });
 const settingsStatus = el("span", { className: "fine fix-status", role: "status" });
@@ -1314,34 +1329,47 @@ async function queueInputs(): Promise<{ inputs: BuildInput[]; skipped: string[] 
   return { inputs, skipped };
 }
 
+let builtQueue: { key: string; result: Built; skipped: string[] } | null = null;
+
 async function deliverQueue(kind: "wavs" | "kit"): Promise<void> {
   if (building || queue.length === 0) return;
   building = true;
   try {
-    const { inputs, skipped } = await queueInputs();
-    if (inputs.length === 0) {
-      queueStatus.textContent = `書き出せるものがありません。${skipped.join("、")}`;
-      return;
+    // The zip is kept once made: on an iPhone the share sheet only opens on a fresh tap, which a long build uses up.
+    const key = JSON.stringify([kind, queue.map((q) => [q.file.name, q.file.size, q.file.lastModified]), queueFirstKey.value, exportSettings, credit]);
+    let built: Built;
+    let skipped: string[];
+    if (builtQueue?.key === key) ({ result: built, skipped } = builtQueue);
+    else {
+      const inputs = await queueInputs();
+      skipped = inputs.skipped;
+      if (inputs.inputs.length === 0) {
+        queueStatus.textContent = `書き出せるものがありません。${skipped.join("、")}`;
+        return;
+      }
+      const progress = async (done: number, total: number) => {
+        queueStatus.textContent = `作成中… ${done} / ${total}`;
+        await yieldToScreen();
+      };
+      const kitName = `${safeBaseName(queue[0].file.name)}_kit`;
+      built = kind === "kit" ? await buildKit(inputs.inputs, kitName, Number(queueFirstKey.value), progress) : await buildBatch(inputs.inputs, null, `${safeBaseName(queue[0].file.name)}_など${queue.length}件`, progress);
+      builtQueue = { key, result: built, skipped };
     }
-    const progress = async (done: number, total: number) => {
-      queueStatus.textContent = `作成中… ${done} / ${total}`;
-      await yieldToScreen();
-    };
-    const kitName = `${safeBaseName(queue[0].file.name)}_kit`;
-    const built = kind === "kit" ? await buildKit(inputs, kitName, Number(queueFirstKey.value), progress) : await buildBatch(inputs, null, `${safeBaseName(queue[0].file.name)}_など${queue.length}件`, progress);
-    let outcome = "";
+    const note = skipped.length ? ` — 飛ばしたもの: ${skipped.join("、")}` : "";
     if (canShareFiles()) {
       try {
-        outcome = (await shareFile(built.blob, built.fileName, built.fileName)) === "shared" ? "共有しました" : "";
-      } catch {
-        outcome = "";
+        const outcome = await shareFile(built.blob, built.fileName, built.fileName);
+        queueStatus.textContent = outcome === "shared" ? `共有しました: ${built.summary}${note}` : "";
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "NotAllowedError") {
+          queueStatus.textContent = "できました。もう一度押すと共有シートが開きます。";
+          return;
+        }
       }
     }
-    if (!outcome) {
-      downloadFile(built.blob, built.fileName);
-      outcome = "保存しました";
-    }
-    queueStatus.textContent = `${outcome}: ${built.summary}${skipped.length ? ` — 飛ばしたもの: ${skipped.join("、")}` : ""}`;
+    downloadFile(built.blob, built.fileName);
+    queueStatus.textContent = `保存しました: ${built.summary}${note}`;
   } catch (error) {
     queueStatus.textContent = `書き出せませんでした: ${error instanceof Error ? error.message : error}`;
   } finally {
@@ -1626,17 +1654,23 @@ function inputFor(cut: Cut, source: PreparedSource): BuildInput {
 
 const yieldToScreen = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-/** Builds the current cut's file (cached until something changes). */
-async function buildCurrent(): Promise<Built | null> {
-  if (!material || !cuts[current] || building) return built?.result ?? null;
+/** What the current cut's file depends on; null without a material. */
+function currentKey(): string | null {
+  if (!material || !cuts[current]) return null;
   syncCut();
-  const source = exportSource();
-  const key = JSON.stringify([cuts[current], exportSettings, source.sampleRate, credit]);
+  return JSON.stringify([cuts[current], exportSettings, exportSource().sampleRate, credit]);
+}
+
+/** Builds the current cut's file (cached until something changes). */
+async function buildCurrent(quiet = false): Promise<Built | null> {
+  if (!material || !cuts[current] || building) return built?.result ?? null;
+  const key = currentKey()!;
   if (built?.key === key) return built.result;
+  const source = exportSource();
   building = true;
   try {
     const result = await buildOne(inputFor(cuts[current], source), async (done, total) => {
-      if (total > 1) {
+      if (total > 1 && !quiet) {
         exportStatus.textContent = `作成中… ${done} / ${total}`;
         await yieldToScreen();
       }
@@ -1648,13 +1682,30 @@ async function buildCurrent(): Promise<Built | null> {
   }
 }
 
+let prebuildTimer = 0;
+/** Where the share sheet is the way out, the current file is made ahead, in a quiet moment: then a tap on 共有 opens the sheet at once. */
+function schedulePrebuild(): void {
+  if (!canShareFiles()) return;
+  clearTimeout(prebuildTimer);
+  prebuildTimer = window.setTimeout(() => {
+    if (material && !building && !playing && !songPanel.playing) void buildCurrent(true).catch(() => {});
+  }, 1500);
+}
+
+let builtAll: { key: string; result: Built } | null = null;
+function allKey(): string {
+  syncCut();
+  return JSON.stringify(["all", material!.name, cuts, exportSettings, exportSource().sampleRate, credit]);
+}
+
 async function buildAll(): Promise<Built | null> {
   if (!material || building) return null;
-  syncCut();
+  const key = allKey();
+  if (builtAll?.key === key) return builtAll.result;
   const source = exportSource();
   building = true;
   try {
-    return await buildBatch(
+    const result = await buildBatch(
       cuts.map((cut) => inputFor(cut, source)),
       serializeSettings(settingsBody()),
       material.name,
@@ -1663,6 +1714,8 @@ async function buildAll(): Promise<Built | null> {
         await yieldToScreen();
       },
     );
+    builtAll = { key, result };
+    return result;
   } finally {
     building = false;
   }
@@ -1833,7 +1886,9 @@ window.addEventListener("keydown", (event) => {
 
 async function deliver(how: "share" | "download", all: boolean): Promise<void> {
   try {
-    const result = all ? await buildAll() : await buildCurrent();
+    // The share sheet opens only on the tap itself: a file already made goes to it without any wait in between.
+    const ready = all ? (material && builtAll?.key === allKey() ? builtAll.result : null) : built && built.key === currentKey() ? built.result : null;
+    const result = ready ?? (all ? await buildAll() : await buildCurrent());
     if (!result) return;
     if (how === "share") {
       try {
@@ -1841,6 +1896,15 @@ async function deliver(how: "share" | "download", all: boolean): Promise<void> {
         exportStatus.textContent = outcome === "shared" ? `共有しました: ${result.summary}` : "";
         return;
       } catch (error) {
+        // A long build used the tap up (iPhone); the file is kept, so the next tap shares it at once.
+        if (error instanceof DOMException && error.name === "NotAllowedError") {
+          exportStatus.textContent = "できました。もう一度「共有」を押すと共有シートが開きます。";
+          return;
+        }
+        if (IOS && STANDALONE) {
+          exportStatus.textContent = `共有できませんでした(${error instanceof Error ? error.message : error})`;
+          return;
+        }
         exportStatus.textContent = `共有できなかったので保存します(${error instanceof Error ? error.message : error})`;
       }
     }
@@ -1970,16 +2034,32 @@ window.addEventListener("keydown", (event) => {
 });
 
 let saveTimer = 0;
+function saveNow(): void {
+  if (!material) return;
+  const json = serializeSettings(settingsBody());
+  safeStorage(settingsKey(material.name, material.channels[0].length, material.sampleRate), json);
+  recordHistory(json);
+}
 function scheduleSave(): void {
   if (!material) return;
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
-    if (!material) return;
-    const json = serializeSettings(settingsBody());
-    safeStorage(settingsKey(material.name, material.channels[0].length, material.sampleRate), json);
-    recordHistory(json);
+    saveTimer = 0;
+    saveNow();
   }, 400);
+  schedulePrebuild();
 }
+/** Leaving, or going to the background (which on a phone may be the end of the page): a pending save goes out now. */
+function flushSave(): void {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  saveNow();
+}
+window.addEventListener("pagehide", flushSave);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushSave();
+});
 
 /** Puts a settings file into effect for the loaded material. */
 function applySettings(file: SettingsFile): void {
@@ -2007,14 +2087,50 @@ function applySettings(file: SettingsFile): void {
 
 // ---------------------------------------------------------------- loading
 
+/** The media's length from its header alone (nothing decoded); null where the browser cannot tell. */
+async function mediaDuration(file: File): Promise<number | null> {
+  const url = URL.createObjectURL(file);
+  const media = document.createElement(file.type.startsWith("video/") ? "video" : "audio");
+  media.preload = "metadata";
+  try {
+    return await new Promise<number | null>((resolve) => {
+      media.addEventListener("loadedmetadata", () => resolve(Number.isFinite(media.duration) ? media.duration : null), { once: true });
+      media.addEventListener("error", () => resolve(null), { once: true });
+      setTimeout(() => resolve(null), 3000);
+      media.src = url;
+    });
+  } finally {
+    media.removeAttribute("src");
+    media.load();
+    URL.revokeObjectURL(url);
+  }
+}
+
+class TooLongError extends Error {}
+
+let decodeContext: OfflineAudioContext | null = null;
+
 async function decode(file: File): Promise<{ channels: Float32Array[]; sampleRate: number; truncated: boolean }> {
+  const duration = await mediaDuration(file);
+  if (duration !== null && duration > DECODE_REFUSE_SEC) {
+    throw new TooLongError(`「${file.name}」は ${clock(duration)} あります。${IOS ? "iPhone / iPad では 5 分" : "30 分"}までのファイルを読み込めます。使う部分を先に切り出してください。`);
+  }
   const bytes = await file.arrayBuffer();
-  // An offline context decodes without needing a user gesture.
-  const context = new OfflineAudioContext(1, 1, 44100);
-  const buffer = await context.decodeAudioData(bytes);
+  // An offline context decodes without needing a user gesture (one is enough for all the files).
+  decodeContext ??= new OfflineAudioContext(1, 1, 44100);
+  const buffer = await decodeContext.decodeAudioData(bytes);
   const frames = Math.min(buffer.length, Math.round(MAX_DECODE_SEC * buffer.sampleRate));
-  const channels = [...Array(Math.min(2, buffer.numberOfChannels)).keys()].map((c) => buffer.getChannelData(c).slice(0, frames));
-  return { channels, sampleRate: buffer.sampleRate, truncated: frames < buffer.length };
+  const truncated = frames < buffer.length;
+  // (No copy unless it is cut: a long file's samples are large.)
+  const channels = [...Array(Math.min(2, buffer.numberOfChannels)).keys()].map((c) => (truncated ? buffer.getChannelData(c).slice(0, frames) : buffer.getChannelData(c)));
+  return { channels, sampleRate: buffer.sampleRate, truncated };
+}
+
+/** What to say when a file would not decode: the formats this device can read. */
+function formatHint(file: File): string {
+  const ext = file.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
+  if (IOS && ["ogg", "oga", "opus", "webm", "mkv", "wma"].includes(ext)) return `iPhone / iPad は ${ext} を読み込めません。mp3 / m4a / wav / mp4 / mov に変換してください`;
+  return "対応していない形式かもしれません。mp3 / wav / m4a / mp4 などで試してください";
 }
 
 async function load(name: string, channels: Float32Array[], sampleRate: number): Promise<void> {
@@ -2097,7 +2213,8 @@ async function openFile(file: File): Promise<void> {
     pickerPanel.hidden = true;
     await load(file.name, channels, sampleRate);
   } catch (error) {
-    status.textContent = `読み込めませんでした(対応していない形式かもしれません): ${error instanceof Error ? error.message : error}`;
+    if (error instanceof TooLongError) status.textContent = `読み込めませんでした: ${error.message}`;
+    else status.textContent = `読み込めませんでした(${formatHint(file)}): ${error instanceof Error ? error.message : error}`;
   }
 }
 

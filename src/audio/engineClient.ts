@@ -43,6 +43,22 @@ export class EngineClient {
       this.waiting.get(event.data.id)?.(event.data);
       this.waiting.delete(event.data.id);
     };
+    // The engine's code is fetched now, so the first note after the first tap does not wait for the network.
+    if (typeof fetch === "function") fetch(workletUrl).catch(() => {});
+  }
+
+  private playbackClaimed = false;
+  /** iPhone / iPad: sound even with the silent switch on — asked for when sound is wanted, not on the first tap
+   *  (claiming "playback" stops whatever music was playing in another app). */
+  private claimPlayback(): void {
+    if (this.playbackClaimed) return;
+    this.playbackClaimed = true;
+    const session = (navigator as AudioSessionNavigator).audioSession;
+    try {
+      if (session) session.type = "playback";
+    } catch {
+      // not settable here
+    }
   }
 
   /** The rate the engine runs at (the context's, once there is one; 48 kHz is the usual guess before). */
@@ -57,13 +73,6 @@ export class EngineClient {
   /** Call from inside a user gesture: creates or resumes the audio. */
   unlock(): void {
     if (!this.context) {
-      const session = (navigator as AudioSessionNavigator).audioSession;
-      try {
-        // iPhone / iPad: sound even with the silent switch on.
-        if (session) session.type = "playback";
-      } catch {
-        // not settable here
-      }
       this.context = new AudioContext({ latencyHint: "interactive" });
       this.setUpWorklet(this.context).catch((error: unknown) => this.onError(error instanceof Error ? error.message : String(error)));
     }
@@ -117,6 +126,7 @@ export class EngineClient {
   // Notes played before the worklet is up (the very first tap starts the
   // audio) wait in the queue, so that first tap still sounds.
   noteOn(note: number, velocity: number): void {
+    this.claimPlayback();
     this.post({ type: "noteOn", note, velocity });
   }
 
@@ -154,6 +164,7 @@ export class EngineClient {
    * at, for the playhead. Call from a gesture.
    */
   playSong(fromSec: number): number {
+    this.claimPlayback();
     this.unlock();
     const context = this.context!;
     const at = context.currentTime + 0.08;
@@ -178,6 +189,7 @@ export class EngineClient {
 
   /** Plays a rendered buffer (the file as it will be written) once, from `fromSec`; a second call stops the first. Call from a gesture. */
   playBuffer(channels: readonly Float32Array[], sampleRate: number, fromSec = 0): void {
+    this.claimPlayback();
     this.unlock();
     const context = this.context!;
     const frames = channels[0]?.length ?? 0;

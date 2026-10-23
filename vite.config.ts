@@ -1,23 +1,31 @@
 import basicSsl from "@vitejs/plugin-basic-ssl";
-import { defineConfig } from "vite";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { defineConfig, type Plugin } from "vite";
 
-// The same isolation headers the published site will send (public/_headers),
-// so SharedArrayBuffer and the WASM worklets behave in dev as they will live.
-const isolation = {
-  "Cross-Origin-Opener-Policy": "same-origin",
-  "Cross-Origin-Embedder-Policy": "require-corp",
-};
+/** Gives the service worker's cache a name of this build's own (public/sw.js carries a placeholder). */
+function stampServiceWorker(): Plugin {
+  return {
+    name: "maddaw-stamp-sw",
+    apply: "build",
+    closeBundle() {
+      const file = fileURLToPath(new URL("dist/sw.js", import.meta.url));
+      if (!existsSync(file)) return;
+      writeFileSync(file, readFileSync(file, "utf8").replace("__BUILD__", Date.now().toString(36)));
+    },
+  };
+}
 
 export default defineConfig(({ mode }) => {
-  // `npm run dev:lan`: served over HTTPS on the local network, so an iPad can
-  // open it — AudioWorklet only runs in a secure context, and a plain
-  // http://192.168.x.x page is not one.
+  // `npm run dev:lan` / `vite preview --mode lan`: served over HTTPS on the local
+  // network, so an iPad can open it — AudioWorklet only runs in a secure context,
+  // and a plain http://192.168.x.x page is not one.
   const lan = mode === "lan";
   return {
     base: "./",
-    plugins: lan ? [basicSsl()] : [],
-    server: { headers: isolation, host: lan ? true : undefined },
-    preview: { headers: isolation },
+    plugins: [stampServiceWorker(), ...(lan ? [basicSsl()] : [])],
+    server: { host: lan ? true : undefined },
+    preview: { host: lan ? true : undefined },
     worker: { format: "es" as const },
   };
 });

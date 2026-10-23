@@ -81,6 +81,9 @@ export class MaterialEditor {
   private material: EditorMaterial | null = null;
   private markers: Markers | null = null;
   private removed: TimeRange[] = [];
+  /** Bumped whenever the material or the display mapping (removed stretches) changes: the waveform columns are redone. */
+  private mappingVersion = 0;
+  private columns: { key: string; lo: Float32Array; hi: Float32Array } | null = null;
   /** Which parts play (鳴らす部分); a part switched off keeps its waveform and handles but loses its band label. */
   private parts = { sustain: true, tail: true };
   private root = 60;
@@ -155,6 +158,7 @@ export class MaterialEditor {
     this.material = material;
     this.selection = null;
     this.removed = [];
+    this.mappingVersion++;
     this.view = { start: 0, end: this.displayDuration };
     this.playhead = null;
     this.draw();
@@ -164,7 +168,9 @@ export class MaterialEditor {
   setState(markers: Markers, root: number, flatten: number, target = root, shaper: ((pitch: number) => number) | null = null): void {
     this.markers = markers;
     this.shaper = shaper;
-    this.removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
+    const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
+    if (JSON.stringify(removed) !== JSON.stringify(this.removed)) this.mappingVersion++;
+    this.removed = removed;
     this.root = root;
     this.target = target;
     this.flatten = flatten;
@@ -316,8 +322,9 @@ export class MaterialEditor {
     const inPlot = y < box.height - LANE_HEIGHT - STRIP_HEIGHT;
     // A finger grabs handles only in the marker strip (the plot is for selecting); a mouse grabs a line in the
     // plot only right on it (a drag that starts a few px beside a marker is a selection), and in the strip with reach.
-    if (event.pointerType !== "mouse" && inPlot) return null;
-    const reach = event.pointerType === "mouse" ? (inPlot ? 3 : HANDLE_REACH_MOUSE) : HANDLE_REACH_TOUCH;
+    const fine = event.pointerType === "mouse" || event.pointerType === "pen"; // a pencil points as precisely as a mouse
+    if (!fine && inPlot) return null;
+    const reach = fine ? (inPlot ? 3 : HANDLE_REACH_MOUSE) : HANDLE_REACH_TOUCH;
     const inStripLower = y > box.height - LANE_HEIGHT - STRIP_HEIGHT / 2;
     let best: Handle | null = null;
     let bestDistance = reach;
@@ -376,7 +383,7 @@ export class MaterialEditor {
     const box = this.canvas.getBoundingClientRect();
     const y = event.clientY - box.top;
     if (y < box.height - LANE_HEIGHT) return null;
-    const reach = event.pointerType === "mouse" ? HANDLE_REACH_MOUSE : HANDLE_REACH_TOUCH;
+    const reach = event.pointerType === "mouse" || event.pointerType === "pen" ? HANDLE_REACH_MOUSE : HANDLE_REACH_TOUCH;
     const x = event.clientX - box.left;
     const dIn = Math.abs(fadeIn.x - x);
     const dOut = Math.abs(fadeOut.x - x);
@@ -643,24 +650,42 @@ export class MaterialEditor {
     g.fillRect(0, 0, Math.max(0, x(markers.rangeStart)), stripBottom);
     g.fillRect(Math.min(width, x(markers.rangeEnd)), 0, width, stripBottom);
 
-    // Waveform (min/max per column), reading the source through the display mapping.
-    const samples = material.mono;
-    const rate = material.sampleRate;
+    // Waveform (min/max per column), reading the source through the display mapping. The columns are
+    // kept between redraws (the playhead and the hover redraw every frame; a minute of material is millions of samples).
+    const columnKey = `${this.mappingVersion}|${view.start}|${view.end}|${width}`;
+    let columns = this.columns;
+    if (!columns || columns.key !== columnKey) {
+      const samples = material.mono;
+      const rate = material.sampleRate;
+      const lo = new Float32Array(width);
+      const hi = new Float32Array(width);
+      for (let col = 0; col < width; col++) {
+        const d0 = view.start + (col / width) * span;
+        const d1 = view.start + ((col + 1) / width) * span;
+        if (d1 < 0 || d0 > this.displayDuration) {
+          lo[col] = Number.NaN; // nothing here
+          continue;
+        }
+        const from = Math.max(0, Math.floor(this.src(d0) * rate));
+        const to = Math.min(samples.length, Math.max(from + 1, Math.floor(this.src(d1) * rate) + 1));
+        let l = 0;
+        let h = 0;
+        for (let i = from; i < to; i++) {
+          const v = samples[i];
+          if (v < l) l = v;
+          else if (v > h) h = v;
+        }
+        lo[col] = l;
+        hi[col] = h;
+      }
+      columns = this.columns = { key: columnKey, lo, hi };
+    }
     g.fillStyle = cssVar("--wave");
     const mid = plotHeight / 2;
     for (let col = 0; col < width; col++) {
-      const d0 = view.start + (col / width) * span;
-      const d1 = view.start + ((col + 1) / width) * span;
-      if (d1 < 0 || d0 > this.displayDuration) continue;
-      const from = Math.max(0, Math.floor(this.src(d0) * rate));
-      const to = Math.min(samples.length, Math.max(from + 1, Math.floor(this.src(d1) * rate) + 1));
-      let lo = 0;
-      let hi = 0;
-      for (let i = from; i < to; i++) {
-        const v = samples[i];
-        if (v < lo) lo = v;
-        else if (v > hi) hi = v;
-      }
+      const lo = columns.lo[col];
+      if (Number.isNaN(lo)) continue;
+      const hi = columns.hi[col];
       g.fillRect(col, mid - hi * mid * 0.9, 1, Math.max(1, (hi - lo) * mid * 0.9));
     }
 

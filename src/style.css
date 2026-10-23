@@ -78,7 +78,27 @@ body {
 #app {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 12px 16px 40px;
+  /* (the side gutters clear a phone's rounded corners and notch in landscape) */
+  padding: 12px max(16px, env(safe-area-inset-right)) 40px max(16px, env(safe-area-inset-left));
+}
+
+/* Taps on controls act at once: no double-tap zoom, no 300 ms wait. */
+button,
+.button,
+label,
+select,
+input,
+summary {
+  touch-action: manipulation;
+}
+
+/* A text field under 16 px makes a phone zoom the page in when it gets the focus (and leave it there). */
+@media (pointer: coarse) {
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 
 .top {
@@ -979,11 +999,23 @@ fieldset,
   border-radius: 12px 12px 0 0;
   z-index: 3;
   box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.18);
+  /* Clear of the home indicator, and of the edge where a swipe goes back. */
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
 }
 
-/* Room at the end of the page for the pinned keyboard. */
+/* Room at the end of the page for the pinned keyboard (its height, as measured). */
 body.keys-pinned {
-  padding-bottom: 190px;
+  padding-bottom: calc(var(--keys-height, 190px) + 8px);
+}
+
+/* While typing on a phone, its own keyboard has the bottom of the screen. */
+@media (pointer: coarse) {
+  body.typing .keys-panel.pinned {
+    visibility: hidden;
+    pointer-events: none;
+  }
 }
 
 .keys-panel.pinned .piano {

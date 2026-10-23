@@ -121,7 +121,7 @@ function percentile(values: number[], p: number): number {
 }
 
 /** The strongest sinusoidal component of a series between loHz and hiHz, by a plain DFT: its rate and amplitude. */
-function dominantModulation(series: Float32Array, rate: number, loHz: number, hiHz: number): { hz: number; amplitude: number } {
+function dominantModulation(series: Float32Array, rate: number, loHz: number, hiHz: number, skipHz: readonly number[] = []): { hz: number; amplitude: number } {
   const n = series.length;
   if (n < 8) return { hz: 0, amplitude: 0 };
   let mean = 0;
@@ -132,6 +132,7 @@ function dominantModulation(series: Float32Array, rate: number, loHz: number, hi
   const steps = 160;
   for (let s = 0; s <= steps; s++) {
     const hz = loHz * (hiHz / loHz) ** (s / steps);
+    if (skipHz.some((f) => Math.abs(hz - f) < 0.15 * f)) continue; // the note's own cycle and its octaves are not roughness
     let re = 0;
     let im = 0;
     for (let i = 0; i < n; i++) {
@@ -311,8 +312,11 @@ export function toneMetrics(x: Float32Array, sampleRate: number, soundingSec: nu
   };
 }
 
-export function artefactMetrics(x: Float32Array, sampleRate: number, soundingSec: number): ArtefactMetrics {
-  const env = envelope(x, sampleRate, 0.004, 0.002);
+export function artefactMetrics(x: Float32Array, sampleRate: number, soundingSec: number, f0Hz = Number.NaN): ArtefactMetrics {
+  // The envelope window spans a few periods of the note where it is known, so the waveform's own
+  // cycle (a low voice sits inside the roughness range) is not read as modulation.
+  const envWin = Number.isFinite(f0Hz) && f0Hz > 0 ? Math.max(0.004, 2.5 / f0Hz) : 0.004;
+  const env = envelope(x, sampleRate, envWin, 0.002);
   const guard = Math.round(0.005 * sampleRate);
   const end = Math.min(x.length, Math.round(soundingSec * sampleRate));
   // Clicks: a jump between neighbours far above the jumps the signal makes around there
@@ -342,7 +346,7 @@ export function artefactMetrics(x: Float32Array, sampleRate: number, soundingSec
   let mean = 0;
   for (const v of part) mean += v;
   mean /= Math.max(1, part.length);
-  const rough = dominantModulation(part, 1 / env.hopSec, 20, 200);
+  const rough = dominantModulation(part, 1 / env.hopSec, 20, 200, Number.isFinite(f0Hz) ? [f0Hz / 2, f0Hz, 2 * f0Hz] : []);
   const slow = dominantModulation(part, 1 / env.hopSec, 2, 20);
   // Dropouts: stretches far below the median level.
   const med = median(Array.from(part));
@@ -393,7 +397,7 @@ export function report(channels: readonly Float32Array[], sampleRate: number, op
   const level = levelMetrics(x, sampleRate, { fromSec: options.sustainFromSec, toSec: options.sustainToSec });
   const pitch = pitchMetrics(x, sampleRate, options.targetMidi, options.sustainFromSec, Math.min(options.sustainToSec, level.soundingSec));
   const tone = toneMetrics(x, sampleRate, level.soundingSec);
-  const artefacts = artefactMetrics(x, sampleRate, level.soundingSec);
+  const artefacts = artefactMetrics(x, sampleRate, level.soundingSec, 440 * 2 ** ((options.targetMidi - 69) / 12));
   const seam = options.loop ? seamMetrics(x, sampleRate, options.loop.start, options.loop.end) : null;
   const warnings: string[] = [];
   if (artefacts.clippedSamples > 0) warnings.push(`クリッピング: ${artefacts.clippedSamples} サンプル`);

@@ -230,6 +230,9 @@ function main(): void {
   const layout = outputLayout(markers, params, args.hold);
   const sustainFrom = rendered.headSec;
   const sustainTo = params.sustainMode === "none" ? rendered.headSec + layout.sustainSec : rendered.holdEndSec;
+  // A hold shorter than the head never reaches the sustain: the pitch table would measure nothing.
+  const noSustain = sustainTo - sustainFrom < 0.07;
+  if (noSustain) console.error(`注意: 長さ ${args.hold} s は頭部(${rendered.headSec.toFixed(2)} s)より短く、持続部がありません。--hold を長くしてください。`);
   const r = report(rendered.channels, rendered.sampleRate, {
     targetMidi: note,
     sustainFromSec: sustainFrom + 0.02,
@@ -251,6 +254,7 @@ function main(): void {
     プリセット: args.preset ?? "(既定)",
     設定: args.sets.length ? args.sets.map(([k, v]) => `${k}=${v}`).join(", ") : "なし",
     伸ばし方: params.sustainMode,
+    持続部: noSustain ? "なし(頭部より短い長さ)" : `${sustainFrom.toFixed(2)}–${sustainTo.toFixed(2)} s`,
     出力: outDir,
   };
   const md = markdown(r, meta);

@@ -52,6 +52,8 @@ const MAX_HALF_GRAIN_SEC = 0.025;
 /** Pool of steady periods for the sustain. */
 const MAX_POOL = 48;
 const MIN_POOL = 3;
+/** Semitones a pitch must be nearer another scale note than the one on before scale mode moves. */
+const SCALE_HYSTERESIS = 0.3;
 /** Voices beyond the polyphony limit, so a stolen voice can fade instead of clicking. */
 const SPARE_VOICES = 4;
 const STEAL_FADE_SEC = 0.006;
@@ -108,6 +110,8 @@ class Voice {
   /** Left half-width of the last grain placed: how early the next one may start. */
   lastLeft = 0;
   poolIndex = 0;
+  /** Scale mode: the scale note this voice is on (NaN before the first voiced period). */
+  scaleNote = Number.NaN;
   previousPoolIndex = -1;
   reverseNext = false;
 
@@ -427,6 +431,7 @@ export class Engine {
     v.clock = 0;
     v.poolIndex = Math.floor(this.pool.length / 2);
     v.previousPoolIndex = -1;
+    v.scaleNote = Number.NaN;
     v.reverseNext = false;
     v.env = Env.Attack;
     v.level = 0;
@@ -502,12 +507,13 @@ export class Engine {
     return lo;
   }
 
-  /** The next period from the sustain pool: a step of 1–3 to either side, never straight back. */
+  /** The next period from the sustain pool: a step to either side, mostly one period (a jump over
+   *  several periods of a moving voice reads as jitter), never straight back. */
   private nextPoolMark(v: Voice): number {
     const n = this.pool.length;
     let next = v.poolIndex;
     for (let tries = 0; tries < 6; tries++) {
-      const stepSize = 1 + Math.floor(this.random() * 3);
+      const stepSize = this.random() < 0.75 ? 1 : 2;
       const candidate = v.poolIndex + (this.random() < 0.5 ? -stepSize : stepSize);
       if (candidate < 0 || candidate >= n || candidate === v.previousPoolIndex) continue;
       next = candidate;
@@ -610,7 +616,15 @@ export class Engine {
       let correction = 0;
       if (Number.isFinite(f0)) {
         // The target in the material's own pitch space: the root, or the nearest scale note of the pitch as played.
-        const target = params.tune.mode === "scale" ? quantizeToScale(f0 + shift, params.tune.scale, params.tune.key) - shift : params.root;
+        let target = params.root;
+        if (params.tune.mode === "scale") {
+          const played = f0 + shift;
+          let note = quantizeToScale(played, params.tune.scale, params.tune.key);
+          // The note already on stays until the pitch is clearly nearer another: no flicker halfway between two.
+          if (Number.isFinite(v.scaleNote) && note !== v.scaleNote && Math.abs(played - v.scaleNote) < Math.abs(played - note) + SCALE_HYSTERESIS) note = v.scaleNote;
+          v.scaleNote = note;
+          target = note - shift;
+        }
         // What is kept of the material's movement: the slow drift and the fast modulation, each by its own amount; 平坦化 scales both.
         const slow = Number.isFinite(this.f0slow[k]) ? this.f0slow[k] : f0;
         const kept = params.wobble.keepDrift * (slow - target) + params.wobble.keepModulation * (f0 - slow);
@@ -624,7 +638,10 @@ export class Engine {
         correction = v.retuneCorr;
       } else v.retuneCorr = correction;
       const offset = shift + wobble + correction;
-      spacing = period * 2 ** (-offset / 12);
+      // The output period comes from the pitch itself where it is known, not from the mark spacing:
+      // the two disagree by some cents per period on a real voice, and the pool's jumps between
+      // periods would turn that into jitter. Without a pitch, the mark spacing stands in for it.
+      spacing = Number.isFinite(f0) ? this.sampleRate / (440 * 2 ** ((f0 + offset - 69) / 12)) : period * 2 ** (-offset / 12);
       alpha = this.formantAlpha(shift);
       gain = Math.sqrt((spacing * alpha) / period);
       if (params.wobble.micro) {

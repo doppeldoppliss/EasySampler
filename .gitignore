@@ -35,3 +35,4 @@ playwright-report
 
 # Listening reports (npm run listen)
 reports
+tools/tmp/

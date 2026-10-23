@@ -225,3 +225,20 @@ describe("buildKit", () => {
     expect(new TextDecoder().decode(list[5].data)).toContain("C2 = kick.wav");
   });
 });
+
+describe("exports with the sustain switched off", () => {
+  it("a loop WAV becomes a single one-shot WAV (no length in the name, no loop)", async () => {
+    const { source, cut, credit } = setup();
+    const off = { ...cut, params: { ...cut.params, sustainEnabled: false } };
+    const built = await buildOne({ baseName: "ore", source, cut: off, settings: { ...DEFAULT_EXPORT, format: "loop" }, credit });
+    expect(built.fileName).toBe("ore_D4.wav");
+    const chunks = readWavChunks(await built.blob.arrayBuffer());
+    expect(chunks.sampler?.loop).toBeUndefined();
+  });
+
+  it("refuses the Vital wavetable (it is made of the sustain)", async () => {
+    const { source, cut, credit } = setup();
+    const off = { ...cut, params: { ...cut.params, sustainEnabled: false } };
+    await expect(buildOne({ baseName: "ore", source, cut: off, settings: { ...DEFAULT_EXPORT, format: "wavetable" }, credit })).rejects.toThrow(/持続区間がオフ/);
+  });
+});

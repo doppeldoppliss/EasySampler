@@ -15,7 +15,7 @@
 
 import { pitchLabel } from "../analysis/pitch";
 import type { PitchTrack } from "../analysis/pyin";
-import { collapsedTime, expandedTime, normalizeRemoved, type OutputLayout } from "../instrument/layout";
+import { collapsedTime, expandedTime, hiddenParts, normalizeRemoved, type OutputLayout } from "../instrument/layout";
 import { clampMarkers } from "../instrument/markers";
 import type { Markers, TimeRange } from "../instrument/types";
 import { cssVar, el } from "./dom";
@@ -61,6 +61,10 @@ export class MaterialEditor {
   private material: EditorMaterial | null = null;
   private markers: Markers | null = null;
   private removed: TimeRange[] = [];
+  /** Which parts play (鳴らす部分); a part switched off is not shown. */
+  private parts = { sustain: true, tail: true };
+  /** What is closed up on screen: the removed stretches and the hidden parts. */
+  private collapsed: TimeRange[] = [];
   private root = 60;
   /** The note the file is tuned to: where the edited curve is drawn. */
   private target = 60;
@@ -108,6 +112,7 @@ export class MaterialEditor {
     this.material = material;
     this.selection = null;
     this.removed = [];
+    this.collapsed = [];
     this.view = { start: 0, end: this.displayDuration };
     this.playhead = null;
     this.draw();
@@ -117,11 +122,33 @@ export class MaterialEditor {
   setState(markers: Markers, root: number, flatten: number, target = root): void {
     this.markers = markers;
     this.removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
+    this.refreshCollapsed();
     this.root = root;
     this.target = target;
     this.flatten = flatten;
     this.clampView();
     this.draw();
+  }
+
+  /** Which parts play: the ones switched off disappear from the plot. */
+  setParts(parts: { sustain: boolean; tail: boolean }): void {
+    if (parts.sustain === this.parts.sustain && parts.tail === this.parts.tail) return;
+    this.parts = { ...parts };
+    this.refreshCollapsed();
+    // What is shown just got longer or shorter: show all of it.
+    this.view = { start: 0, end: this.displayDuration };
+    this.draw();
+    this.announceView();
+  }
+
+  private refreshCollapsed(): void {
+    const m = this.markers;
+    this.collapsed = m ? normalizeRemoved([...this.removed, ...hiddenParts(m, this.parts)], m.rangeStart, m.rangeEnd) : [];
+  }
+
+  /** A handle of a part that isn't shown can't be seen or grabbed. */
+  private hiddenHandle(handle: Handle): boolean {
+    return (!this.parts.sustain && handle === "sustainEnd") || (!this.parts.tail && (handle === "tailStart" || handle === "rangeEnd"));
   }
 
   setSelection(selection: TimeSelection | null): void {
@@ -149,17 +176,17 @@ export class MaterialEditor {
 
   /** The material's length as shown (removed stretches closed up). */
   get displayDuration(): number {
-    return collapsedTime(this.duration, this.removed);
+    return collapsedTime(this.duration, this.collapsed);
   }
 
   /** Source time → display time. */
   disp(t: number): number {
-    return collapsedTime(t, this.removed);
+    return collapsedTime(t, this.collapsed);
   }
 
   /** Display time → source time. */
   src(d: number): number {
-    return expandedTime(d, this.removed);
+    return expandedTime(d, this.collapsed);
   }
 
   /** The source time at a pointer's x (never inside a removed stretch, clamped to the material). */
@@ -259,6 +286,7 @@ export class MaterialEditor {
     let best: Handle | null = null;
     let bestDistance = reach;
     for (const handle of HANDLE_ORDER) {
+      if (this.hiddenHandle(handle)) continue;
       const hx = this.xCss(this.markers[handle], box.width);
       let distance = Math.abs(hx - x);
       // Sustain end and tail start often coincide: the lower half of the strip grabs the tail.
@@ -346,6 +374,7 @@ export class MaterialEditor {
     if (this.dragging?.pointerId === event.pointerId && this.markers) {
       const markers = this.moved(this.dragging.handle, this.timeAt(event.clientX));
       this.markers = markers;
+      this.refreshCollapsed();
       this.draw();
       this.onMarkersChange(markers, false);
       return;
@@ -528,7 +557,7 @@ export class MaterialEditor {
     line(this.target, pitchLabel(this.target), cssVar("--accent"), [], "right", false);
 
     // The pitch curves, broken at removed stretches and outside the window.
-    const inRemoved = (t: number) => this.removed.some((r) => t >= r.start && t < r.end);
+    const inRemoved = (t: number) => this.collapsed.some((r) => t >= r.start && t < r.end);
     const curve = (value: (pitch: number) => number, from: number, to: number) => {
       g.beginPath();
       let drawing = false;
@@ -566,7 +595,7 @@ export class MaterialEditor {
       [markers.rangeStart, markers.attack, "--band-head", "頭部"],
       [markers.sustainStart, markers.sustainEnd, "--band-sustain", "持続区間"],
       [markers.tailStart, markers.rangeEnd, "--band-tail", "語尾"],
-    ];
+    ].filter(([, , color]) => (color !== "--band-sustain" || this.parts.sustain) && (color !== "--band-tail" || this.parts.tail)) as [number, number, string, string][];
     g.fillStyle = cssVar("--strip");
     g.fillRect(0, plotHeight, width, strip);
     g.font = `${11 * dpr}px system-ui, sans-serif`;
@@ -663,6 +692,7 @@ export class MaterialEditor {
     // The range handles (the cut) are bigger, with a bracket at the top,
     // since they are the first thing to reach for.
     for (const handle of HANDLE_ORDER) {
+      if (this.hiddenHandle(handle)) continue;
       const hx = Math.round(x(markers[handle]));
       if (hx < -12 * dpr || hx > width + 12 * dpr) continue;
       const active = this.dragging?.handle === handle || this.hover === handle;

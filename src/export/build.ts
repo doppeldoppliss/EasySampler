@@ -51,11 +51,16 @@ function creditLine(credit: Credit): string {
 export async function buildEntries(input: BuildInput, progress?: Progress): Promise<{ entries: ZipEntry[]; preview: Rendered; summary: string }> {
   const { source, cut, settings, credit } = input;
   const base = safeBaseName(input.baseName);
-  const oneShot = cut.params.sustainMode === "none";
+  // Nothing to hold (a one-shot, or the sustain switched off): one WAV, no length in its name.
+  const oneShot = cut.params.sustainMode === "none" || !cut.params.sustainEnabled;
   const holdSec = exportLengthSec(settings);
   const info = wavInfo(credit);
 
-  if (settings.format === "single" || oneShot) {
+  if (settings.format === "wavetable" && !cut.params.sustainEnabled) {
+    throw new Error("持続区間がオフなので、Vital 用ウェーブテーブルは作れません。「鳴らす部分」で持続区間を ON にしてください");
+  }
+
+  if (settings.format === "single" || (oneShot && settings.format !== "wavetable")) {
     const rendered = renderNote(source, cut.markers, cut.params, cut.note, holdSec, settings.bpm);
     const fileName = exportFileName(base, cut.note, settings, oneShot);
     const data = new Uint8Array(encodeWavBytes(rendered.channels, rendered.sampleRate, info, { unityNote: cut.note }));
@@ -155,7 +160,7 @@ export async function buildKit(inputs: readonly BuildInput[], kitName: string, f
   const used = new Set<string>();
   for (let i = 0; i < inputs.length; i++) {
     const { source, cut, settings, credit } = inputs[i];
-    const oneShot = cut.params.sustainMode === "none";
+    const oneShot = cut.params.sustainMode === "none" || !cut.params.sustainEnabled;
     const rendered = renderNote(source, cut.markers, cut.params, cut.note, exportLengthSec(settings), settings.bpm);
     let fileName = `${safeBaseName(inputs[i].baseName)}.wav`;
     for (let n = 2; used.has(fileName); n++) fileName = `${safeBaseName(inputs[i].baseName)}_${n}.wav`;

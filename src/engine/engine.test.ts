@@ -194,3 +194,15 @@ describe("sustain on / off", () => {
     expect(sec).toBeLessThan(headSec + tailSec + 0.1);
   });
 });
+
+describe("sustain off: letting go early", () => {
+  it("doesn't cut the head short (it plays out like a one-shot)", () => {
+    const material = demoSyllable(SR);
+    const { engine, analysis } = setup(material, { sustainEnabled: false, tail: { enabled: false, limit: "unlimited" } });
+    const out = play(engine, 62, 0.05, 1);
+    let last = 0;
+    for (let i = 0; i < out.length; i++) if (Math.abs(out[i]) > 1e-4) last = i;
+    const headSec = analysis.markers.sustainStart - analysis.markers.rangeStart;
+    expect(last / SR).toBeGreaterThan(headSec * 0.8);
+  });
+});

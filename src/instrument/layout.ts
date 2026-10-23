@@ -41,6 +41,25 @@ export function normalizeRemoved(ranges: readonly TimeRange[] | undefined, range
  * editor shows the material as it will play). A source time inside a
  * removed stretch lands on the seam.
  */
+/**
+ * The stretches the part switches leave out (鳴らす部分): with the sustain
+ * off, from the sustain's start to where the tail starts (or to the end when
+ * the tail is off too); with only the tail off, from the sustain's end to the
+ * end. The head always plays.
+ */
+export function hiddenParts(markers: Markers, parts: { sustain: boolean; tail: boolean }): TimeRange[] {
+  const tailFrom = Math.max(markers.tailStart, markers.sustainStart);
+  let range: TimeRange | null = null;
+  if (!parts.sustain) range = { start: markers.sustainStart, end: parts.tail ? tailFrom : markers.rangeEnd };
+  else if (!parts.tail) range = { start: markers.sustainEnd, end: markers.rangeEnd };
+  return range && range.end > range.start ? [range] : [];
+}
+
+/** What the switches in `params` hide. */
+export function hiddenPartsOf(markers: Markers, params: InstrumentParams): TimeRange[] {
+  return hiddenParts(markers, { sustain: params.sustainEnabled, tail: params.tail.enabled && params.tail.limit !== "none" });
+}
+
 export function collapsedTime(t: number, removed: readonly TimeRange[]): number {
   let out = t;
   for (const r of removed) {

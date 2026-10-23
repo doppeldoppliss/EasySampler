@@ -43,7 +43,8 @@ export function renderNote(source: PreparedSource, markers: Markers, params: Ins
   engine.setTempo(bpm);
   engine.setSource(source);
   engine.setInstrument(markers, { ...params, maxVoices: 1 });
-  const oneShot = params.sustainMode === "none";
+  // Nothing to hold: a one-shot, or the sustain switched off.
+  const oneShot = params.sustainMode === "none" || !params.sustainEnabled;
   const releaseAt = oneShot ? Infinity : Math.max(0, holdSec - (params.tail.enabled ? 0 : params.amp.release)) * rate;
   const limit = Math.ceil((oneShot ? MAX_ONESHOT_SEC : holdSec + MAX_AFTER_SEC) * rate);
   const fx = new FxChain(rate);

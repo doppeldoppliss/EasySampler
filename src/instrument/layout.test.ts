@@ -4,7 +4,7 @@ import { Engine } from "../engine/engine";
 import { analyzeMaterial, prepareSource } from "../engine/prepare";
 import { renderNote } from "../export/render";
 import { demoSyllable } from "../testsignals/synthVoice";
-import { collapsedTime, expandedTime, normalizeRemoved, outputLayout, removedWithin, usedBetween } from "./layout";
+import { collapsedTime, expandedTime, hiddenParts, normalizeRemoved, outputLayout, removedWithin, usedBetween } from "./layout";
 import { DEFAULT_PARAMS, type InstrumentParams, type Markers } from "./types";
 
 const SR = 44100;
@@ -150,5 +150,14 @@ describe("collapsed / expanded time (the editor's view with removals closed up)"
     expect(expandedTime(0.4, removed)).toBeCloseTo(0.7);
     expect(expandedTime(0.7, removed)).toBeCloseTo(1.0);
     for (const t of [0, 0.15, 0.35, 0.45, 0.8, 1.2]) expect(expandedTime(collapsedTime(t, removed), removed)).toBeCloseTo(t);
+  });
+});
+
+describe("hiddenParts (鳴らす部分)", () => {
+  it("leaves out the sustain, the tail, or both — never the head", () => {
+    expect(hiddenParts(markers, { sustain: true, tail: true })).toEqual([]);
+    expect(hiddenParts(markers, { sustain: false, tail: true })).toEqual([{ start: 0.3, end: 0.6 }]);
+    expect(hiddenParts(markers, { sustain: true, tail: false })).toEqual([{ start: 0.6, end: 1.1 }]);
+    expect(hiddenParts(markers, { sustain: false, tail: false })).toEqual([{ start: 0.3, end: 1.1 }]);
   });
 });

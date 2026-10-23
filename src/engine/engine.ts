@@ -345,6 +345,8 @@ export class Engine {
   private release(v: Voice): void {
     v.released = true;
     const params = this.params!;
+    // Sustain off: the head (and the tail) play out whatever the key does.
+    if (!params.sustainEnabled) return;
     if (this.tailOn() && params.sustainMode !== "none") {
       // The tail plays the material's own end at full level; the envelope holds.
       if (v.phase === Phase.Sustain) this.jumpToTail(v);

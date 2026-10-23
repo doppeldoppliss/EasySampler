@@ -18,7 +18,7 @@ import { buildBatch, buildKit, buildOne, type Built, type BuildInput } from "./e
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
 import { exportFileName, safeBaseName } from "./export/render";
 import { parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
-import { normalizeRemoved, outputLayout } from "./instrument/layout";
+import { hiddenPartsOf, normalizeRemoved, outputLayout } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
 import {
   DEFAULT_EXPORT,
@@ -1212,6 +1212,7 @@ function refreshExport(): void {
   built = null;
 
   if (markers) {
+    editor.setParts({ sustain: params.sustainEnabled, tail: params.tail.enabled && params.tail.limit !== "none" });
     editor.setState(markers, params.root, params.flatten, note);
     editor.setLayout(outputLayout(markers, params, held), params.wobble.vibratoCents > 0 ? { depthCents: params.wobble.vibratoCents, rateHz: params.wobble.vibratoHz, delaySec: params.wobble.vibratoDelaySec } : null);
   }
@@ -1348,7 +1349,8 @@ async function playOriginal(): Promise<void> {
   if (!material || !markers) return;
   songPanel.stop();
   const rate = material.sampleRate;
-  const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
+  // Left out: the removed stretches and the parts switched off.
+  const removed = normalizeRemoved([...(markers.removed ?? []), ...hiddenPartsOf(markers, params)], markers.rangeStart, markers.rangeEnd);
   const pieces: [number, number][] = [];
   let at = markers.rangeStart;
   for (const r of removed) {

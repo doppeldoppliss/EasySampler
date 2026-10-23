@@ -101,7 +101,7 @@ v1.2 で決めた中身のうち、**素材の解析(★2)、平坦化スライ�
 | **単音 WAV** | 目標の音名の高さで、指定の長さに伸ばした1本の WAV。16bit、サンプルレートは素材のまま(44.1k / 48k)。ファイル名に音名・拍数・BPM | REAPER(RS5K)、Vital(PitchSplice)、GarageBand の Sampler、Koala、Logic、Cubasis など**すべてのサンプラー** | **Phase 1(MVP)** |
 | **ループ WAV** | 持続区間を長めに作り、安定した部分にループ範囲を埋め込む(WAV の `smpl` チャンク)。クロスフェード付き | ループ点を読むサンプラー(Logic / Quick Sampler、RS5K ほか) | Phase 2 |
 | **マルチサンプル音源** | 音域ぶん(例: ±1 オクターブを 3 半音おき)の WAV を PSOLA で個別に作り、**SFZ** と **Decent Sampler(.dspreset)** の定義を付けて zip にする。各 WAV は長さ保持なので「高音で途中で切れる」が起きない | REAPER(sfz: RS5K 代替、sforzando)、**iOS の Decent Sampler(無料・AUv3)**、AudioLayer など | Phase 2 |
-| **Vital 用ウェーブテーブル** | 持続区間から 1 周期ずつ取り出し、2048 サンプルに揃えたフレームを並べた WAV(〜256 フレーム) | Vital の「Import as Wavetable」。Serum など同じ慣習の他シンセ | Phase 3(論点 D) |
+| **Vital 用ウェーブテーブル** | 持続区間から 1 周期ずつ取り出し、2048 サンプルに揃えたフレームを並べた WAV(〜256 フレーム) | Vital の OSC へドラッグ・「Import Wavetable」(`clm ` チャンクでフレーム長を伝える)。Serum など同じ慣習の他シンセ | Phase 3(論点 D) |
 | 設定の保存・復元 | 切り出し範囲・マーカー・パラメータだけの小さな JSON(素材は含めない)。同じ素材を開き直せば設定が戻る | 自分用 | Phase 2 |
 | **キット音源**(ワンショット一括) | 複数ファイルを一度に開くと素材リストになる。各ファイル(の各区間)を 1 鍵ずつ並べた SFZ + .dspreset と WAV の zip。SFZ は `loop_mode=one_shot`、リリースは 1.5 秒以上。調整していない素材は既定でワンショット(録音のまま、その音程)。開いて調整した素材は保存された設定どおりに書き出す。60 秒を超える素材は開いて範囲を選ばない限り飛ばす | REAPER(sforzando)、Decent Sampler(iOS / PC) | Phase 4 ✅ |
 | **一括 WAV**(ワンショット一括) | 同じ素材リストから、各ファイルを単音 WAV にして 1 つの zip に | どのサンプラーでも | Phase 4 ✅ |
@@ -186,5 +186,5 @@ Engine は Worklet・テスト・計測で共通の形になっているので�
 - GarageBand(iOS)の Sampler に、ファイル App から直接 WAV を読み込む手順の現行版(Apple の案内はトラックへの読み込みが中心)
 - Decent Sampler(iOS)で `.dspreset` の zip をファイル App から開く手順の現行版(フォーラムの報告のみ)
 - 単音 WAV の音質が VocalShifter LE の出力と比べてどうか(論点 A に関わる。実素材で聴き比べる)
-- Vital の「Import as Wavetable」の 2048 サンプル / フレームの要件(フォーラム情報のみ。実機で試す)
+- Vital の wavetable 読み込み(ソースを読んだ: `clm ` チャンクの 2 番目の数の先頭が 0 なら 2048 サンプルごとに 1 フレーム、無ければ最初と最後のフレームの間を周波数補間。実機では未確認)
 - 参考記事にある RS5K の設定値(画像のみで文章がない。ループ WAV の `smpl` をどう読むかに関わる)

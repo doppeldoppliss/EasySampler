@@ -80,6 +80,12 @@ describe("buildWavetable", () => {
     expect(chunks.channels).toBe(1);
     expect(chunks.frames % FRAME_SIZE).toBe(0);
     expect(chunks.info.ICMT).toContain("2048 samples/frame");
+    // The tag Serum and Vital read: frame size, and "0" = one frame per block (no morphing between frames); even-sized.
+    expect(chunks.clm).toBe("<!>2048 00000000 wavetable (MADDAW)");
+    const bytes = new Uint8Array(await built.blob.arrayBuffer());
+    const at = bytes.findIndex((_, i) => bytes[i] === 0x63 && bytes[i + 1] === 0x6c && bytes[i + 2] === 0x6d && bytes[i + 3] === 0x20);
+    expect(at).toBe(36); // right after fmt, before data
+    expect(new DataView(bytes.buffer).getUint32(at + 4, true) % 2).toBe(0);
     // The preview sounds at the note.
     const pitch = rootPitch(analyzePitch(built.preview.channels[0], SR))!;
     expect(Math.abs(pitch.midi - 62)).toBeLessThan(0.3);

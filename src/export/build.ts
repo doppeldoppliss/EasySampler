@@ -72,11 +72,11 @@ export async function buildEntries(input: BuildInput, progress?: Progress): Prom
     const table = buildWavetable(source, cut.markers);
     if (!table) throw new Error("ウェーブテーブルを作れませんでした: 持続区間に有声の周期がありません");
     const fileName = `${base}_wavetable.wav`;
-    const data = new Uint8Array(encodeWavBytes([table.samples], source.sampleRate, { ...info, ICMT: [info.ICMT, `wavetable ${FRAME_SIZE} samples/frame, ${table.frames} frames`].filter(Boolean).join(" / ") }));
+    const data = new Uint8Array(encodeWavBytes([table.samples], source.sampleRate, { ...info, ICMT: [info.ICMT, `wavetable ${FRAME_SIZE} samples/frame, ${table.frames} frames`].filter(Boolean).join(" / ") }, undefined, { wavetableFrame: FRAME_SIZE }));
     // The preview plays the frames at the note's pitch: a few periods each, in order.
     const preview = previewWavetable(table, cut.note, source.sampleRate);
     await progress?.(1, 1);
-    return { entries: [{ name: fileName, data }], preview, summary: `${fileName}(${table.frames} フレーム × ${FRAME_SIZE} サンプル。Vital の Import as Wavetable で読み込みます)` };
+    return { entries: [{ name: fileName, data }], preview, summary: `${fileName}(${table.frames} フレーム × ${FRAME_SIZE} サンプル。Vital の OSC にドラッグするか、ウェーブテーブル編集画面の Import Wavetable で読み込みます)` };
   }
 
   if (settings.format === "loop") {
@@ -194,12 +194,19 @@ export async function buildBatch(inputs: readonly BuildInput[], settingsJson: st
   const total = inputs.reduce((n, input) => n + (input.settings.format === "multisample" && input.cut.params.sustainMode !== "none" ? planZones(input.cut.note).length : 1), 0);
   // (a one-shot ignores the format; a wavetable is one file like a single WAV)
   let done = 0;
+  const used = new Set<string>();
   for (const input of inputs) {
     const built = await buildEntries(input, async (d, t) => {
       await progress?.(done + d, total);
       if (d === t) done += t;
     });
-    entries.push(...built.entries);
+    // Two cuts with the same name would land on the same path: the later one is numbered.
+    for (const entry of built.entries) {
+      let name = entry.name;
+      for (let n = 2; used.has(name); n++) name = entry.name.replace(/(\/|^)([^/]+?)(\.[a-z0-9]+)?$/i, (_m, sep, stem, ext = "") => `${sep}${stem}_${n}${ext}`);
+      used.add(name);
+      entries.push({ ...entry, name });
+    }
     preview ??= built.preview;
   }
   if (settingsJson !== null) entries.push({ name: "settings.json", data: new TextEncoder().encode(settingsJson) });

@@ -13,17 +13,23 @@ export interface WavSampler {
   loop?: { start: number; end: number };
 }
 
-export function encodeWav(channels: readonly Float32Array[], sampleRate: number, info?: WavInfo, sampler?: WavSampler): Blob {
-  return new Blob([encodeWavBytes(channels, sampleRate, info, sampler)], { type: "audio/wav" });
+export interface WavExtras {
+  /** A wavetable's frame size: written as the `clm ` chunk Serum and Vital read (Vital then steps through the frames as cut, instead of morphing between the first and the last). */
+  wavetableFrame?: number;
 }
 
-export function encodeWavBytes(channels: readonly Float32Array[], sampleRate: number, info?: WavInfo, sampler?: WavSampler): ArrayBuffer {
+export function encodeWav(channels: readonly Float32Array[], sampleRate: number, info?: WavInfo, sampler?: WavSampler, extras?: WavExtras): Blob {
+  return new Blob([encodeWavBytes(channels, sampleRate, info, sampler, extras)], { type: "audio/wav" });
+}
+
+export function encodeWavBytes(channels: readonly Float32Array[], sampleRate: number, info?: WavInfo, sampler?: WavSampler, extras?: WavExtras): ArrayBuffer {
   const count = channels.length;
   const frames = channels[0]?.length ?? 0;
   const dataBytes = frames * count * 2;
   const list = encodeInfo(info);
   const smpl = encodeSampler(sampler, sampleRate);
-  const buffer = new ArrayBuffer(44 + dataBytes + (dataBytes & 1) + list.byteLength + smpl.byteLength);
+  const clm = encodeClm(extras?.wavetableFrame);
+  const buffer = new ArrayBuffer(44 + clm.byteLength + dataBytes + (dataBytes & 1) + list.byteLength + smpl.byteLength);
   const view = new DataView(buffer);
   const text = (at: number, value: string) => {
     for (let i = 0; i < value.length; i++) view.setUint8(at + i, value.charCodeAt(i));
@@ -39,9 +45,12 @@ export function encodeWavBytes(channels: readonly Float32Array[], sampleRate: nu
   view.setUint32(28, sampleRate * count * 2, true);
   view.setUint16(32, count * 2, true);
   view.setUint16(34, 16, true);
-  text(36, "data");
-  view.setUint32(40, dataBytes, true);
-  let at = 44;
+  // (the wavetable chunk sits before the data, where Serum puts it)
+  new Uint8Array(buffer, 36).set(new Uint8Array(clm));
+  const dataAt = 36 + clm.byteLength;
+  text(dataAt, "data");
+  view.setUint32(dataAt + 4, dataBytes, true);
+  let at = dataAt + 8;
   for (let n = 0; n < frames; n++) {
     for (let c = 0; c < count; c++) {
       const v = Math.max(-1, Math.min(1, channels[c][n]));
@@ -53,6 +62,24 @@ export function encodeWavBytes(channels: readonly Float32Array[], sampleRate: nu
   new Uint8Array(buffer, at).set(new Uint8Array(smpl));
   at += smpl.byteLength;
   new Uint8Array(buffer, at).set(new Uint8Array(list));
+  return buffer;
+}
+
+/** The `clm ` chunk: Serum's wavetable tag, "<!>2048 00000000 wavetable (…)". The 2nd field's first digit is
+ *  how Vital treats the frames (0 = each 2048-sample block is a frame, no interpolation). Even-sized: Vital's chunk
+ *  walker does not pad, so an odd chunk would throw every chunk after it off. */
+function encodeClm(frameSize?: number): ArrayBuffer {
+  if (!frameSize) return new ArrayBuffer(0);
+  let tag = `<!>${frameSize} 00000000 wavetable (MADDAW)`;
+  if (tag.length & 1) tag += " ";
+  const buffer = new ArrayBuffer(8 + tag.length);
+  const view = new DataView(buffer);
+  const text = (at: number, value: string) => {
+    for (let i = 0; i < value.length; i++) view.setUint8(at + i, value.charCodeAt(i));
+  };
+  text(0, "clm ");
+  view.setUint32(4, tag.length, true);
+  text(8, tag);
   return buffer;
 }
 
@@ -116,11 +143,12 @@ function encodeSampler(sampler: WavSampler | undefined, sampleRate: number): Arr
 }
 
 /** Reads the INFO tags and the sampler chunk back out of a WAV (for tests and for showing a file's credit). */
-export function readWavChunks(bytes: ArrayBuffer): { info: WavInfo; sampler?: WavSampler; frames: number; channels: number; sampleRate: number } {
+export function readWavChunks(bytes: ArrayBuffer): { info: WavInfo; sampler?: WavSampler; clm?: string; frames: number; channels: number; sampleRate: number } {
   const view = new DataView(bytes);
   const tag = (at: number) => String.fromCharCode(view.getUint8(at), view.getUint8(at + 1), view.getUint8(at + 2), view.getUint8(at + 3));
   const info: WavInfo = {};
   let sampler: WavSampler | undefined;
+  let clm: string | undefined;
   let frames = 0;
   let channels = 1;
   let sampleRate = 0;
@@ -133,6 +161,8 @@ export function readWavChunks(bytes: ArrayBuffer): { info: WavInfo; sampler?: Wa
       sampleRate = view.getUint32(at + 12, true);
     } else if (id === "data") {
       frames = size / (channels * 2);
+    } else if (id === "clm ") {
+      clm = new TextDecoder().decode(new Uint8Array(bytes, at + 8, size)).trim();
     } else if (id === "smpl") {
       sampler = { unityNote: view.getUint32(at + 20, true) };
       if (view.getUint32(at + 36, true) > 0) sampler.loop = { start: view.getUint32(at + 52, true), end: view.getUint32(at + 56, true) + 1 };
@@ -149,7 +179,7 @@ export function readWavChunks(bytes: ArrayBuffer): { info: WavInfo; sampler?: Wa
     }
     at += 8 + size + (size & 1);
   }
-  return { info, sampler, frames, channels, sampleRate };
+  return { info, sampler, clm, frames, channels, sampleRate };
 }
 
 export function readWavInfo(bytes: ArrayBuffer): WavInfo {

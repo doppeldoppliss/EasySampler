@@ -16,7 +16,7 @@ import { mixToMono, prepareSource, rootForMarkers, type MaterialAnalysis } from 
 import type { PitchTrack } from "./analysis/pyin";
 import { buildBatch, buildKit, buildOne, type Built, type BuildInput } from "./export/build";
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
-import { exportFileName, safeBaseName } from "./export/render";
+import { exportFileName, safeBaseName, stripExtension } from "./export/render";
 import { parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
 import { hiddenPartsOf, normalizeRemoved, outputLayout } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
@@ -891,7 +891,7 @@ const FORMATS: { id: ExportFormat; label: string; note: string }[] = [
   { id: "single", label: "単音 WAV", note: "1本の WAV。どのサンプラーでも読み込めます。" },
   { id: "loop", label: "ループ WAV(ループ点入り)", note: "持続区間を長めに作り、ループ範囲を WAV に埋め込みます(smpl)。ループ点を読むサンプラー(Logic、Kontakt、sforzando など)では、いくらでも伸ばせます。" },
   { id: "multisample", label: "マルチサンプル音源(zip: SFZ + Decent Sampler)", note: "±1 オクターブを 3 半音おきに、それぞれの高さで作った WAV と、.sfz / .dspreset の定義を zip にまとめます。高音で途切れず、低音で間延びしません。" },
-  { id: "wavetable", label: "Vital 用ウェーブテーブル(WAV)", note: "持続区間の 1 周期ずつを 2048 サンプルに揃えて並べた WAV(最大 256 フレーム)。Vital の OSC に「Import as Wavetable」で読み込むと、素材の声色そのものをウェーブテーブルとして掃引できます。音名と長さは使いません。" },
+  { id: "wavetable", label: "Vital 用ウェーブテーブル(WAV)", note: "持続区間の 1 周期ずつを 2048 サンプルに揃えて並べた WAV(最大 256 フレーム)。Vital の OSC にドラッグ(または Import Wavetable)で読み込むと、素材の声色そのものをウェーブテーブルとして掃引できます。音名と長さは使いません。" },
 ];
 const DESTINATIONS: { id: Destination; label: string; help: (n: string, format: ExportFormat) => string }[] = [
   {
@@ -900,24 +900,24 @@ const DESTINATIONS: { id: Destination; label: string; help: (n: string, format: 
     help: (n, format) =>
       format === "multisample"
         ? "zip を展開し、.sfz を sforzando などの SFZ 対応サンプラーに、.dspreset を Decent Sampler に読み込みます。REAPER では RS5K の代わりに sforzando(無料)を使います。"
-        : `サンプラー(REAPER の RS5K、Koala、Logic など)に読み込み、基準音(ルート)を ${n} にします。ファイル名と WAV の中にも音名が入っています。`,
+        : `サンプラー(REAPER の RS5K、Logic など)に読み込み、基準音(ルート)を ${n} にします。ファイル名と WAV の中にも音名が入っています。Koala には基準音がないので、鳴らす高さは手で合わせます。`,
   },
   {
     id: "garageband",
     label: "GarageBand(iPhone / iPad)",
-    help: (n) => `共有シートで「"ファイル"に保存」。GarageBand の Sampler で「読み込む」からそのファイルを選びます。鍵盤の ${n} が元の高さです。44.1kHz / 16bit で出します。`,
+    help: (n) => `共有シートで「"ファイル"に保存」。GarageBand の Sampler で「読み込む」からそのファイルを選びます。元の高さの鍵は GarageBand が決めます(Tune 画面で合わせます。選んだ音名 ${n} はファイル名に入っています)。44.1kHz / 16bit で出します。`,
   },
   {
     id: "decent",
     label: "Decent Sampler(iPhone / iPad・PC、無料)",
-    help: () => "iPhone / iPad: zip を「ファイル」App で展開し、.dspreset をタップすると Decent Sampler で開きます。PC: File → Load Preset で .dspreset を選びます。",
+    help: () => "できる .dslibrary(中身は zip)を、iPhone / iPad では「ファイル」App からタップして Decent Sampler に取り込みます。PC では File → Install DecentSampler Library で選びます。",
   },
   {
     id: "vital",
     label: "Vital",
     help: (_n, format) =>
       format === "wavetable"
-        ? "OSC の波形表示のメニューから Import as Wavetable を選び、この WAV を読み込みます(1 フレーム = 2048 サンプル)。ウェーブテーブル位置(Frame)を LFO やエンベロープで動かすと、声色が時間方向に変わります。"
+        ? "この WAV を Vital の OSC にドラッグするか、ウェーブテーブル編集画面(波形をクリック)の Import Wavetable で読み込みます(1 フレーム = 2048 サンプル。フレームの切れ目は WAV に書いてあります)。ウェーブテーブル位置(Frame)を LFO やエンベロープで動かすと、声色が時間方向に変わります。"
         : "WAV を OSC にドラッグし、ピッチモードを Pitch Splice にします。LFO やエンベロープで再生位置を動かすと、サンプラーのように使えます。",
   },
 ];
@@ -989,7 +989,7 @@ const saveSettingsButton = button("設定を保存(JSON)", "small", () => {
   if (!material) return;
   const json = serializeSettings(settingsBody());
   const blob = new Blob([json], { type: "application/json" });
-  const name = `${safeBaseName(material.name)}.maddaw.json`;
+  const name = `${safeBaseName(stripExtension(material.name))}.maddaw.json`;
   if (IOS && canShareFiles()) shareFile(blob, name, name).catch(() => downloadFile(blob, name));
   else downloadFile(blob, name);
 });
@@ -1315,7 +1315,7 @@ async function queueInputs(): Promise<{ inputs: BuildInput[]; skipped: string[] 
         ? file.cuts.map((c) => ({ ...c, markers: clampMarkers({ ...c.markers, rangeEnd: Math.min(c.markers.rangeEnd, analysis.durationSec) }) }))
         : [cutFor(analysis.track, analysis.markers, "区間 1", DEFAULT_PARAMS, "synth", queueOneShot.checked)];
       const itemCredit = file?.credit ?? { title: "", url: "", timecode: "", memo: "" };
-      const base = safeBaseName(item.file.name);
+      const base = safeBaseName(stripExtension(item.file.name));
       for (const cut of itemCuts) {
         inputs.push({ baseName: itemCuts.length > 1 ? `${base}_${cut.name}` : base, source, cut, settings: { ...exportSettings, format: "single" }, credit: itemCredit });
       }
@@ -1351,8 +1351,9 @@ async function deliverQueue(kind: "wavs" | "kit"): Promise<void> {
         queueStatus.textContent = `作成中… ${done} / ${total}`;
         await yieldToScreen();
       };
-      const kitName = `${safeBaseName(queue[0].file.name)}_kit`;
-      built = kind === "kit" ? await buildKit(inputs.inputs, kitName, Number(queueFirstKey.value), progress) : await buildBatch(inputs.inputs, null, `${safeBaseName(queue[0].file.name)}_など${queue.length}件`, progress);
+      const first = safeBaseName(stripExtension(queue[0].file.name));
+      built = kind === "kit" ? await buildKit(inputs.inputs, `${first}_kit`, Number(queueFirstKey.value), progress) : await buildBatch(inputs.inputs, null, `${first}_など${queue.length}件`, progress);
+      if (kind === "kit") built = forDestination(built);
       builtQueue = { key, result: built, skipped };
     }
     const note = skipped.length ? ` — 飛ばしたもの: ${skipped.join("、")}` : "";
@@ -1622,7 +1623,8 @@ function refreshExport(): void {
 
 function baseNameFor(cut: Cut): string {
   if (!material) return "material";
-  return cuts.length > 1 ? `${safeBaseName(material.name)}_${cut.name}` : safeBaseName(material.name);
+  const base = safeBaseName(stripExtension(material.name));
+  return cuts.length > 1 ? `${base}_${cut.name}` : base;
 }
 
 function currentFileName(): string {
@@ -1675,11 +1677,17 @@ async function buildCurrent(quiet = false): Promise<Built | null> {
         await yieldToScreen();
       }
     });
-    built = { key, result };
-    return result;
+    built = { key, result: forDestination(result) };
+    return built.result;
   } finally {
     building = false;
   }
+}
+
+/** Decent Sampler takes the instrument folder as a zip called .dslibrary (on an iPhone that is the only way in). */
+function forDestination(result: Built): Built {
+  if (exportSettings.destination === "decent" && result.fileName.endsWith(".zip")) return { ...result, fileName: result.fileName.replace(/\.zip$/, ".dslibrary") };
+  return result;
 }
 
 let prebuildTimer = 0;

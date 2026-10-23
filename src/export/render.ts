@@ -135,9 +135,19 @@ export function fileNoteName(midi: number): string {
   return `${NOTE_NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
 }
 
-/** A name safe for every file system; falls back to "material". */
+/** A file's name without its extension ("take.1.wav" → "take.1"). */
+export function stripExtension(fileName: string): string {
+  return fileName.replace(/\.[A-Za-z0-9]{1,5}$/, "");
+}
+
+/** A name safe for every file system (characters, Windows' reserved names, trailing dots); falls back to "material". */
 export function safeBaseName(name: string): string {
-  return name.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim() || "material";
+  const cleaned = name
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
+    .replace(/[. ]+$/, "")
+    .trim();
+  if (!cleaned) return "material";
+  return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(cleaned) ? `${cleaned}_` : cleaned;
 }
 
 /** `ore_C4_2beat@165.wav` — the material's name, the note, and how long. */

@@ -75,9 +75,8 @@ export function dspresetText(zones: readonly Zone[], meta: MultisampleMeta): str
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const samples = zones
     .map((zone) => {
-      const loop = zone.loop
-        ? ` loopEnabled="true" loopStart="${zone.loop.start}" loopEnd="${zone.loop.end - 1}" loopCrossfade="${zone.loop.crossfade}"`
-        : ` loopEnabled="false"`;
+      // (the crossfade is already in the audio, so the player adds none; a hit plays out whatever the key does)
+      const loop = zone.loop ? ` loopEnabled="true" loopStart="${zone.loop.start}" loopEnd="${zone.loop.end - 1}" loopCrossfade="0"` : zone.oneShot ? ` loopEnabled="false" ampEnvEnabled="false"` : ` loopEnabled="false"`;
       return `      <sample path="${esc(`${meta.samplesDir}/${zone.fileName}`)}" rootNote="${zone.note}" loNote="${zone.lowKey}" hiNote="${zone.highKey}"${loop} />`;
     })
     .join("\n");
@@ -113,8 +112,8 @@ export function readmeText(meta: MultisampleMeta, zones: readonly Zone[], kind: 
     `${meta.name}.sfz(REAPER の ReaSamplOmatic5000 の代わりに sforzando など SFZ 対応サンプラーで)、`,
     `${meta.name}.dspreset(Decent Sampler。Windows / Mac / iPhone / iPad、無料)が入っています。`,
     "",
-    "iPhone / iPad: この zip を「ファイル」App で展開し、.dspreset をタップすると Decent Sampler で開きます。",
-    "PC: Decent Sampler の File → Load Preset、または sforzando に .sfz をドラッグします。",
+    "iPhone / iPad: この zip を .dslibrary に名前を変えて(MADDAW の読み込む先で Decent Sampler を選ぶと最初からその名前です)「ファイル」App からタップすると、Decent Sampler に取り込まれます。",
+    "PC: Decent Sampler の File → Install DecentSampler Library で .dslibrary(zip)を選ぶか、展開して File → Load Preset で .dspreset を選びます。sforzando には .sfz をドラッグします。",
     "",
     meta.credit ? `出典: ${meta.credit}` : "",
     "",

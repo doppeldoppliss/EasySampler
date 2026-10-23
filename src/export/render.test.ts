@@ -4,7 +4,7 @@ import { rootPitch } from "../analysis/rootPitch";
 import { analyzeMaterial, prepareSource } from "../engine/prepare";
 import { DEFAULT_EXPORT, DEFAULT_FX, DEFAULT_PARAMS, PRESETS, exportLengthSec, type InstrumentParams } from "../instrument/types";
 import { demoSyllable } from "../testsignals/synthVoice";
-import { exportFileName, renderNote } from "./render";
+import { exportFileName, renderNote, safeBaseName, stripExtension } from "./render";
 
 const SR = 44100;
 
@@ -85,6 +85,19 @@ describe("renderNote (the exported file)", () => {
   });
 });
 
+describe("file names", () => {
+  it("keeps dots inside a name, strips one extension, and avoids what Windows refuses", () => {
+    expect(stripExtension("take.1.wav")).toBe("take.1");
+    expect(stripExtension("声")).toBe("声");
+    expect(safeBaseName("a/b:c*d?e\"f<g>h|i")).toBe("a_b_c_d_e_f_g_h_i");
+    expect(safeBaseName("name. ")).toBe("name");
+    expect(safeBaseName("aux")).toBe("aux_");
+    expect(safeBaseName("COM1")).toBe("COM1_");
+    expect(safeBaseName("   ")).toBe("material");
+    expect(safeBaseName("take.1")).toBe("take.1");
+  });
+});
+
 describe("export settings", () => {
   it("turns beats and BPM into seconds", () => {
     expect(exportLengthSec({ ...DEFAULT_EXPORT, beats: 2, bpm: 120 })).toBeCloseTo(1);
@@ -93,8 +106,9 @@ describe("export settings", () => {
   });
 
   it("names the file after the material, the note and the length", () => {
-    expect(exportFileName("ore.mp4", 60, { ...DEFAULT_EXPORT, beats: 2, bpm: 165 }, false)).toBe("ore_C4_2beat@165.wav");
-    expect(exportFileName("a:b/c.wav", 61, { ...DEFAULT_EXPORT, lengthMode: "seconds", seconds: 1.5 }, false)).toBe("a_b_c_Cs4_1.5s.wav");
+    expect(exportFileName("ore", 60, { ...DEFAULT_EXPORT, beats: 2, bpm: 165 }, false)).toBe("ore_C4_2beat@165.wav");
+    expect(exportFileName("take.1", 60, { ...DEFAULT_EXPORT, beats: 2, bpm: 165 }, false)).toBe("take.1_C4_2beat@165.wav"); // (the extension is stripped once, by whoever holds the file name)
+    expect(exportFileName("a:b/c", 61, { ...DEFAULT_EXPORT, lengthMode: "seconds", seconds: 1.5 }, false)).toBe("a_b_c_Cs4_1.5s.wav");
     expect(exportFileName("hit", 59, DEFAULT_EXPORT, true)).toBe("hit_B3.wav");
   });
 });

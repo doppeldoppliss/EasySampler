@@ -59,6 +59,8 @@ export function zipStore(entries: readonly ZipEntry[]): Uint8Array<ArrayBuffer> 
     offset += local.length + entry.data.length;
   }
   const centralSize = centrals.reduce((n, c) => n + c.length, 0);
+  // (no ZIP64: more than this cannot be described in these headers)
+  if (offset + centralSize > 0xffffffff || entries.length > 0xffff) throw new Error("zip が大きすぎます(4 GB / 65535 ファイルまで)");
   const end = new Uint8Array(22);
   const ev = new DataView(end.buffer);
   ev.setUint32(0, 0x06054b50, true);

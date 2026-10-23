@@ -81,7 +81,7 @@ describe("multisample plan and definitions", () => {
     expect(sfz).toContain("<region> sample=x_60.wav pitch_keycenter=60 lokey=59 hikey=61 loop_mode=loop_continuous loop_start=1000 loop_end=4999");
     expect(sfz).toContain("sample=x_48.wav pitch_keycenter=48 lokey=0 hikey=49 loop_mode=no_loop");
     const ds = dspresetText(zones, meta);
-    expect(ds).toContain(`<sample path="samples/x_60.wav" rootNote="60" loNote="59" hiNote="61" loopEnabled="true" loopStart="1000" loopEnd="4999" loopCrossfade="100" />`);
+    expect(ds).toContain(`<sample path="samples/x_60.wav" rootNote="60" loNote="59" hiNote="61" loopEnabled="true" loopStart="1000" loopEnd="4999" loopCrossfade="0" />`);
     expect(ds).toContain(`release="0.020"`);
     expect(ds.startsWith(`<?xml version="1.0"`)).toBe(true);
   });
@@ -156,6 +156,27 @@ describe("buildOne / buildBatch", () => {
     expect(built.fileName).toBe("ore_cuts.zip");
     const names = listZip(new Uint8Array(await built.blob.arrayBuffer())).map((e) => e.name);
     expect(names).toEqual(["ore_区間 1_D4_2beat@120.wav", "ore_区間 2_F4_2beat@120.wav", "settings.json"]);
+  });
+
+  it("batch: two cuts with the same name do not land on the same path", async () => {
+    const { source, cut, credit } = setup();
+    const settings = { ...DEFAULT_EXPORT, format: "single" as const };
+    const built = await buildBatch(
+      [
+        { baseName: "ore_a", source, cut, settings, credit },
+        { baseName: "ore_a", source, cut, settings, credit },
+      ],
+      null,
+      "ore",
+    );
+    const names = listZip(new Uint8Array(await built.blob.arrayBuffer())).map((e) => e.name);
+    expect(names).toEqual(["ore_a_D4_2beat@120.wav", "ore_a_D4_2beat@120_2.wav"]);
+  });
+
+  it("dspreset: a kit's hits are one-shots, and the loop crossfade is left to the audio", () => {
+    const text = dspresetText([{ note: 36, lowKey: 36, highKey: 36, fileName: "k.wav", loop: null, oneShot: true }, { note: 60, lowKey: 0, highKey: 127, fileName: "v.wav", loop: { start: 100, end: 300, crossfade: 50 } }], { name: "k", samplesDir: "samples", releaseSec: 1.5 });
+    expect(text).toContain('path="samples/k.wav" rootNote="36" loNote="36" hiNote="36" loopEnabled="false" ampEnvEnabled="false"');
+    expect(text).toContain('loopStart="100" loopEnd="299" loopCrossfade="0"');
   });
 });
 

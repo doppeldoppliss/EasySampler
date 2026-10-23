@@ -50,6 +50,11 @@ export interface LevelShape {
 export type Playhead = { kind: "display"; sec: number } | { kind: "output"; sec: number } | null;
 
 type Handle = Exclude<keyof Markers, "removed">;
+/** The grips on the level line: where the fade-in ends, where the fade-out starts. */
+type LaneGrip = "fadeIn" | "fadeOut";
+/** The longest each fade may be dragged to (seconds), and the grip's reach. */
+const MAX_FADE_IN_SEC = 2;
+const MAX_FADE_OUT_SEC = 3;
 
 const STRIP_HEIGHT = 36;
 /** The "after" lane at the bottom: how the output lays out in time. */
@@ -88,13 +93,17 @@ export class MaterialEditor {
   /** Two fingers: pinch to zoom, move to pan. */
   private pointers = new Map<number, number>();
   private pinch: { span: number; start: number; distance: number; centerX: number } | null = null;
-  private hover: Handle | "root" | null = null;
+  private hover: Handle | "root" | LaneGrip | null = null;
+  /** Dragging a fade grip in the "after" lane. */
+  private laneDrag: { grip: LaneGrip; pointerId: number; startSec: number; startX: number } | null = null;
   /** The pitch scale of the last draw (CSS px), for turning a pointer's y into a pitch. */
   private scale = { lo: 48, hi: 72, plotHeightCss: 1 };
   /** The "after" lane's horizontal mapping from the last draw (device px). */
   private laneMap = { x: 0, width: 1, totalSec: 1 };
   onMarkersChange: (markers: Markers, final: boolean) => void = () => {};
   onRootChange: (root: number, final: boolean) => void = () => {};
+  /** A fade grip was dragged: the level with its new attack / fade-out (seconds). */
+  onLevelChange: (level: LevelShape, final: boolean) => void = () => {};
   onSelect: (selection: TimeSelection | null) => void = () => {};
   onViewChange: (view: { start: number; end: number; total: number }) => void = () => {};
 
@@ -291,6 +300,39 @@ export class MaterialEditor {
     return best;
   }
 
+  /** Where a fade grip is: its output seconds and its x on screen (CSS px) — pinned inside the lane when the output runs past the view. */
+  private laneGrip(grip: LaneGrip): { sec: number; x: number } | null {
+    const layout = this.layout;
+    const level = this.level;
+    if (!layout || !level || layout.totalSec <= 0) return null;
+    const dpr = window.devicePixelRatio || 1;
+    const sec = grip === "fadeIn" ? level.attackSec : layout.totalSec - level.fadeOutSec;
+    const x = (this.laneMap.x + (sec / layout.totalSec) * this.laneMap.width) / dpr;
+    const width = this.canvas.clientWidth;
+    return { sec, x: Math.max(8, Math.min(width - 8, x)) };
+  }
+
+  /** Output seconds per CSS px in the lane. */
+  private laneSecPerPx(): number {
+    const dpr = window.devicePixelRatio || 1;
+    return this.laneMap.totalSec / (this.laneMap.width / dpr);
+  }
+
+  private laneGripAt(event: PointerEvent): LaneGrip | null {
+    const fadeIn = this.laneGrip("fadeIn");
+    const fadeOut = this.laneGrip("fadeOut");
+    if (!fadeIn || !fadeOut) return null;
+    const box = this.canvas.getBoundingClientRect();
+    const y = event.clientY - box.top;
+    if (y < box.height - LANE_HEIGHT) return null;
+    const reach = event.pointerType === "mouse" ? HANDLE_REACH_MOUSE : HANDLE_REACH_TOUCH;
+    const x = event.clientX - box.left;
+    const dIn = Math.abs(fadeIn.x - x);
+    const dOut = Math.abs(fadeOut.x - x);
+    if (dIn > reach && dOut > reach) return null;
+    return dIn <= dOut ? "fadeIn" : "fadeOut";
+  }
+
   /** Source time → CSS px within a width. */
   private xCss(t: number, width: number): number {
     return ((this.disp(t) - this.view.start) / (this.view.end - this.view.start)) * width;
@@ -324,6 +366,7 @@ export class MaterialEditor {
       this.capture(event);
       this.dragging = null;
       this.rootDrag = null;
+      this.laneDrag = null;
       this.selecting = null;
       const [a, b] = [...this.pointers.values()];
       this.pinch = { span: this.view.end - this.view.start, start: this.view.start, distance: Math.max(1, Math.abs(a - b)), centerX: (a + b) / 2 };
@@ -333,6 +376,13 @@ export class MaterialEditor {
     if (handle) {
       this.capture(event);
       this.dragging = { handle, pointerId: event.pointerId };
+      return;
+    }
+    const grip = this.laneGripAt(event);
+    if (grip) {
+      this.capture(event);
+      // Relative: the grip moves by as much as the pointer does (so a grip pinned at the edge doesn't jump).
+      this.laneDrag = { grip, pointerId: event.pointerId, startSec: this.laneGrip(grip)!.sec, startX: event.clientX };
       return;
     }
     this.capture(event);
@@ -369,6 +419,17 @@ export class MaterialEditor {
       this.onMarkersChange(markers, false);
       return;
     }
+    if (this.laneDrag?.pointerId === event.pointerId && this.level && this.layout) {
+      const sec = this.laneDrag.startSec + (event.clientX - this.laneDrag.startX) * this.laneSecPerPx();
+      const total = this.layout.totalSec;
+      const level = { ...this.level };
+      if (this.laneDrag.grip === "fadeIn") level.attackSec = Math.max(0.001, Math.min(MAX_FADE_IN_SEC, total * 0.9, sec));
+      else level.fadeOutSec = Math.max(0, Math.min(MAX_FADE_OUT_SEC, total * 0.9, total - sec));
+      this.level = level;
+      this.draw();
+      this.onLevelChange(level, false);
+      return;
+    }
     if (this.rootDrag?.pointerId === event.pointerId) {
       const pitch = this.pitchAt(event.clientY);
       // Semitones by default; Alt for cents (design.md 3).
@@ -387,7 +448,7 @@ export class MaterialEditor {
       return;
     }
     // Hovering: show what a press would grab.
-    const hover: Handle | "root" | null = this.handleAt(event) ?? (this.nearRoot(event.clientX, event.clientY, event.pointerType) ? "root" : null);
+    const hover: Handle | "root" | LaneGrip | null = this.handleAt(event) ?? this.laneGripAt(event) ?? (this.nearRoot(event.clientX, event.clientY, event.pointerType) ? "root" : null);
     if (hover !== this.hover) {
       this.hover = hover;
       this.canvas.style.cursor = hover === "root" ? "ns-resize" : hover ? "ew-resize" : this.material ? "crosshair" : "default";
@@ -409,6 +470,11 @@ export class MaterialEditor {
     if (this.rootDrag?.pointerId === event.pointerId) {
       this.rootDrag = null;
       this.onRootChange(this.root, true);
+      return;
+    }
+    if (this.laneDrag?.pointerId === event.pointerId) {
+      this.laneDrag = null;
+      if (this.level) this.onLevelChange(this.level, true);
       return;
     }
     if (this.selecting?.pointerId === event.pointerId) {
@@ -696,6 +762,20 @@ export class MaterialEditor {
           }
           g.stroke();
           g.globalAlpha = 1;
+          // The grips: where the fade-in ends and the fade-out starts, to drag.
+          for (const grip of ["fadeIn", "fadeOut"] as const) {
+            const at = this.laneGrip(grip)!;
+            const gx = at.x * dpr;
+            const gy = top + (1 - gainAt(at.sec)) * bandH;
+            const active = this.hover === grip || this.laneDrag?.grip === grip;
+            g.beginPath();
+            g.arc(gx, gy, (active ? 5 : 4) * dpr, 0, 2 * Math.PI);
+            g.fillStyle = active ? cssVar("--accent") : cssVar("--handle");
+            g.fill();
+            g.lineWidth = 1.5 * dpr;
+            g.strokeStyle = cssVar("--panel");
+            g.stroke();
+          }
         }
       }
       // The lane's name, over whatever is under it; and how much runs on past the right edge.

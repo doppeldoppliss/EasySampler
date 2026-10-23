@@ -1667,6 +1667,17 @@ editor.onRootChange = (root, final) => {
   }
 };
 
+// A fade grip dragged in the lane: the attack and the fade-out follow (the sliders too, once it's let go).
+editor.onLevelChange = (level, final) => {
+  if (!final) return;
+  update((p) => {
+    p.amp.attack = level.attackSec;
+    // Below the release the fade-out does nothing (the release is at least as long): that is "off".
+    p.amp.fadeOut = level.fadeOutSec <= p.amp.release + 1e-6 ? 0 : level.fadeOutSec;
+  }, true);
+  refreshControls();
+};
+
 editor.onSelect = (next) => {
   selection = next;
   refreshFixBar();

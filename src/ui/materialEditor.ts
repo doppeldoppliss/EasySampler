@@ -135,10 +135,13 @@ export class MaterialEditor {
     if (parts.sustain === this.parts.sustain && parts.tail === this.parts.tail) return;
     this.parts = { ...parts };
     this.refreshCollapsed();
-    // What is shown just got longer or shorter: show all of it.
-    this.view = { start: 0, end: this.displayDuration };
-    this.draw();
-    this.announceView();
+    // What plays just got longer or shorter: show exactly that.
+    if (this.markers) this.zoomToRange(this.markers.rangeStart, this.markers.rangeEnd);
+    else {
+      this.view = { start: 0, end: this.displayDuration };
+      this.draw();
+      this.announceView();
+    }
   }
 
   private refreshCollapsed(): void {
@@ -592,7 +595,7 @@ export class MaterialEditor {
 
     // Marker strip: head / sustain / tail bands with labels.
     const bands: [number, number, string, string][] = [
-      [markers.rangeStart, markers.attack, "--band-head", "頭部"],
+      [markers.rangeStart, markers.sustainStart, "--band-head", "頭部"],
       [markers.sustainStart, markers.sustainEnd, "--band-sustain", "持続区間"],
       [markers.tailStart, markers.rangeEnd, "--band-tail", "語尾"],
     ].filter(([, , color]) => (color !== "--band-sustain" || this.parts.sustain) && (color !== "--band-tail" || this.parts.tail)) as [number, number, string, string][];
@@ -639,14 +642,16 @@ export class MaterialEditor {
     g.fillRect(0, stripBottom, width, 1 * dpr);
     const layout = this.layout;
     if (layout && layout.totalSec > 0) {
-      g.font = `${10 * dpr}px system-ui, sans-serif`;
-      const labelW = g.measureText("書き出し後").width + 10 * dpr;
-      const laneX = labelW;
-      const laneW = width - laneX - 4 * dpr;
+      // Same seconds-per-pixel as the plot, starting under the range start: a part played at its
+      // own speed lines up with its band above; a stretched one runs on past it.
+      const pxPerSec = width / span;
+      const laneX = x(markers.rangeStart);
+      const laneW = layout.totalSec * pxPerSec;
       this.laneMap = { x: laneX, width: laneW, totalSec: layout.totalSec };
       const px = (sec: number) => laneX + (sec / layout.totalSec) * laneW;
-      g.fillStyle = cssVar("--muted");
-      g.fillText("書き出し後", 4 * dpr, stripBottom + lane / 2 + 4 * dpr);
+      g.font = `${10 * dpr}px system-ui, sans-serif`;
+      /** Where the lane's name ends (it is drawn over the start of the lane). */
+      const laneNameReserve = g.measureText("書き出し後").width + 8 * dpr;
       const ratio = (out: number, src: number) => (src > 0 ? `×${(out / src).toFixed(out / src >= 10 ? 0 : 1)}` : "");
       const parts: [number, number, string, string][] = [
         [0, layout.headSec, "--band-head", `頭部 ${ratio(layout.headSec, layout.headSrcSec)}`],
@@ -658,11 +663,30 @@ export class MaterialEditor {
         if (to - from <= 1e-6) continue;
         g.fillStyle = cssVar(color);
         g.fillRect(px(from), stripBottom + 4 * dpr, px(to) - px(from), lane - 8 * dpr);
+        // The text starts where the part is visible: right of the lane's name, inside the plot.
+        const textX = Math.max(px(from), laneNameReserve, 0) + 4 * dpr;
         const textWidth = g.measureText(text).width;
-        if (px(to) - px(from) > textWidth + 6 * dpr) {
+        if (Math.min(px(to), width) - textX > textWidth + 2 * dpr) {
           g.fillStyle = cssVar("--band-text");
-          g.fillText(text, px(from) + 4 * dpr, stripBottom + lane / 2 + 4 * dpr);
+          g.fillText(text, textX, stripBottom + lane / 2 + 4 * dpr);
         }
+      }
+      // The lane's name, over whatever is under it; and how much runs on past the right edge.
+      g.font = `${10 * dpr}px system-ui, sans-serif`;
+      const name = "書き出し後";
+      const nameW = g.measureText(name).width + 8 * dpr;
+      g.fillStyle = cssVar("--strip");
+      g.fillRect(0, stripBottom + 1 * dpr, nameW, lane - 1 * dpr);
+      g.fillStyle = cssVar("--muted");
+      g.fillText(name, 4 * dpr, stripBottom + lane / 2 + 4 * dpr);
+      const beyond = layout.totalSec - (width - laneX) / pxPerSec;
+      if (beyond > 0.005) {
+        const text = `→ あと ${beyond.toFixed(beyond < 10 ? 2 : 1)} 秒`;
+        const tw = g.measureText(text).width + 10 * dpr;
+        g.fillStyle = cssVar("--panel");
+        g.fillRect(width - tw, stripBottom + 4 * dpr, tw, lane - 8 * dpr);
+        g.fillStyle = cssVar("--text");
+        g.fillText(text, width - tw + 5 * dpr, stripBottom + lane / 2 + 4 * dpr);
       }
       // The vibrato, as it will sound: from its delay, over the sustain (and the tail), at its rate and depth.
       const vib = this.vibrato;

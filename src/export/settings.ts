@@ -4,6 +4,7 @@
 // localStorage per material (so reopening the same file restores it) and
 // to save / load as JSON by hand.
 
+import type { PitchCorrection } from "../analysis/corrections";
 import { clampMarkers } from "../instrument/markers";
 import { DEFAULT_EXPORT, DEFAULT_PARAMS, type Credit, type ExportSettings, type InstrumentParams, type Markers } from "../instrument/types";
 
@@ -24,6 +25,8 @@ export interface SettingsFile {
   credit: Credit;
   cuts: CutSettings[];
   currentCut: number;
+  /** Hand corrections to the pitch analysis (applied to the original analysis, in order). */
+  corrections: PitchCorrection[];
 }
 
 export function serializeSettings(file: Omit<SettingsFile, "app" | "version" | "savedAt">): string {
@@ -54,7 +57,22 @@ export function parseSettings(text: string): SettingsFile {
     credit: sanitizeCredit(raw.credit),
     cuts,
     currentCut: Math.max(0, Math.min(cuts.length - 1, Math.round(num(raw.currentCut, 0)))),
+    corrections: sanitizeCorrections(raw.corrections),
   };
+}
+
+function sanitizeCorrections(raw: unknown): PitchCorrection[] {
+  if (!Array.isArray(raw)) return [];
+  const kinds = ["octave-up", "octave-down", "unvoiced", "voiced"] as const;
+  const out: PitchCorrection[] = [];
+  for (const c of raw) {
+    if (!isRecord(c) || !kinds.includes(c.kind as never)) continue;
+    const start = num(c.start, Number.NaN);
+    const end = num(c.end, Number.NaN);
+    if (!(start >= 0) || !(end > start)) continue;
+    out.push({ start, end, kind: c.kind as PitchCorrection["kind"] });
+  }
+  return out;
 }
 
 /** The storage key for a material: its name and length (the same file opened again finds its settings). */
@@ -95,7 +113,8 @@ function sanitizeParams(raw: unknown): InstrumentParams {
     flatten: clamp(num(raw.flatten, d.flatten), 0, 1),
     formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
     formantFollow: typeof raw.formantFollow === "boolean" ? raw.formantFollow : d.formantFollow,
-    sustainMode: raw.sustainMode === "loop" || raw.sustainMode === "none" ? raw.sustainMode : "pool",
+    sustainMode: raw.sustainMode === "loop" || raw.sustainMode === "none" || raw.sustainMode === "wavetable" ? raw.sustainMode : "pool",
+    wavetableCycles: clamp(Math.round(num(raw.wavetableCycles, d.wavetableCycles)), 1, 16),
     tail: {
       enabled: typeof tail.enabled === "boolean" ? tail.enabled : d.tail.enabled,
       limit: tail.limit === "none" || tail.limit === "beat" || tail.limit === "bar" ? tail.limit : "unlimited",
@@ -122,7 +141,7 @@ function sanitizeExport(raw: unknown): ExportSettings {
   const d = DEFAULT_EXPORT;
   if (!isRecord(raw)) return structuredClone(d);
   const destinations = ["generic", "garageband", "vital", "decent"] as const;
-  const formats = ["single", "loop", "multisample"] as const;
+  const formats = ["single", "loop", "multisample", "wavetable"] as const;
   return {
     lengthMode: raw.lengthMode === "seconds" ? "seconds" : "beats",
     beats: clamp(num(raw.beats, d.beats), 0.25, 64),

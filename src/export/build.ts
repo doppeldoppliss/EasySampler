@@ -10,6 +10,7 @@ import { applyLoop, LOOP_MIN_HOLD_SEC } from "./loop";
 import { dspresetText, planZones, readmeText, sfzText, type Zone } from "./multisample";
 import { exportFileName, fileNoteName, renderNote, safeBaseName, type Rendered } from "./render";
 import type { CutSettings } from "./settings";
+import { buildWavetable, FRAME_SIZE, type Wavetable } from "./wavetable";
 import { zipStore, type ZipEntry } from "./zip";
 
 export interface BuildInput {
@@ -62,6 +63,17 @@ export async function buildEntries(input: BuildInput, progress?: Progress): Prom
     return { entries: [{ name: fileName, data }], preview: rendered, summary: `${fileName}(${(rendered.channels[0].length / rendered.sampleRate).toFixed(2)} 秒)` };
   }
 
+  if (settings.format === "wavetable") {
+    const table = buildWavetable(source, cut.markers);
+    if (!table) throw new Error("ウェーブテーブルを作れませんでした: 持続区間に有声の周期がありません");
+    const fileName = `${base}_wavetable.wav`;
+    const data = new Uint8Array(encodeWavBytes([table.samples], source.sampleRate, { ...info, ICMT: [info.ICMT, `wavetable ${FRAME_SIZE} samples/frame, ${table.frames} frames`].filter(Boolean).join(" / ") }));
+    // The preview plays the frames at the note's pitch: a few periods each, in order.
+    const preview = previewWavetable(table, cut.note, source.sampleRate);
+    await progress?.(1, 1);
+    return { entries: [{ name: fileName, data }], preview, summary: `${fileName}(${table.frames} フレーム × ${FRAME_SIZE} サンプル。Vital の Import as Wavetable で読み込みます)` };
+  }
+
   if (settings.format === "loop") {
     const rendered = renderNote(source, cut.markers, cut.params, cut.note, Math.max(holdSec, LOOP_MIN_HOLD_SEC));
     const loop = applyLoop(rendered, cut.params);
@@ -98,6 +110,29 @@ export async function buildEntries(input: BuildInput, progress?: Progress): Prom
   return { entries, preview: preview!, summary: `${base}/(WAV ${zones.length} 個、${base}.sfz、${base}.dspreset)` };
 }
 
+/** How a wavetable sounds: every frame played as `cyclesPerFrame` periods at the note's pitch, in order (about 2 s). */
+function previewWavetable(table: Wavetable, note: number, sampleRate: number): Rendered {
+  const period = sampleRate / (440 * 2 ** ((note - 69) / 12));
+  const targetSec = 2;
+  const cyclesPerFrame = Math.max(1, Math.round((targetSec * sampleRate) / period / table.frames));
+  const total = Math.round(table.frames * cyclesPerFrame * period);
+  const out = new Float32Array(total);
+  let phase = 0;
+  for (let n = 0; n < total; n++) {
+    const frame = Math.min(table.frames - 1, Math.floor(n / (cyclesPerFrame * period)));
+    const at = frame * FRAME_SIZE + Math.floor(phase * FRAME_SIZE);
+    out[n] = table.samples[at] * 0.5;
+    phase += 1 / period;
+    if (phase >= 1) phase -= 1;
+  }
+  const fade = Math.round(0.01 * sampleRate);
+  for (let i = 0; i < fade; i++) {
+    out[i] *= i / fade;
+    out[total - 1 - i] *= i / fade;
+  }
+  return { channels: [out], sampleRate, headSec: 0, holdEndSec: total / sampleRate };
+}
+
 /** One cut → one file (a WAV, or a zip for a multisample). */
 export async function buildOne(input: BuildInput, progress?: Progress): Promise<Built> {
   const { entries, preview, summary } = await buildEntries(input, progress);
@@ -113,6 +148,7 @@ export async function buildBatch(inputs: readonly BuildInput[], settingsJson: st
   const entries: ZipEntry[] = [];
   let preview: Rendered | null = null;
   const total = inputs.reduce((n, input) => n + (input.settings.format === "multisample" && input.cut.params.sustainMode !== "none" ? planZones(input.cut.note).length : 1), 0);
+  // (a one-shot ignores the format; a wavetable is one file like a single WAV)
   let done = 0;
   for (const input of inputs) {
     const built = await buildEntries(input, async (d, t) => {

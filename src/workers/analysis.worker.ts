@@ -1,6 +1,7 @@
 // Analysis off the UI thread: pitch track, pitch marks, root and suggested
 // markers, plus the material resampled for the engine.
 
+import type { PitchTrack } from "../analysis/pyin";
 import type { PreparedSource } from "../engine/engine";
 import { analyzeMaterial, prepareSource, type MaterialAnalysis } from "../engine/prepare";
 
@@ -10,6 +11,8 @@ export interface AnalysisRequest {
   sampleRate: number;
   /** The engine's (AudioContext's) sample rate. */
   targetRate: number;
+  /** A pitch track to use as it is (hand-corrected): only the marks are found again. */
+  track?: PitchTrack;
 }
 
 export type AnalysisResponse =
@@ -22,10 +25,10 @@ const scope = self as unknown as {
 };
 
 scope.onmessage = (event) => {
-  const { id, channels, sampleRate, targetRate } = event.data;
+  const { id, channels, sampleRate, targetRate, track } = event.data;
   try {
     const started = performance.now();
-    const analysis = analyzeMaterial(channels, sampleRate);
+    const analysis = analyzeMaterial(channels, sampleRate, track);
     const source = prepareSource(channels, analysis, targetRate);
     const elapsedMs = performance.now() - started;
     scope.postMessage({ id, ok: true, analysis, source, elapsedMs }, source.channels.map((c) => c.buffer as ArrayBuffer));

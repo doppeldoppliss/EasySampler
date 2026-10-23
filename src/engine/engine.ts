@@ -94,6 +94,8 @@ class Voice {
   /** Output clock of this voice (samples since note on). */
   clock = 0;
   nextCenter = 0;
+  /** Wavetable sustain: which of the cycled periods comes next. */
+  cycleIndex = 0;
   /** Left half-width of the last grain placed: how early the next one may start. */
   lastLeft = 0;
   poolIndex = 0;
@@ -259,6 +261,7 @@ export class Engine {
     v.released = false;
     v.startOrder = this.order++;
     v.phase = Phase.Head;
+    v.cycleIndex = 0;
     v.srcTime = this.rangeStart;
     v.clock = 0;
     v.poolIndex = Math.floor(this.pool.length / 2);
@@ -346,6 +349,22 @@ export class Engine {
     return this.pool[next];
   }
 
+  /** Wavetable sustain: the same one (or few consecutive) steady periods from the middle of the pool, over and over. */
+  private nextCycleMark(v: Voice): number {
+    const n = this.pool.length;
+    const cycles = Math.max(1, Math.min(n, Math.round(this.params!.wavetableCycles)));
+    const first = Math.max(0, Math.min(n - cycles, Math.floor(n / 2) - Math.floor(cycles / 2)));
+    const k = this.pool[first + (v.cycleIndex % cycles)];
+    v.cycleIndex++;
+    return k;
+  }
+
+  /** Whether the sustain is drawn from the pool of periods (rather than read through). */
+  private fromPool(): boolean {
+    const mode = this.params!.sustainMode;
+    return (mode === "pool" || mode === "wavetable") && this.pool.length >= MIN_POOL;
+  }
+
   /** Wobble (semitones) at a voice time: vibrato fading in after its delay, plus the slow drift. */
   private wobbleAt(v: Voice, seconds: number): number {
     const w = this.params!.wobble;
@@ -372,8 +391,8 @@ export class Engine {
     this.enterPhaseIfDue(v);
 
     let k: number;
-    if (v.phase === Phase.Sustain && params.sustainMode === "pool" && this.pool.length >= MIN_POOL) {
-      k = this.nextPoolMark(v);
+    if (v.phase === Phase.Sustain && this.fromPool()) {
+      k = params.sustainMode === "wavetable" ? this.nextCycleMark(v) : this.nextPoolMark(v);
     } else {
       if (v.phase === Phase.Sustain && v.srcTime >= this.sustainEnd) {
         v.srcTime -= Math.max(1, this.sustainEnd - this.sustainStart); // loop
@@ -434,7 +453,7 @@ export class Engine {
     v.lastLeft = grain.left;
     v.driftCountdown -= step / this.sampleRate;
     // The read position moves with real time (or faster/slower when resampling).
-    if (!(v.phase === Phase.Sustain && params.sustainMode === "pool" && this.pool.length >= MIN_POOL)) {
+    if (!(v.phase === Phase.Sustain && this.fromPool())) {
       v.srcTime += step * (resample ? alpha : 1);
     }
     return true;

@@ -144,7 +144,7 @@ describe("buildOne / buildBatch", () => {
     const { source, cut, credit, analysis } = setup();
     const second: CutSettings = { ...cut, name: "区間 2", note: 65 };
     const settings = { ...DEFAULT_EXPORT, format: "single" as const };
-    const json = serializeSettings({ material: { name: "ore", durationSec: analysis.durationSec, sampleRate: SR, channels: 1 }, export: settings, credit, cuts: [cut, second], currentCut: 0 });
+    const json = serializeSettings({ material: { name: "ore", durationSec: analysis.durationSec, sampleRate: SR, channels: 1 }, export: settings, credit, cuts: [cut, second], currentCut: 0, corrections: [] });
     const built = await buildBatch(
       [
         { baseName: "ore_区間 1", source, cut, settings, credit },
@@ -162,16 +162,20 @@ describe("buildOne / buildBatch", () => {
 describe("settings file", () => {
   it("round-trips, fills gaps from the defaults and rejects other files", () => {
     const { cut, credit, analysis } = setup();
-    const json = serializeSettings({ material: { name: "ore.mp4", durationSec: analysis.durationSec, sampleRate: SR, channels: 1 }, export: { ...DEFAULT_EXPORT, bpm: 165, format: "loop" }, credit, cuts: [cut], currentCut: 0 });
+    const corrections = [{ start: 0.1, end: 0.2, kind: "octave-down" as const }];
+    const json = serializeSettings({ material: { name: "ore.mp4", durationSec: analysis.durationSec, sampleRate: SR, channels: 1 }, export: { ...DEFAULT_EXPORT, bpm: 165, format: "loop" }, credit, cuts: [cut], currentCut: 0, corrections });
     const back = parseSettings(json);
     expect(back.material.name).toBe("ore.mp4");
     expect(back.export.bpm).toBe(165);
     expect(back.export.format).toBe("loop");
+    expect(back.corrections).toEqual(corrections);
+    expect(back.cuts[0].params.wavetableCycles).toBe(1);
     expect(back.cuts[0].markers).toEqual(cut.markers);
     expect(back.cuts[0].params.flatten).toBe(1);
     expect(back.credit.url).toBe("https://example.com/sm1");
 
-    const sparse = parseSettings(JSON.stringify({ app: "MADDAW", version: 1, cuts: [{ markers: { rangeStart: 0, rangeEnd: 1, sustainStart: 0.3, sustainEnd: 0.6 }, params: { flatten: 2 } }] }));
+    const sparse = parseSettings(JSON.stringify({ app: "MADDAW", version: 1, cuts: [{ markers: { rangeStart: 0, rangeEnd: 1, sustainStart: 0.3, sustainEnd: 0.6 }, params: { flatten: 2 } }], corrections: [{ start: 1, end: 0.5, kind: "voiced" }, { start: 0, end: 1, kind: "nonsense" }, "x"] }));
+    expect(sparse.corrections).toEqual([]); // every one of those is malformed
     expect(sparse.cuts[0].name).toBe("区間 1");
     expect(sparse.cuts[0].params.flatten).toBe(1);
     expect(sparse.cuts[0].params.wobble.micro).toBe(true);

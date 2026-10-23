@@ -259,6 +259,16 @@ input:focus-visible {
   cursor: default;
 }
 
+/* Hand corrections to the analysis. */
+.fix-bar {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
 /* Panel 2: note, flatten, length. */
 .note-row {
   display: flex;

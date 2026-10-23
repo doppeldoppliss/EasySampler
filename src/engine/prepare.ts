@@ -26,10 +26,11 @@ export function mixToMono(channels: readonly Float32Array[]): Float32Array {
   return mono;
 }
 
-export function analyzeMaterial(channels: readonly Float32Array[], sampleRate: number): MaterialAnalysis {
+/** Analyses the material; with `givenTrack` (a corrected one) the pitch tracking is skipped and the marks found from it. */
+export function analyzeMaterial(channels: readonly Float32Array[], sampleRate: number, givenTrack?: PitchTrack): MaterialAnalysis {
   const mono = mixToMono(channels);
   const durationSec = mono.length / sampleRate;
-  const track = analyzePitch(mono, sampleRate);
+  const track = givenTrack ?? analyzePitch(mono, sampleRate);
   // Marks from the mid signal, shared by both channels (no wandering stereo image).
   const marks = findPitchMarks(mono, sampleRate, track);
   const markers = suggestMarkers(track, durationSec);

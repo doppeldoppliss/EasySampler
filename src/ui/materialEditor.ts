@@ -1,8 +1,13 @@
 // The material editor (素材エディタ, design.md 7.2): the waveform, the
 // material's own pitch curve (orange, thin dashed) and the curve after
 // flattening (yellow, thick solid — VocalShifter's colours, told apart by
-// line as well as colour), the root pitch line, and the synthesis markers as
-// labelled bands with draggable edges.
+// line as well as colour), the detected root (dotted) and the target note
+// (solid), and the synthesis markers as labelled bands with draggable edges.
+//
+// Three gestures on the plot: drag a handle (the cut and the markers), drag
+// the dotted root line up and down (semitones; Alt for cents; double-click
+// snaps it to the nearest semitone), or drag across the plot to select a
+// stretch of time for a hand correction (オクターブ, 有声 / 無声).
 
 import { pitchLabel } from "../analysis/pitch";
 import type { PitchTrack } from "../analysis/pyin";
@@ -16,11 +21,18 @@ export interface EditorMaterial {
   track: PitchTrack;
 }
 
+export interface TimeSelection {
+  from: number;
+  to: number;
+}
+
 type Handle = keyof Markers;
 
 const STRIP_HEIGHT = 36;
 const HANDLE_REACH_MOUSE = 8;
 const HANDLE_REACH_TOUCH = 22;
+/** A selection drag shorter than this (CSS px) is a tap: it clears the selection. */
+const TAP_PX = 4;
 
 const HANDLE_ORDER: Handle[] = ["rangeStart", "attack", "sustainStart", "sustainEnd", "tailStart", "rangeEnd"];
 
@@ -33,9 +45,16 @@ export class MaterialEditor {
   /** The note the file is tuned to: where the edited curve is drawn. */
   private target = 60;
   private flatten = 0;
+  private selection: TimeSelection | null = null;
   private dragging: { handle: Handle; pointerId: number } | null = null;
-  private hover: Handle | null = null;
+  private rootDrag: { pointerId: number } | null = null;
+  private selecting: { pointerId: number; anchor: number; anchorX: number; moved: boolean } | null = null;
+  private hover: Handle | "root" | null = null;
+  /** The pitch scale of the last draw (CSS px), for turning a pointer's y into a pitch. */
+  private scale = { lo: 48, hi: 72, plotHeightCss: 1 };
   onMarkersChange: (markers: Markers, final: boolean) => void = () => {};
+  onRootChange: (root: number, final: boolean) => void = () => {};
+  onSelect: (selection: TimeSelection | null) => void = () => {};
 
   constructor() {
     this.canvas = el("canvas", { className: "editor-canvas", ariaLabel: "素材の波形とピッチカーブ" });
@@ -44,12 +63,16 @@ export class MaterialEditor {
     this.canvas.addEventListener("pointermove", (event) => this.move(event));
     this.canvas.addEventListener("pointerup", (event) => this.up(event));
     this.canvas.addEventListener("pointercancel", (event) => this.up(event));
+    this.canvas.addEventListener("dblclick", (event) => {
+      if (this.nearRoot(event.clientX, event.clientY, "mouse")) this.onRootChange(Math.round(this.root), true);
+    });
     new ResizeObserver(() => this.draw()).observe(this.canvas);
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.draw());
   }
 
   setMaterial(material: EditorMaterial | null): void {
     this.material = material;
+    this.selection = null;
     this.draw();
   }
 
@@ -61,6 +84,11 @@ export class MaterialEditor {
     this.draw();
   }
 
+  setSelection(selection: TimeSelection | null): void {
+    this.selection = selection;
+    this.draw();
+  }
+
   private get duration(): number {
     return this.material ? this.material.mono.length / this.material.sampleRate : 1;
   }
@@ -68,6 +96,12 @@ export class MaterialEditor {
   private timeAt(clientX: number): number {
     const box = this.canvas.getBoundingClientRect();
     return Math.max(0, Math.min(this.duration, ((clientX - box.left) / box.width) * this.duration));
+  }
+
+  private pitchAt(clientY: number): number {
+    const box = this.canvas.getBoundingClientRect();
+    const y = Math.max(0, Math.min(this.scale.plotHeightCss, clientY - box.top));
+    return this.scale.lo + (1 - y / this.scale.plotHeightCss) * (this.scale.hi - this.scale.lo);
   }
 
   private handleAt(event: PointerEvent): Handle | null {
@@ -93,38 +127,96 @@ export class MaterialEditor {
     return best;
   }
 
-  private down(event: PointerEvent): void {
-    const handle = this.handleAt(event);
-    if (!handle) return;
+  private nearRoot(clientX: number, clientY: number, pointerType: string): boolean {
+    if (!this.material) return false;
+    const box = this.canvas.getBoundingClientRect();
+    const y = clientY - box.top;
+    if (y > this.scale.plotHeightCss) return false;
+    const rootY = (1 - (this.root - this.scale.lo) / (this.scale.hi - this.scale.lo)) * this.scale.plotHeightCss;
+    const reach = pointerType === "mouse" ? HANDLE_REACH_MOUSE : HANDLE_REACH_TOUCH;
+    return Math.abs(rootY - y) < reach && clientX >= box.left && clientX <= box.right;
+  }
+
+  private capture(event: PointerEvent): void {
     event.preventDefault();
     try {
       this.canvas.setPointerCapture(event.pointerId);
     } catch {
       // (a pointer that is already gone)
     }
-    this.dragging = { handle, pointerId: event.pointerId };
+  }
+
+  private down(event: PointerEvent): void {
+    if (event.button !== 0 && event.pointerType === "mouse") return;
+    const handle = this.handleAt(event);
+    if (handle) {
+      this.capture(event);
+      this.dragging = { handle, pointerId: event.pointerId };
+      return;
+    }
+    if (!this.markers || !this.material) return;
+    this.capture(event);
+    if (this.nearRoot(event.clientX, event.clientY, event.pointerType)) {
+      this.rootDrag = { pointerId: event.pointerId };
+      return;
+    }
+    const box = this.canvas.getBoundingClientRect();
+    if (event.clientY - box.top > this.scale.plotHeightCss) return; // the strip: nothing to select there
+    this.selecting = { pointerId: event.pointerId, anchor: this.timeAt(event.clientX), anchorX: event.clientX, moved: false };
   }
 
   private move(event: PointerEvent): void {
-    if (!this.dragging || this.dragging.pointerId !== event.pointerId || !this.markers) {
-      const hover = this.handleAt(event);
-      if (hover !== this.hover) {
-        this.hover = hover;
-        this.canvas.style.cursor = hover ? "ew-resize" : "default";
+    if (this.dragging?.pointerId === event.pointerId && this.markers) {
+      const markers = this.moved(this.dragging.handle, this.timeAt(event.clientX));
+      this.markers = markers;
+      this.draw();
+      this.onMarkersChange(markers, false);
+      return;
+    }
+    if (this.rootDrag?.pointerId === event.pointerId) {
+      const pitch = this.pitchAt(event.clientY);
+      // Semitones by default; Alt for cents (design.md 3).
+      this.root = event.altKey ? Math.round(pitch * 100) / 100 : Math.round(pitch);
+      this.draw();
+      this.onRootChange(this.root, false);
+      return;
+    }
+    if (this.selecting?.pointerId === event.pointerId) {
+      if (Math.abs(event.clientX - this.selecting.anchorX) >= TAP_PX) this.selecting.moved = true;
+      if (this.selecting.moved) {
+        const t = this.timeAt(event.clientX);
+        this.selection = { from: Math.min(this.selecting.anchor, t), to: Math.max(this.selecting.anchor, t) };
         this.draw();
       }
       return;
     }
-    const markers = this.moved(this.dragging.handle, this.timeAt(event.clientX));
-    this.markers = markers;
-    this.draw();
-    this.onMarkersChange(markers, false);
+    // Hovering: show what a press would grab.
+    const hover: Handle | "root" | null = this.handleAt(event) ?? (this.nearRoot(event.clientX, event.clientY, event.pointerType) ? "root" : null);
+    if (hover !== this.hover) {
+      this.hover = hover;
+      this.canvas.style.cursor = hover === "root" ? "ns-resize" : hover ? "ew-resize" : this.material ? "crosshair" : "default";
+      this.draw();
+    }
   }
 
   private up(event: PointerEvent): void {
-    if (!this.dragging || this.dragging.pointerId !== event.pointerId || !this.markers) return;
-    this.dragging = null;
-    this.onMarkersChange(this.markers, true);
+    if (this.dragging?.pointerId === event.pointerId && this.markers) {
+      this.dragging = null;
+      this.onMarkersChange(this.markers, true);
+      return;
+    }
+    if (this.rootDrag?.pointerId === event.pointerId) {
+      this.rootDrag = null;
+      this.onRootChange(this.root, true);
+      return;
+    }
+    if (this.selecting?.pointerId === event.pointerId) {
+      const moved = this.selecting.moved;
+      this.selecting = null;
+      if (!moved) this.selection = null; // a tap clears
+      this.draw();
+      this.onSelect(this.selection);
+    }
   }
 
   /** The markers with one moved; neighbours give way so the order holds. */
@@ -177,7 +269,7 @@ export class MaterialEditor {
       g.fillRect(col, mid - hi * mid * 0.9, 1, Math.max(1, (hi - lo) * mid * 0.9));
     }
 
-    // Pitch scale: the voiced curve and the root, with some room.
+    // Pitch scale: the voiced curve, the root and the target, with some room.
     const track = material.track;
     let minPitch = Math.min(this.root, this.target);
     let maxPitch = Math.max(this.root, this.target);
@@ -193,6 +285,7 @@ export class MaterialEditor {
       lo = Math.floor(centre - 4);
       hi = Math.ceil(centre + 4);
     }
+    this.scale = { lo, hi, plotHeightCss: plotHeight / dpr };
     const y = (midi: number) => plotHeight - ((midi - lo) / (hi - lo)) * plotHeight;
 
     // Semitone grid, C labelled.
@@ -206,11 +299,21 @@ export class MaterialEditor {
       }
     }
 
-    // The detected root: dotted line. The target note (the file's pitch): solid accent line, labelled at the right.
+    // The selection (for a hand correction).
+    if (this.selection) {
+      g.fillStyle = cssVar("--accent");
+      g.globalAlpha = 0.18;
+      g.fillRect(x(this.selection.from), 0, x(this.selection.to) - x(this.selection.from), plotHeight);
+      g.globalAlpha = 1;
+      g.fillRect(x(this.selection.from), 0, 1.5 * dpr, plotHeight);
+      g.fillRect(x(this.selection.to) - 1.5 * dpr, 0, 1.5 * dpr, plotHeight);
+    }
+
+    // The detected root: dotted, labelled at the left (draggable). The target note (the file's pitch): solid accent, labelled at the right.
     g.font = `600 ${12 * dpr}px system-ui, sans-serif`;
-    const line = (midi: number, label: string, color: string, dash: number[]) => {
+    const line = (midi: number, label: string, color: string, dash: number[], side: "left" | "right", bold: boolean) => {
       g.strokeStyle = color;
-      g.lineWidth = 1.5 * dpr;
+      g.lineWidth = (bold ? 2.5 : 1.5) * dpr;
       g.setLineDash(dash);
       g.beginPath();
       g.moveTo(0, y(midi));
@@ -218,14 +321,15 @@ export class MaterialEditor {
       g.stroke();
       g.setLineDash([]);
       const labelWidth = g.measureText(label).width;
+      const lx = side === "right" ? width - labelWidth - 8 * dpr : 36 * dpr;
       g.fillStyle = cssVar("--panel");
-      g.fillRect(width - labelWidth - 12 * dpr, y(midi) - 16 * dpr, labelWidth + 8 * dpr, 15 * dpr);
+      g.fillRect(lx - 4 * dpr, y(midi) - 16 * dpr, labelWidth + 8 * dpr, 15 * dpr);
       g.fillStyle = color;
-      g.fillText(label, width - labelWidth - 8 * dpr, y(midi) - 4 * dpr);
+      g.fillText(label, lx, y(midi) - 4 * dpr);
     };
-    // (within a quarter tone the two lines sit on top of each other: the root's label would only overlap)
-    if (Math.abs(this.target - this.root) > 0.5) line(this.root, `判定 ${pitchLabel(this.root)}`, cssVar("--muted"), [2 * dpr, 4 * dpr]);
-    line(this.target, pitchLabel(this.target), cssVar("--accent"), []);
+    const rootActive = this.hover === "root" || this.rootDrag !== null;
+    line(this.root, `判定 ${pitchLabel(this.root)} ↕`, rootActive ? cssVar("--accent") : cssVar("--muted"), [2 * dpr, 4 * dpr], "left", rootActive);
+    line(this.target, pitchLabel(this.target), cssVar("--accent"), [], "right", false);
 
     const curve = (value: (pitch: number) => number, from: number, to: number) => {
       g.beginPath();

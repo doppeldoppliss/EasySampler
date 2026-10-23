@@ -8,6 +8,7 @@
 // once as a zip. The settings (never the audio) are kept per material and
 // can be saved as JSON. One column, phone first.
 
+import { applyCorrections, CORRECTION_LABELS, type CorrectionKind, type PitchCorrection } from "./analysis/corrections";
 import { pitchLabel } from "./analysis/pitch";
 import { EngineClient } from "./audio/engineClient";
 import { Engine, type PreparedSource } from "./engine/engine";
@@ -34,7 +35,7 @@ import {
 import { demoSyllable } from "./testsignals/synthVoice";
 import { el } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
-import { MaterialEditor } from "./ui/materialEditor";
+import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 
 const MAX_MATERIAL_SEC = 60;
 const DEMO_RATE = 44100;
@@ -48,7 +49,11 @@ interface Material {
   channels: Float32Array[];
   sampleRate: number;
   mono: Float32Array;
+  /** The analysis in use: the original with the hand corrections applied (and the marks found again). */
   analysis: MaterialAnalysis;
+  /** The analysis as it came out of pYIN, which the corrections are re-applied to. */
+  original: MaterialAnalysis;
+  corrections: PitchCorrection[];
   /** For the live engine (at the AudioContext's rate). */
   source: PreparedSource;
   /** For the file, by sample rate (the material's own, or the destination's). */
@@ -104,7 +109,7 @@ window.addEventListener("keydown", onGesture, { capture: true });
 /** The material was prepared before the audio started (at a guessed rate): redo it at the real one. */
 async function matchEngineRate(): Promise<void> {
   if (!material || client.sourceMatchesRate()) return;
-  const { source } = await client.analyze(material.channels, material.sampleRate);
+  const { source } = await client.analyze(material.channels, material.sampleRate, undefined, material.analysis.track);
   material.source = source;
   material.exportSources.set(source.sampleRate, source);
   client.setSource(source);
@@ -256,17 +261,53 @@ function rootButton(text: string, delta: number): HTMLButtonElement {
   );
 }
 
+// Hand corrections (design.md 3): drag across the plot to select, then say what's wrong there.
+let selection: TimeSelection | null = null;
+const selectionLabel = el("span", { className: "fine num" });
+function fixButton(kind: CorrectionKind): HTMLButtonElement {
+  return button(CORRECTION_LABELS[kind], "small", () => {
+    if (!selection) return;
+    void addCorrection({ start: selection.from, end: selection.to, kind });
+  });
+}
+const fixButtons = (["octave-up", "octave-down", "unvoiced", "voiced"] as const).map(fixButton);
+const clearSelectionButton = button("選択解除", "small", () => {
+  selection = null;
+  editor.setSelection(null);
+  refreshFixBar();
+});
+const correctionsLabel = el("span", { className: "fine" });
+const undoCorrectionButton = button("最後の手直しを取り消す", "small", () => void setCorrections(material?.corrections.slice(0, -1) ?? []));
+const clearCorrectionsButton = button("すべて取り消す", "small", () => void setCorrections([]));
+const fixBar = el("div", { className: "fix-bar", hidden: true }, [
+  el("div", { className: "row tight" }, [selectionLabel, ...fixButtons, clearSelectionButton]),
+  el("div", { className: "row tight" }, [correctionsLabel, undoCorrectionButton, clearCorrectionsButton]),
+]);
+
+function refreshFixBar(): void {
+  const count = material?.corrections.length ?? 0;
+  fixBar.hidden = !selection && count === 0;
+  const hasSelection = selection !== null;
+  selectionLabel.textContent = hasSelection ? `選択 ${selection!.from.toFixed(2)}–${selection!.to.toFixed(2)} 秒:` : "波形の上を横にドラッグすると、その範囲の判定を直せます。";
+  for (const b of fixButtons) b.hidden = !hasSelection;
+  clearSelectionButton.hidden = !hasSelection;
+  correctionsLabel.textContent = count ? `手直し ${count} 件(${material!.corrections.map((c) => CORRECTION_LABELS[c.kind]).join("、")})` : "";
+  undoCorrectionButton.hidden = count === 0;
+  clearCorrectionsButton.hidden = count < 2;
+}
+
 const materialPanel = el("section", { className: "panel" }, [
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [el("span", { className: "fine", textContent: "判定した音程" }), rootLabel, rootSource]),
-    el("p", { className: "fine hint", textContent: "両端のハンドルで鳴らす範囲を切り出し、帯の端で頭部(伸ばさない)・持続区間(伸ばす)・語尾を直せます。長い素材は「区間を追加」で何か所でも切り出せます。" }),
+    el("p", { className: "fine hint", textContent: "両端のハンドルで鳴らす範囲を切り出し、帯の端で頭部(伸ばさない)・持続区間(伸ばす)・語尾を直せます。点線(判定)は上下にドラッグで半音ずつ、Alt を押しながらでセント単位、ダブルクリックで最寄りの半音に。" }),
   ]),
   editor.element,
   el("p", { className: "legend fine" }, [
     el("span", { className: "swatch original" }), "元のピッチ  ",
     el("span", { className: "swatch edited" }), "整えたあと(選んだ音名で鳴らしたとき)",
   ]),
+  fixBar,
 ]);
 
 // ---------------------------------------------------------------- panel 2: tune (note, flatten, length)
@@ -358,6 +399,7 @@ const FORMATS: { id: ExportFormat; label: string; note: string }[] = [
   { id: "single", label: "単音 WAV", note: "1本の WAV。どのサンプラーでも読み込めます。" },
   { id: "loop", label: "ループ WAV(ループ点入り)", note: "持続区間を長めに作り、ループ範囲を WAV に埋め込みます(smpl)。ループ点を読むサンプラー(Logic、Kontakt、sforzando など)では、いくらでも伸ばせます。" },
   { id: "multisample", label: "マルチサンプル音源(zip: SFZ + Decent Sampler)", note: "±1 オクターブを 3 半音おきに、それぞれの高さで作った WAV と、.sfz / .dspreset の定義を zip にまとめます。高音で途切れず、低音で間延びしません。" },
+  { id: "wavetable", label: "Vital 用ウェーブテーブル(WAV)", note: "持続区間の 1 周期ずつを 2048 サンプルに揃えて並べた WAV(最大 256 フレーム)。Vital の OSC に「Import as Wavetable」で読み込むと、素材の声色そのものをウェーブテーブルとして掃引できます。音名と長さは使いません。" },
 ];
 const DESTINATIONS: { id: Destination; label: string; help: (n: string, format: ExportFormat) => string }[] = [
   {
@@ -381,7 +423,10 @@ const DESTINATIONS: { id: Destination; label: string; help: (n: string, format: 
   {
     id: "vital",
     label: "Vital",
-    help: () => "WAV を OSC にドラッグし、ピッチモードを Pitch Splice にします。LFO やエンベロープで再生位置を動かすと、サンプラーのように使えます。",
+    help: (_n, format) =>
+      format === "wavetable"
+        ? "OSC の波形表示のメニューから Import as Wavetable を選び、この WAV を読み込みます(1 フレーム = 2048 サンプル)。ウェーブテーブル位置(Frame)を LFO やエンベロープで動かすと、声色が時間方向に変わります。"
+        : "WAV を OSC にドラッグし、ピッチモードを Pitch Splice にします。LFO やエンベロープで再生位置を動かすと、サンプラーのように使えます。",
   },
 ];
 const formatSelect = el("select", { ariaLabel: "形式" }, FORMATS.map((f) => el("option", { value: f.id, textContent: f.label })));
@@ -393,7 +438,8 @@ destinationSelect.addEventListener("change", () =>
     s.destination = destinationSelect.value as Destination;
     // The destination says what it can take.
     if (s.destination === "decent") s.format = "multisample";
-    else if ((s.destination === "garageband" || s.destination === "vital") && s.format === "multisample") s.format = "single";
+    else if (s.destination === "garageband" && (s.format === "multisample" || s.format === "wavetable")) s.format = "single";
+    else if (s.destination === "vital" && s.format === "multisample") s.format = "wavetable";
   }),
 );
 const destinationHelp = el("p", { className: "fine help" });
@@ -440,9 +486,13 @@ const saveSettingsButton = button("設定を保存(JSON)", "small", () => {
 const loadSettingsButton = el("label", { className: "button small", htmlFor: "file", textContent: "設定を読み込む(JSON)" });
 const resetSettingsButton = button("判定し直す(設定を捨てる)", "small", () => {
   if (!material) return;
+  const hadCorrections = material.corrections.length > 0;
+  material.corrections = [];
   freshCuts();
   exportSettings = structuredClone(DEFAULT_EXPORT);
   applyCurrentCut();
+  if (hadCorrections) void setCorrections([]);
+  else refreshFixBar();
   status.textContent = "解析結果から設定を作り直しました。";
 });
 
@@ -460,7 +510,8 @@ const detailsPanel = el("details", { className: "panel params" }, [
     el("fieldset", {}, [
       el("legend", { textContent: "鳴らし方" }),
       select("ピッチの変え方", [["preserve-length", "長さ保持(PSOLA)"], ["resample", "速度連動(昔ながら)"]], () => params.pitchMode, (p, v) => (p.pitchMode = v)),
-      select("持続区間の伸ばし方", [["pool", "周期プール(自然)"], ["loop", "ループ"], ["none", "伸ばさない(ワンショット)"]], () => params.sustainMode, (p, v) => (p.sustainMode = v)),
+      select("持続区間の伸ばし方", [["pool", "周期プール(自然)"], ["loop", "ループ"], ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"], ["none", "伸ばさない(ワンショット)"]], () => params.sustainMode, (p, v) => (p.sustainMode = v)),
+      range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
       check("語尾を末尾に付ける", () => params.tail.enabled, (p, v) => (p.tail.enabled = v)),
       range("フォルマント", -6, 6, 0.1, () => params.formantSemitones, (p, v) => (p.formantSemitones = v), semis),
       check("大きな移調で声質を少し追従させる", () => params.formantFollow, (p, v) => (p.formantFollow = v)),
@@ -631,13 +682,16 @@ function refreshExport(): void {
   lengthBeats.checked = exportSettings.lengthMode === "beats";
   lengthSeconds.checked = exportSettings.lengthMode === "seconds";
   const oneShot = params.sustainMode === "none";
-  lengthBlock.classList.toggle("disabled", oneShot);
   const held = exportLengthSec(exportSettings);
+  const wavetable = exportSettings.format === "wavetable" && !oneShot;
+  lengthBlock.classList.toggle("disabled", oneShot || wavetable);
   lengthResult.textContent = oneShot
     ? "ワンショット: 素材の長さのまま"
-    : exportSettings.format === "single"
-      ? `= ${held.toFixed(2)} 秒`
-      : `= ${held.toFixed(2)} 秒(ループ用に最低 2 秒は作ります)`;
+    : wavetable
+      ? "ウェーブテーブル: 長さは使いません(鍵盤では使われます)"
+      : exportSettings.format === "single"
+        ? `= ${held.toFixed(2)} 秒`
+        : `= ${held.toFixed(2)} 秒(ループ用に最低 2 秒は作ります)`;
 
   formatSelect.value = exportSettings.format;
   formatNote.textContent = FORMATS.find((f) => f.id === exportSettings.format)!.note;
@@ -664,6 +718,7 @@ function currentFileName(): string {
   const base = safeBaseName(baseNameFor(cut));
   if (cut.params.sustainMode === "none" || exportSettings.format === "single") return exportFileName(base, cut.note, exportSettings, cut.params.sustainMode === "none");
   if (exportSettings.format === "loop") return `${base}_${pitchLabel(cut.note).replace("#", "s")}_loop.wav`;
+  if (exportSettings.format === "wavetable") return `${base}_wavetable.wav`;
   return `${base}.zip`;
 }
 
@@ -774,7 +829,50 @@ function settingsBody(): Omit<SettingsFile, "app" | "version" | "savedAt"> {
     credit: { ...credit },
     cuts: cuts.map(({ name, markers: m, params: p, note: n, noteMode: mode }) => ({ name, markers: m, params: p, note: n, noteMode: mode })),
     currentCut: current,
+    corrections: material!.corrections,
   };
+}
+
+// ---------------------------------------------------------------- hand corrections → a new analysis
+
+async function addCorrection(c: PitchCorrection): Promise<void> {
+  if (!material) return;
+  selection = null;
+  editor.setSelection(null);
+  await setCorrections([...material.corrections, c]);
+}
+
+/**
+ * Re-applies the corrections to the original analysis, finds the pitch marks
+ * again from the corrected track (in the Worker), and swaps the sources the
+ * engine and the export use. Cuts whose root is automatic follow.
+ */
+async function setCorrections(corrections: PitchCorrection[]): Promise<void> {
+  if (!material) return;
+  const target = material;
+  target.corrections = corrections;
+  status.textContent = corrections.length ? "手直しを反映しています…" : "判定を元に戻しています…";
+  try {
+    const track = applyCorrections(target.original.track, corrections);
+    const { analysis, source } = await client.analyze(target.channels, target.sampleRate, undefined, track);
+    if (material !== target) return; // another material was opened meanwhile
+    // Keep the original's root/markers fields where they mean "fresh suggestion"; the track and marks are the corrected ones.
+    target.analysis = analysis;
+    target.source = source;
+    target.exportSources = new Map([[source.sampleRate, source]]);
+    client.setSource(source);
+    editor.setMaterial({ mono: target.mono, sampleRate: target.sampleRate, track: analysis.track });
+    for (const cut of cuts) {
+      const root = rootForMarkers(analysis.track, cut.markers);
+      cut.detectedRoot = root?.midi ?? null;
+      if (cut.params.rootMode === "auto" && root) cut.params = { ...cut.params, root: root.midi };
+    }
+    applyCurrentCut();
+    refreshFixBar();
+    status.textContent = corrections.length ? `手直し ${corrections.length} 件を反映しました。判定 ${pitchLabel(params.root)}。` : "判定を元に戻しました。";
+  } catch (error) {
+    status.textContent = `手直しを反映できませんでした: ${error instanceof Error ? error.message : error}`;
+  }
 }
 
 let saveTimer = 0;
@@ -801,6 +899,8 @@ function applySettings(file: SettingsFile): void {
   Object.assign(credit, file.credit);
   setCreditInputs();
   applyCurrentCut();
+  if (file.corrections.length || material.corrections.length) void setCorrections(file.corrections);
+  else refreshFixBar();
 }
 
 // ---------------------------------------------------------------- loading
@@ -819,8 +919,10 @@ async function load(name: string, channels: Float32Array[], sampleRate: number):
   status.textContent = `「${name}」を解析しています…`;
   try {
     const { analysis, source, elapsedMs } = await client.analyze(channels, sampleRate);
-    material = { name, channels, sampleRate, mono: mixToMono(channels), analysis, source, exportSources: new Map([[source.sampleRate, source]]) };
+    material = { name, channels, sampleRate, mono: mixToMono(channels), analysis, original: analysis, corrections: [], source, exportSources: new Map([[source.sampleRate, source]]) };
+    selection = null;
     editor.setMaterial({ mono: material.mono, sampleRate, track: analysis.track });
+    refreshFixBar();
     client.setSource(source);
     emptyState.hidden = true;
     workspace.hidden = false;
@@ -908,6 +1010,21 @@ editor.onMarkersChange = (next, final) => {
     }
   }
   sendInstrument();
+};
+
+editor.onRootChange = (root, final) => {
+  // Dragging the dotted line: the root is set by hand from here on.
+  params = { ...params, root, rootMode: "manual" };
+  if (final) sendInstrument();
+  else {
+    rootLabel.textContent = pitchLabel(root);
+    rootSource.textContent = "(手動)";
+  }
+};
+
+editor.onSelect = (next) => {
+  selection = next;
+  refreshFixBar();
 };
 
 client.onStatus = (voices) => (voiceCount.textContent = String(voices));

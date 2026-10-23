@@ -4,10 +4,10 @@
 // nothing is rendered until the file is written — so any of it can be
 // changed at any time. Times are seconds within the material.
 
-export type SustainMode = "pool" | "loop" | "none";
+export type SustainMode = "pool" | "loop" | "wavetable" | "none";
 export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
-export type PresetId = "synth" | "synth-lead" | "bass" | "jinriki" | "original" | "drum";
+export type PresetId = "synth" | "synth-lead" | "wavetable" | "bass" | "jinriki" | "original" | "drum";
 
 export interface Markers {
   /** Where the material starts and stops being used (the cut, 切り出し). */
@@ -34,6 +34,8 @@ export interface InstrumentParams {
   /** Let the formants follow a little on shifts beyond ±7 semitones. */
   formantFollow: boolean;
   sustainMode: SustainMode;
+  /** Wavetable sustain: how many consecutive periods are cycled (1 = one period over and over). */
+  wavetableCycles: number;
   tail: { enabled: boolean; limit: TailLimit };
   wobble: {
     vibratoCents: number;
@@ -65,6 +67,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   formantSemitones: 0,
   formantFollow: true,
   sustainMode: "pool",
+  wavetableCycles: 1,
   tail: { enabled: false, limit: "unlimited" },
   wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, driftCents: 0, micro: true },
   amp: { attack: 0.005, decay: 0.1, sustain: 1, release: 0.02, velocitySens: 0.5 },
@@ -81,6 +84,7 @@ export interface Preset {
 export const PRESETS: Preset[] = [
   { id: "synth", label: "シンセ化(平坦)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
   { id: "synth-lead", label: "シンセ化リード(ビブラート)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 25, vibratoHz: 5.8, vibratoDelaySec: 0.2, driftCents: 0, micro: true } }) },
+  { id: "wavetable", label: "ウェーブテーブル(無機質)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "wavetable", wavetableCycles: 1, tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false } }) },
   { id: "bass", label: "ベース", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, amp: { ...p.amp, attack: 0.003, release: 0.04 } }) },
   { id: "jinriki", label: "人力(抑揚を少し整える)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0.3, sustainMode: "pool", tail: { ...p.tail, enabled: true }, wobble: { ...p.wobble, vibratoCents: 15, vibratoHz: 5.5, vibratoDelaySec: 0.3, driftCents: 4, micro: true } }) },
   { id: "original", label: "原型(抑揚そのまま)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "pool", tail: { ...p.tail, enabled: false }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
@@ -94,8 +98,8 @@ export type LengthMode = "beats" | "seconds";
 /** Where the file is going; picks the sample rate and the help text (design.md 5–7). */
 export type Destination = "generic" | "garageband" | "vital" | "decent";
 
-/** What is written: one WAV, one loopable WAV, or a multisample folder (zip). */
-export type ExportFormat = "single" | "loop" | "multisample";
+/** What is written: one WAV, one loopable WAV, a multisample folder (zip), or a wavetable for Vital. */
+export type ExportFormat = "single" | "loop" | "multisample" | "wavetable";
 
 /** Shared by every cut of the material; the note itself belongs to the cut. */
 export interface ExportSettings {

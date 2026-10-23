@@ -224,8 +224,11 @@ input:focus-visible {
 }
 
 .hint {
-  margin: 0;
-  max-width: 36em;
+  margin: 0 0 6px;
+}
+
+.spacer {
+  flex: 1 1 8px;
 }
 
 /* The cuts (区間) of the material. */

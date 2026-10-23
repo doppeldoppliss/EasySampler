@@ -27,6 +27,8 @@ export class EngineClient {
   private nextId = 1;
   private waiting = new Map<number, (response: AnalysisResponse) => void>();
   private preview: AudioBufferSourceNode | null = null;
+  private previewStartedAt = 0;
+  private previewDuration = 0;
   onStatus: (voices: number) => void = () => {};
   onError: (message: string) => void = () => {};
   onPreviewEnd: () => void = () => {};
@@ -139,6 +141,14 @@ export class EngineClient {
     };
     node.start();
     this.preview = node;
+    this.previewStartedAt = context.currentTime;
+    this.previewDuration = frames / sampleRate;
+  }
+
+  /** Seconds into the preview that is playing, or null when none is. */
+  previewPosition(): number | null {
+    if (!this.preview || !this.context) return null;
+    return Math.min(this.previewDuration, Math.max(0, this.context.currentTime - this.previewStartedAt));
   }
 
   stopPreview(): void {

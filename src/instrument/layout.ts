@@ -36,6 +36,30 @@ export function normalizeRemoved(ranges: readonly TimeRange[] | undefined, range
   return out;
 }
 
+/**
+ * Display time: source time with the removed stretches closed up (the
+ * editor shows the material as it will play). A source time inside a
+ * removed stretch lands on the seam.
+ */
+export function collapsedTime(t: number, removed: readonly TimeRange[]): number {
+  let out = t;
+  for (const r of removed) {
+    if (t >= r.end) out -= r.end - r.start;
+    else if (t > r.start) out -= t - r.start;
+  }
+  return out;
+}
+
+/** The inverse of collapsedTime: the source time shown at display time `d` (never inside a removed stretch). */
+export function expandedTime(d: number, removed: readonly TimeRange[]): number {
+  let t = d;
+  for (const r of removed) {
+    if (t >= r.start) t += r.end - r.start;
+    else break;
+  }
+  return t;
+}
+
 /** Seconds of [from, to) that are removed. */
 export function removedWithin(removed: readonly TimeRange[], from: number, to: number): number {
   let sum = 0;

@@ -4,7 +4,7 @@ import { Engine } from "../engine/engine";
 import { analyzeMaterial, prepareSource } from "../engine/prepare";
 import { renderNote } from "../export/render";
 import { demoSyllable } from "../testsignals/synthVoice";
-import { normalizeRemoved, outputLayout, removedWithin, usedBetween } from "./layout";
+import { collapsedTime, expandedTime, normalizeRemoved, outputLayout, removedWithin, usedBetween } from "./layout";
 import { DEFAULT_PARAMS, type InstrumentParams, type Markers } from "./types";
 
 const SR = 44100;
@@ -128,5 +128,27 @@ describe("engine: removals and speeds", () => {
       if (i > 150) for (const v of l) energy += v * v;
     }
     expect(energy).toBeGreaterThan(0.01);
+  });
+});
+
+describe("collapsed / expanded time (the editor's view with removals closed up)", () => {
+  const removed = [
+    { start: 0.2, end: 0.3 },
+    { start: 0.5, end: 0.7 },
+  ];
+  it("closes up the removed stretches and lands inside ones on the seam", () => {
+    expect(collapsedTime(0.1, removed)).toBeCloseTo(0.1);
+    expect(collapsedTime(0.25, removed)).toBeCloseTo(0.2);
+    expect(collapsedTime(0.4, removed)).toBeCloseTo(0.3);
+    expect(collapsedTime(0.6, removed)).toBeCloseTo(0.4);
+    expect(collapsedTime(1.0, removed)).toBeCloseTo(0.7);
+  });
+  it("inverts, skipping the removed stretches", () => {
+    expect(expandedTime(0.1, removed)).toBeCloseTo(0.1);
+    expect(expandedTime(0.2, removed)).toBeCloseTo(0.3); // the seam shows what follows the cut
+    expect(expandedTime(0.3, removed)).toBeCloseTo(0.4);
+    expect(expandedTime(0.4, removed)).toBeCloseTo(0.7);
+    expect(expandedTime(0.7, removed)).toBeCloseTo(1.0);
+    for (const t of [0, 0.15, 0.35, 0.45, 0.8, 1.2]) expect(expandedTime(collapsedTime(t, removed), removed)).toBeCloseTo(t);
   });
 });

@@ -351,12 +351,32 @@ function refreshFixBar(): void {
   correctionsLabel.parentElement!.hidden = count === 0;
 }
 
+// Trial playback from the head (with the playhead moving), and the view's zoom.
+const playOriginalButton = button("▶ 元の音", "small", () => void playOriginal());
+const playResultButton = button("▶ 書き出し後", "small", () => void listen());
+const zoomInButton = button("＋", "small", () => editor.zoom(1.6));
+const zoomOutButton = button("−", "small", () => editor.zoom(1 / 1.6));
+const zoomAllButton = button("全体", "small", () => editor.zoomAll());
+const zoomRangeButton = button("選択 / 範囲に合わせる", "small", () => {
+  if (selection) editor.zoomToRange(selection.from, selection.to);
+  else if (markers) editor.zoomToRange(markers.rangeStart, markers.rangeEnd);
+});
+const zoomLabel = el("span", { className: "fine num" });
+zoomInButton.ariaLabel = "拡大";
+zoomOutButton.ariaLabel = "縮小";
+editor.onViewChange = (view) => {
+  const whole = view.end - view.start >= view.total - 1e-6;
+  zoomLabel.textContent = whole ? "" : `${view.start.toFixed(2)}–${view.end.toFixed(2)} 秒を表示中`;
+  zoomAllButton.disabled = whole;
+};
+
 const materialPanel = el("section", { className: "panel" }, [
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [el("span", { className: "fine", textContent: "判定した音程" }), rootLabel, rootSource]),
-    el("p", { className: "fine hint", textContent: "両端のハンドルで鳴らす範囲を切り出し、帯の端で頭部(伸ばさない)・持続区間(伸ばす)・語尾を直せます。点線(判定)は上下にドラッグで半音ずつ、Alt を押しながらでセント単位、ダブルクリックで最寄りの半音に。" }),
+    el("div", { className: "row tight" }, [playOriginalButton, playResultButton, el("span", { className: "spacer" }), zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
   ]),
+  el("p", { className: "fine hint", textContent: "両端のハンドルで鳴らす範囲を切り出し、帯の端で頭部(伸ばさない)・持続区間(伸ばす)・語尾を直せます。点線(判定)は上下にドラッグで半音ずつ、Alt でセント単位、ダブルクリックで最寄りの半音に。拡大は Ctrl + ホイールかピンチ、横スクロールはホイールか 2 本指。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。" }),
   editor.element,
   el("p", { className: "legend fine" }, [
     el("span", { className: "swatch original" }), "元のピッチ  ",
@@ -1089,21 +1109,92 @@ async function buildAll(): Promise<Built | null> {
   }
 }
 
+/** What is playing right now, for the playhead: the result (output time) or the original (display time, offset by where the range starts). */
+let playing: { kind: "result" } | { kind: "original"; displayStart: number } | null = null;
+let playheadFrame = 0;
+
+function trackPlayhead(): void {
+  cancelAnimationFrame(playheadFrame);
+  const step = () => {
+    const pos = client.previewPosition();
+    if (pos === null || !playing) {
+      editor.setPlayhead(null);
+      return;
+    }
+    editor.setPlayhead(playing.kind === "result" ? { kind: "output", sec: pos } : { kind: "display", sec: playing.displayStart + pos });
+    playheadFrame = requestAnimationFrame(step);
+  };
+  playheadFrame = requestAnimationFrame(step);
+}
+
+function showPlaying(): void {
+  const result = playing?.kind === "result";
+  const original = playing?.kind === "original";
+  listenButton.textContent = result ? "■ 停止" : "▶ 聴く";
+  playResultButton.textContent = result ? "■ 停止" : "▶ 書き出し後";
+  playOriginalButton.textContent = original ? "■ 停止" : "▶ 元の音";
+}
+
+/** The result from the head: the file as it will be written (a multisample's centre zone, a wavetable's sweep). */
 async function listen(): Promise<void> {
-  if (listenButton.dataset.playing) {
+  if (playing?.kind === "result") {
     client.stopPreview();
     return;
   }
   const result = await buildCurrent();
   if (!result) return;
   exportStatus.textContent = exportSettings.format === "multisample" ? `試聴: 中央の音(${pitchLabel(note)})` : "";
-  listenButton.textContent = "■ 停止";
-  listenButton.dataset.playing = "1";
+  playing = { kind: "result" };
+  showPlaying();
   client.playBuffer(result.preview.channels, result.preview.sampleRate);
+  trackPlayhead();
 }
+
+/** The material from the head, as recorded, within the range and minus the removed stretches (a short crossfade at each seam). */
+async function playOriginal(): Promise<void> {
+  if (playing?.kind === "original") {
+    client.stopPreview();
+    return;
+  }
+  if (!material || !markers) return;
+  const rate = material.sampleRate;
+  const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
+  const pieces: [number, number][] = [];
+  let at = markers.rangeStart;
+  for (const r of removed) {
+    if (r.start > at) pieces.push([at, r.start]);
+    at = Math.max(at, r.end);
+  }
+  if (markers.rangeEnd > at) pieces.push([at, markers.rangeEnd]);
+  const fade = Math.round(0.005 * rate);
+  const total = pieces.reduce((n, [a, b]) => n + Math.round((b - a) * rate), 0);
+  const out = material.channels.map(() => new Float32Array(total));
+  let cursor = 0;
+  for (const [a, b] of pieces) {
+    const from = Math.round(a * rate);
+    const length = Math.round((b - a) * rate);
+    for (let c = 0; c < out.length; c++) {
+      const src = material.channels[c];
+      for (let i = 0; i < length; i++) {
+        let v = src[from + i] ?? 0;
+        if (i < fade) v *= i / fade;
+        if (length - 1 - i < fade) v *= (length - 1 - i) / fade;
+        out[c][cursor + i] += v;
+      }
+    }
+    cursor += length;
+  }
+  playing = { kind: "original", displayStart: editor.disp(markers.rangeStart) };
+  showPlaying();
+  client.playBuffer(out, rate);
+  trackPlayhead();
+}
+
 client.onPreviewEnd = () => {
-  listenButton.textContent = "▶ 聴く";
-  delete listenButton.dataset.playing;
+  playing = null;
+  showPlaying();
+  cancelAnimationFrame(playheadFrame);
+  editor.setPlayhead(null);
 };
 
 async function deliver(how: "share" | "download", all: boolean): Promise<void> {

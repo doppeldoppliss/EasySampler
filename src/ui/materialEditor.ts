@@ -4,16 +4,20 @@
 // line as well as colour), the detected root (dotted) and the target note
 // (solid), and the synthesis markers as labelled bands with draggable edges.
 //
-// Three gestures on the plot: drag a handle (the cut and the markers), drag
-// the dotted root line up and down (semitones; Alt for cents; double-click
+// Time on screen is the material as it will play: removed stretches are
+// closed up, with a seam mark where a cut was made. The view can be zoomed
+// (Ctrl + wheel, pinch, the +/− buttons) and panned (wheel, two fingers).
+//
+// Gestures on the plot: drag a handle (the cut and the markers), drag the
+// dotted root line up and down (semitones; Alt for cents; double-click
 // snaps it to the nearest semitone), or drag across the plot to select a
-// stretch of time for a hand correction (オクターブ, 有声 / 無声).
+// stretch of time for a hand correction or a removal.
 
 import { pitchLabel } from "../analysis/pitch";
 import type { PitchTrack } from "../analysis/pyin";
-import { normalizeRemoved, type OutputLayout } from "../instrument/layout";
+import { collapsedTime, expandedTime, normalizeRemoved, type OutputLayout } from "../instrument/layout";
 import { clampMarkers } from "../instrument/markers";
-import type { Markers } from "../instrument/types";
+import type { Markers, TimeRange } from "../instrument/types";
 import { cssVar, el } from "./dom";
 
 export interface EditorMaterial {
@@ -22,6 +26,7 @@ export interface EditorMaterial {
   track: PitchTrack;
 }
 
+/** Seconds of source time. */
 export interface TimeSelection {
   from: number;
   to: number;
@@ -33,6 +38,9 @@ export interface Vibrato {
   delaySec: number;
 }
 
+/** Where playback is: in display time (the material as shown) or in output time (the "after" lane). */
+export type Playhead = { kind: "display"; sec: number } | { kind: "output"; sec: number } | null;
+
 type Handle = Exclude<keyof Markers, "removed">;
 
 const STRIP_HEIGHT = 36;
@@ -42,6 +50,8 @@ const HANDLE_REACH_MOUSE = 8;
 const HANDLE_REACH_TOUCH = 22;
 /** A selection drag shorter than this (CSS px) is a tap: it clears the selection. */
 const TAP_PX = 4;
+/** The closest zoom: this many seconds across the plot. */
+const MIN_VIEW_SEC = 0.05;
 
 const HANDLE_ORDER: Handle[] = ["rangeStart", "attack", "sustainStart", "sustainEnd", "tailStart", "rangeEnd"];
 
@@ -50,6 +60,7 @@ export class MaterialEditor {
   private canvas: HTMLCanvasElement;
   private material: EditorMaterial | null = null;
   private markers: Markers | null = null;
+  private removed: TimeRange[] = [];
   private root = 60;
   /** The note the file is tuned to: where the edited curve is drawn. */
   private target = 60;
@@ -57,15 +68,24 @@ export class MaterialEditor {
   private selection: TimeSelection | null = null;
   private layout: OutputLayout | null = null;
   private vibrato: Vibrato | null = null;
+  private playhead: Playhead = null;
+  /** The visible window, in display seconds. */
+  private view = { start: 0, end: 1 };
   private dragging: { handle: Handle; pointerId: number } | null = null;
   private rootDrag: { pointerId: number } | null = null;
   private selecting: { pointerId: number; anchor: number; anchorX: number; moved: boolean } | null = null;
+  /** Two fingers: pinch to zoom, move to pan. */
+  private pointers = new Map<number, number>();
+  private pinch: { span: number; start: number; distance: number; centerX: number } | null = null;
   private hover: Handle | "root" | null = null;
   /** The pitch scale of the last draw (CSS px), for turning a pointer's y into a pitch. */
   private scale = { lo: 48, hi: 72, plotHeightCss: 1 };
+  /** The "after" lane's horizontal mapping from the last draw (device px). */
+  private laneMap = { x: 0, width: 1, totalSec: 1 };
   onMarkersChange: (markers: Markers, final: boolean) => void = () => {};
   onRootChange: (root: number, final: boolean) => void = () => {};
   onSelect: (selection: TimeSelection | null) => void = () => {};
+  onViewChange: (view: { start: number; end: number; total: number }) => void = () => {};
 
   constructor() {
     this.canvas = el("canvas", { className: "editor-canvas", ariaLabel: "素材の波形とピッチカーブ" });
@@ -74,6 +94,7 @@ export class MaterialEditor {
     this.canvas.addEventListener("pointermove", (event) => this.move(event));
     this.canvas.addEventListener("pointerup", (event) => this.up(event));
     this.canvas.addEventListener("pointercancel", (event) => this.up(event));
+    this.canvas.addEventListener("wheel", (event) => this.wheel(event), { passive: false });
     this.canvas.addEventListener("dblclick", (event) => {
       if (this.nearRoot(event.clientX, event.clientY, "mouse")) this.onRootChange(Math.round(this.root), true);
     });
@@ -81,17 +102,25 @@ export class MaterialEditor {
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.draw());
   }
 
+  // ------------------------------------------------------------- state in
+
   setMaterial(material: EditorMaterial | null): void {
     this.material = material;
     this.selection = null;
+    this.removed = [];
+    this.view = { start: 0, end: this.displayDuration };
+    this.playhead = null;
     this.draw();
+    this.announceView();
   }
 
   setState(markers: Markers, root: number, flatten: number, target = root): void {
     this.markers = markers;
+    this.removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
     this.root = root;
     this.target = target;
     this.flatten = flatten;
+    this.clampView();
     this.draw();
   }
 
@@ -107,13 +136,42 @@ export class MaterialEditor {
     this.draw();
   }
 
+  setPlayhead(playhead: Playhead): void {
+    this.playhead = playhead;
+    this.draw();
+  }
+
+  // ------------------------------------------------------------- time
+
   private get duration(): number {
     return this.material ? this.material.mono.length / this.material.sampleRate : 1;
   }
 
+  /** The material's length as shown (removed stretches closed up). */
+  get displayDuration(): number {
+    return collapsedTime(this.duration, this.removed);
+  }
+
+  /** Source time → display time. */
+  disp(t: number): number {
+    return collapsedTime(t, this.removed);
+  }
+
+  /** Display time → source time. */
+  src(d: number): number {
+    return expandedTime(d, this.removed);
+  }
+
+  /** The source time at a pointer's x (never inside a removed stretch, clamped to the material). */
   private timeAt(clientX: number): number {
     const box = this.canvas.getBoundingClientRect();
-    return Math.max(0, Math.min(this.duration, ((clientX - box.left) / box.width) * this.duration));
+    const d = this.view.start + ((clientX - box.left) / box.width) * (this.view.end - this.view.start);
+    return Math.max(0, Math.min(this.duration, this.src(Math.max(0, Math.min(this.displayDuration, d)))));
+  }
+
+  private displayAt(clientX: number): number {
+    const box = this.canvas.getBoundingClientRect();
+    return this.view.start + ((clientX - box.left) / box.width) * (this.view.end - this.view.start);
   }
 
   private pitchAt(clientY: number): number {
@@ -121,6 +179,74 @@ export class MaterialEditor {
     const y = Math.max(0, Math.min(this.scale.plotHeightCss, clientY - box.top));
     return this.scale.lo + (1 - y / this.scale.plotHeightCss) * (this.scale.hi - this.scale.lo);
   }
+
+  // ------------------------------------------------------------- view (zoom / pan)
+
+  /** Zooms by `factor` (> 1 closer) around a display time; the buttons use the middle of the view. */
+  zoom(factor: number, aroundDisplaySec = (this.view.start + this.view.end) / 2): void {
+    const span = this.view.end - this.view.start;
+    const next = Math.max(MIN_VIEW_SEC, Math.min(this.displayDuration, span / factor));
+    const share = (aroundDisplaySec - this.view.start) / span;
+    this.view = { start: aroundDisplaySec - share * next, end: aroundDisplaySec + (1 - share) * next };
+    this.clampView();
+    this.draw();
+    this.announceView();
+  }
+
+  zoomAll(): void {
+    this.view = { start: 0, end: this.displayDuration };
+    this.draw();
+    this.announceView();
+  }
+
+  /** Shows the selection, or the used range, filling the plot. */
+  zoomToRange(from: number, to: number): void {
+    const a = this.disp(from);
+    const b = this.disp(to);
+    const pad = Math.max(0.01, (b - a) * 0.05);
+    this.view = { start: a - pad, end: b + pad };
+    this.clampView();
+    this.draw();
+    this.announceView();
+  }
+
+  panBy(displaySec: number): void {
+    const span = this.view.end - this.view.start;
+    this.view = { start: this.view.start + displaySec, end: this.view.end + displaySec };
+    this.clampView();
+    if (this.view.end - this.view.start !== span) this.view.end = this.view.start + span;
+    this.draw();
+    this.announceView();
+  }
+
+  private clampView(): void {
+    const total = this.displayDuration;
+    let span = Math.max(MIN_VIEW_SEC, Math.min(total, this.view.end - this.view.start));
+    if (!Number.isFinite(span) || span <= 0) span = total;
+    let start = this.view.start;
+    if (start + span > total) start = total - span;
+    if (start < 0) start = 0;
+    this.view = { start, end: start + span };
+  }
+
+  private announceView(): void {
+    this.onViewChange({ ...this.view, total: this.displayDuration });
+  }
+
+  private wheel(event: WheelEvent): void {
+    if (!this.material) return;
+    event.preventDefault();
+    if (event.ctrlKey || event.metaKey) {
+      // Pinch on a trackpad arrives as Ctrl + wheel too.
+      this.zoom(Math.exp(-event.deltaY * 0.01), this.displayAt(event.clientX));
+    } else {
+      const span = this.view.end - this.view.start;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      this.panBy((delta / this.canvas.clientWidth) * span * (event.deltaMode === 1 ? 20 : 1));
+    }
+  }
+
+  // ------------------------------------------------------------- pointer
 
   private handleAt(event: PointerEvent): Handle | null {
     if (!this.markers) return null;
@@ -133,7 +259,7 @@ export class MaterialEditor {
     let best: Handle | null = null;
     let bestDistance = reach;
     for (const handle of HANDLE_ORDER) {
-      const hx = (this.markers[handle] / this.duration) * box.width;
+      const hx = this.xCss(this.markers[handle], box.width);
       let distance = Math.abs(hx - x);
       // Sustain end and tail start often coincide: the lower half of the strip grabs the tail.
       if (handle === "tailStart") distance += inStripLower ? -0.5 : 0.5;
@@ -144,6 +270,11 @@ export class MaterialEditor {
       }
     }
     return best;
+  }
+
+  /** Source time → CSS px within a width. */
+  private xCss(t: number, width: number): number {
+    return ((this.disp(t) - this.view.start) / (this.view.end - this.view.start)) * width;
   }
 
   private nearRoot(clientX: number, clientY: number, pointerType: string): boolean {
@@ -167,13 +298,24 @@ export class MaterialEditor {
 
   private down(event: PointerEvent): void {
     if (event.button !== 0 && event.pointerType === "mouse") return;
+    if (!this.markers || !this.material) return;
+    this.pointers.set(event.pointerId, event.clientX);
+    if (this.pointers.size === 2) {
+      // A second finger: whatever the first was doing becomes a pinch / pan.
+      this.capture(event);
+      this.dragging = null;
+      this.rootDrag = null;
+      this.selecting = null;
+      const [a, b] = [...this.pointers.values()];
+      this.pinch = { span: this.view.end - this.view.start, start: this.view.start, distance: Math.max(1, Math.abs(a - b)), centerX: (a + b) / 2 };
+      return;
+    }
     const handle = this.handleAt(event);
     if (handle) {
       this.capture(event);
       this.dragging = { handle, pointerId: event.pointerId };
       return;
     }
-    if (!this.markers || !this.material) return;
     this.capture(event);
     if (this.nearRoot(event.clientX, event.clientY, event.pointerType)) {
       this.rootDrag = { pointerId: event.pointerId };
@@ -185,6 +327,22 @@ export class MaterialEditor {
   }
 
   private move(event: PointerEvent): void {
+    if (this.pointers.has(event.pointerId)) this.pointers.set(event.pointerId, event.clientX);
+    if (this.pinch && this.pointers.size >= 2) {
+      const [a, b] = [...this.pointers.values()];
+      const distance = Math.max(1, Math.abs(a - b));
+      const centerX = (a + b) / 2;
+      const box = this.canvas.getBoundingClientRect();
+      const span = Math.max(MIN_VIEW_SEC, Math.min(this.displayDuration, (this.pinch.span * this.pinch.distance) / distance));
+      // Keep the display time under the original centre under the fingers' centre.
+      const centerTime = this.pinch.start + ((this.pinch.centerX - box.left) / box.width) * this.pinch.span;
+      const start = centerTime - ((centerX - box.left) / box.width) * span;
+      this.view = { start, end: start + span };
+      this.clampView();
+      this.draw();
+      this.announceView();
+      return;
+    }
     if (this.dragging?.pointerId === event.pointerId && this.markers) {
       const markers = this.moved(this.dragging.handle, this.timeAt(event.clientX));
       this.markers = markers;
@@ -219,6 +377,11 @@ export class MaterialEditor {
   }
 
   private up(event: PointerEvent): void {
+    this.pointers.delete(event.pointerId);
+    if (this.pinch) {
+      if (this.pointers.size < 2) this.pinch = null;
+      return;
+    }
     if (this.dragging?.pointerId === event.pointerId && this.markers) {
       this.dragging = null;
       this.onMarkersChange(this.markers, true);
@@ -249,6 +412,8 @@ export class MaterialEditor {
     return clampMarkers(m);
   }
 
+  // ------------------------------------------------------------- drawing
+
   draw(): void {
     const dpr = window.devicePixelRatio || 1;
     const width = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
@@ -265,46 +430,31 @@ export class MaterialEditor {
     const lane = LANE_HEIGHT * dpr;
     const plotHeight = height - strip - lane;
     const stripBottom = plotHeight + strip;
-    const x = (t: number) => (t / this.duration) * width;
+    const view = this.view;
+    const span = view.end - view.start;
+    /** Source time → device px. */
+    const x = (t: number) => ((this.disp(t) - view.start) / span) * width;
+    /** Display time → device px. */
+    const xd = (d: number) => ((d - view.start) / span) * width;
 
     // Outside the range: shaded.
     g.fillStyle = cssVar("--outside");
-    g.fillRect(0, 0, x(markers.rangeStart), stripBottom);
-    g.fillRect(x(markers.rangeEnd), 0, width - x(markers.rangeEnd), stripBottom);
+    g.fillRect(0, 0, Math.max(0, x(markers.rangeStart)), stripBottom);
+    g.fillRect(Math.min(width, x(markers.rangeEnd)), 0, width, stripBottom);
 
-    // Removed stretches: shaded and hatched (they are skipped on playback).
-    const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
-    for (const r of removed) {
-      const left = x(r.start);
-      const right = x(r.end);
-      g.fillStyle = cssVar("--outside");
-      g.fillRect(left, 0, right - left, stripBottom);
-      g.save();
-      g.beginPath();
-      g.rect(left, 0, right - left, stripBottom);
-      g.clip();
-      g.strokeStyle = cssVar("--handle");
-      g.lineWidth = 1 * dpr;
-      g.globalAlpha = 0.5;
-      g.beginPath();
-      for (let d = -stripBottom; d < right - left; d += 10 * dpr) {
-        g.moveTo(left + d, stripBottom);
-        g.lineTo(left + d + stripBottom, 0);
-      }
-      g.stroke();
-      g.restore();
-    }
-
-    // Waveform (min/max per column).
+    // Waveform (min/max per column), reading the source through the display mapping.
     const samples = material.mono;
-    const perColumn = samples.length / width;
+    const rate = material.sampleRate;
     g.fillStyle = cssVar("--wave");
     const mid = plotHeight / 2;
     for (let col = 0; col < width; col++) {
+      const d0 = view.start + (col / width) * span;
+      const d1 = view.start + ((col + 1) / width) * span;
+      if (d1 < 0 || d0 > this.displayDuration) continue;
+      const from = Math.max(0, Math.floor(this.src(d0) * rate));
+      const to = Math.min(samples.length, Math.max(from + 1, Math.floor(this.src(d1) * rate) + 1));
       let lo = 0;
       let hi = 0;
-      const from = Math.floor(col * perColumn);
-      const to = Math.min(samples.length, Math.floor((col + 1) * perColumn) + 1);
       for (let i = from; i < to; i++) {
         const v = samples[i];
         if (v < lo) lo = v;
@@ -343,14 +493,16 @@ export class MaterialEditor {
       }
     }
 
-    // The selection (for a hand correction).
+    // The selection (for a hand correction or a removal), in display time.
     if (this.selection) {
+      const a = x(this.selection.from);
+      const b = x(this.selection.to);
       g.fillStyle = cssVar("--accent");
       g.globalAlpha = 0.18;
-      g.fillRect(x(this.selection.from), 0, x(this.selection.to) - x(this.selection.from), plotHeight);
+      g.fillRect(a, 0, b - a, plotHeight);
       g.globalAlpha = 1;
-      g.fillRect(x(this.selection.from), 0, 1.5 * dpr, plotHeight);
-      g.fillRect(x(this.selection.to) - 1.5 * dpr, 0, 1.5 * dpr, plotHeight);
+      g.fillRect(a, 0, 1.5 * dpr, plotHeight);
+      g.fillRect(b - 1.5 * dpr, 0, 1.5 * dpr, plotHeight);
     }
 
     // The detected root: dotted, labelled at the left (draggable). The target note (the file's pitch): solid accent, labelled at the right.
@@ -375,18 +527,25 @@ export class MaterialEditor {
     line(this.root, `判定 ${pitchLabel(this.root)} ↕`, rootActive ? cssVar("--accent") : cssVar("--muted"), [2 * dpr, 4 * dpr], "left", rootActive);
     line(this.target, pitchLabel(this.target), cssVar("--accent"), [], "right", false);
 
+    // The pitch curves, broken at removed stretches and outside the window.
+    const inRemoved = (t: number) => this.removed.some((r) => t >= r.start && t < r.end);
     const curve = (value: (pitch: number) => number, from: number, to: number) => {
       g.beginPath();
       let drawing = false;
       for (let i = 0; i < track.f0.length; i++) {
         const t = i * track.hopSec;
         const pitch = track.f0[i];
-        if (!Number.isFinite(pitch) || t < from || t > to) {
+        if (!Number.isFinite(pitch) || t < from || t > to || inRemoved(t)) {
           drawing = false;
           continue;
         }
-        if (drawing) g.lineTo(x(t), y(value(pitch)));
-        else g.moveTo(x(t), y(value(pitch)));
+        const px = x(t);
+        if (px < -2 || px > width + 2) {
+          drawing = false;
+          continue;
+        }
+        if (drawing) g.lineTo(px, y(value(pitch)));
+        else g.moveTo(px, y(value(pitch)));
         drawing = true;
       }
       g.stroke();
@@ -413,16 +572,35 @@ export class MaterialEditor {
     g.font = `${11 * dpr}px system-ui, sans-serif`;
     for (const [from, to, color, text] of bands) {
       if (to <= from) continue;
+      const a = x(from);
+      const b = x(to);
       g.fillStyle = cssVar(color);
-      g.fillRect(x(from), plotHeight + 4 * dpr, x(to) - x(from), strip - 8 * dpr);
+      g.fillRect(a, plotHeight + 4 * dpr, b - a, strip - 8 * dpr);
       g.globalAlpha = 0.14;
-      g.fillRect(x(from), 0, x(to) - x(from), plotHeight);
+      g.fillRect(a, 0, b - a, plotHeight);
       g.globalAlpha = 1;
       const textWidth = g.measureText(text).width;
-      if (x(to) - x(from) > textWidth + 6 * dpr) {
+      if (b - a > textWidth + 6 * dpr) {
         g.fillStyle = cssVar("--band-text");
-        g.fillText(text, x(from) + 4 * dpr, plotHeight + strip / 2 + 4 * dpr);
+        g.fillText(text, Math.max(a, 0) + 4 * dpr, plotHeight + strip / 2 + 4 * dpr);
       }
+    }
+
+    // Seams: where a stretch was cut out (a dashed line and scissors at the top).
+    g.font = `${12 * dpr}px system-ui, sans-serif`;
+    for (const r of this.removed) {
+      const sx = Math.round(x(r.start));
+      if (sx < -10 * dpr || sx > width + 10 * dpr) continue;
+      g.strokeStyle = cssVar("--warn");
+      g.lineWidth = 1.5 * dpr;
+      g.setLineDash([3 * dpr, 3 * dpr]);
+      g.beginPath();
+      g.moveTo(sx, 0);
+      g.lineTo(sx, stripBottom);
+      g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = cssVar("--warn");
+      g.fillText("✂", sx - 6 * dpr, 12 * dpr);
     }
 
     // The "after" lane: the output's parts laid out in time, the sustain's stretch written on it, the vibrato over it.
@@ -436,6 +614,7 @@ export class MaterialEditor {
       const labelW = g.measureText("書き出し後").width + 10 * dpr;
       const laneX = labelW;
       const laneW = width - laneX - 4 * dpr;
+      this.laneMap = { x: laneX, width: laneW, totalSec: layout.totalSec };
       const px = (sec: number) => laneX + (sec / layout.totalSec) * laneW;
       g.fillStyle = cssVar("--muted");
       g.fillText("書き出し後", 4 * dpr, stripBottom + lane / 2 + 4 * dpr);
@@ -465,13 +644,13 @@ export class MaterialEditor {
           g.strokeStyle = cssVar("--pitch-edited");
           g.lineWidth = 1.5 * dpr;
           g.beginPath();
-          const mid = stripBottom + lane / 2;
+          const midY = stripBottom + lane / 2;
           const amp = Math.min(lane * 0.4, (vib.depthCents / 100) * lane * 0.4);
           const steps = Math.max(2, Math.round(px(to) - px(from)));
           for (let i = 0; i <= steps; i++) {
             const t = from + ((to - from) * i) / steps;
             const fadeIn = Math.min(1, (t - from) / 0.15);
-            const yy = mid - amp * fadeIn * Math.sin(2 * Math.PI * vib.rateHz * (t - from));
+            const yy = midY - amp * fadeIn * Math.sin(2 * Math.PI * vib.rateHz * (t - from));
             if (i === 0) g.moveTo(px(t), yy);
             else g.lineTo(px(t), yy);
           }
@@ -485,6 +664,7 @@ export class MaterialEditor {
     // since they are the first thing to reach for.
     for (const handle of HANDLE_ORDER) {
       const hx = Math.round(x(markers[handle]));
+      if (hx < -12 * dpr || hx > width + 12 * dpr) continue;
       const active = this.dragging?.handle === handle || this.hover === handle;
       const isRange = handle === "rangeStart" || handle === "rangeEnd";
       g.fillStyle = active ? cssVar("--accent") : cssVar("--handle");
@@ -498,6 +678,34 @@ export class MaterialEditor {
         const gripTop = handle === "tailStart" ? plotHeight + strip / 2 : plotHeight;
         g.fillRect(hx - 3 * dpr, gripTop + 2 * dpr, 6 * dpr, strip / 2 - 4 * dpr);
       }
+    }
+
+    // The playhead.
+    if (this.playhead) {
+      g.fillStyle = cssVar("--accent");
+      if (this.playhead.kind === "display") {
+        const px = Math.round(xd(this.playhead.sec));
+        if (px >= 0 && px <= width) {
+          g.fillRect(px - 1 * dpr, 0, 2 * dpr, stripBottom);
+          g.beginPath();
+          g.moveTo(px - 6 * dpr, 0);
+          g.lineTo(px + 6 * dpr, 0);
+          g.lineTo(px, 8 * dpr);
+          g.fill();
+        }
+      } else if (layout) {
+        const px = Math.round(this.laneMap.x + (this.playhead.sec / this.laneMap.totalSec) * this.laneMap.width);
+        g.fillRect(px - 1 * dpr, stripBottom, 2 * dpr, lane);
+      }
+    }
+
+    // Zoomed in: a thin bar at the very top shows where the window sits in the whole.
+    if (span < this.displayDuration - 1e-6) {
+      const total = this.displayDuration;
+      g.fillStyle = cssVar("--line");
+      g.fillRect(0, 0, width, 3 * dpr);
+      g.fillStyle = cssVar("--accent");
+      g.fillRect((view.start / total) * width, 0, Math.max(4 * dpr, (span / total) * width), 3 * dpr);
     }
   }
 }

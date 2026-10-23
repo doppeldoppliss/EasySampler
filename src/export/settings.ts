@@ -28,6 +28,8 @@ export interface SettingsFile {
   currentCut: number;
   /** Hand corrections to the pitch analysis (applied to the original analysis, in order). */
   corrections: PitchCorrection[];
+  /** The pitch search range the analysis was run with (探索範囲), when narrowed. */
+  pitchRange?: { low: number; high: number };
 }
 
 export function serializeSettings(file: Omit<SettingsFile, "app" | "version" | "savedAt">): string {
@@ -59,21 +61,34 @@ export function parseSettings(text: string): SettingsFile {
     cuts,
     currentCut: Math.max(0, Math.min(cuts.length - 1, Math.round(num(raw.currentCut, 0)))),
     corrections: sanitizeCorrections(raw.corrections),
+    pitchRange: sanitizeRange(raw.pitchRange),
   };
 }
 
 function sanitizeCorrections(raw: unknown): PitchCorrection[] {
   if (!Array.isArray(raw)) return [];
-  const kinds = ["octave-up", "octave-down", "unvoiced", "voiced"] as const;
+  const kinds = ["octave-up", "octave-down", "shift", "set", "unvoiced", "voiced"] as const;
   const out: PitchCorrection[] = [];
   for (const c of raw) {
     if (!isRecord(c) || !kinds.includes(c.kind as never)) continue;
     const start = num(c.start, Number.NaN);
     const end = num(c.end, Number.NaN);
     if (!(start >= 0) || !(end > start)) continue;
-    out.push({ start, end, kind: c.kind as PitchCorrection["kind"] });
+    const kind = c.kind as PitchCorrection["kind"];
+    const correction: PitchCorrection = { start, end, kind };
+    if (kind === "shift") correction.cents = clamp(num(c.cents, 0), -2400, 2400);
+    if (kind === "set") correction.midi = clamp(num(c.midi, 60), 0, 127);
+    out.push(correction);
   }
   return out;
+}
+
+/** The analysis's pitch search range (MIDI notes), when the user narrowed it. */
+function sanitizeRange(raw: unknown): { low: number; high: number } | undefined {
+  if (!isRecord(raw)) return undefined;
+  const low = clamp(Math.round(num(raw.low, 24)), 12, 120);
+  const high = clamp(Math.round(num(raw.high, 107)), 12, 120);
+  return high > low ? { low, high } : undefined;
 }
 
 /** The storage key for a material: its name and length (the same file opened again finds its settings). */

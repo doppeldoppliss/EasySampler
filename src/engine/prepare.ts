@@ -3,7 +3,7 @@
 // engine's rate with the marks moved along. Runs in the analysis Worker.
 
 import { findPitchMarks, pitchAt, type PitchMarks } from "../analysis/pitchMarks";
-import { analyzePitch, type PitchTrack } from "../analysis/pyin";
+import { analyzePitch, type PitchTrack, type PyinOptions } from "../analysis/pyin";
 import { rootPitch, type RootPitch } from "../analysis/rootPitch";
 import { suggestMarkers } from "../instrument/markers";
 import type { Markers } from "../instrument/types";
@@ -27,10 +27,10 @@ export function mixToMono(channels: readonly Float32Array[]): Float32Array {
 }
 
 /** Analyses the material; with `givenTrack` (a corrected one) the pitch tracking is skipped and the marks found from it. */
-export function analyzeMaterial(channels: readonly Float32Array[], sampleRate: number, givenTrack?: PitchTrack): MaterialAnalysis {
+export function analyzeMaterial(channels: readonly Float32Array[], sampleRate: number, givenTrack?: PitchTrack, pyin: PyinOptions = {}): MaterialAnalysis {
   const mono = mixToMono(channels);
   const durationSec = mono.length / sampleRate;
-  const track = givenTrack ?? analyzePitch(mono, sampleRate);
+  const track = givenTrack ?? analyzePitch(mono, sampleRate, pyin);
   // Marks from the mid signal, shared by both channels (no wandering stereo image).
   const marks = findPitchMarks(mono, sampleRate, track);
   const markers = suggestMarkers(track, durationSec);

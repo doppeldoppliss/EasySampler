@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCorrections } from "./corrections";
+import { applyCorrections, correctionLabel } from "./corrections";
 import type { PitchTrack } from "./pyin";
 
 function track(f0: number[]): PitchTrack {
@@ -38,5 +38,26 @@ describe("applyCorrections", () => {
       { start: 0, end: 0.03, kind: "octave-up" },
     ]);
     expect(Array.from(out.f0)).toEqual([72, 72, 72]);
+  });
+});
+
+describe("shift and set", () => {
+  it("shifts a stretch by cents, and sets a stretch to one note (unvoiced frames included)", () => {
+    const t = track([60, 60, Number.NaN, 60, 60]);
+    const shifted = applyCorrections(t, [{ start: 0, end: 0.02, kind: "shift", cents: 700 }]);
+    expect(Array.from(shifted.f0.slice(0, 2))).toEqual([67, 67]);
+    expect(shifted.f0[3]).toBe(60);
+    const set = applyCorrections(t, [{ start: 0.01, end: 0.04, kind: "set", midi: 64.5 }]);
+    expect(Array.from(set.f0.slice(1, 4))).toEqual([64.5, 64.5, 64.5]);
+    expect(set.voicedProb[2]).toBeGreaterThan(0.85);
+    expect(set.f0[0]).toBe(60);
+  });
+
+  it("labels them", () => {
+    const name = (midi: number) => `N${midi}`;
+    expect(correctionLabel({ start: 0, end: 1, kind: "shift", cents: 10 }, name)).toBe("+10¢");
+    expect(correctionLabel({ start: 0, end: 1, kind: "shift", cents: -100 }, name)).toBe("-1 半音");
+    expect(correctionLabel({ start: 0, end: 1, kind: "set", midi: 62 }, name)).toBe("N62 に");
+    expect(correctionLabel({ start: 0, end: 1, kind: "voiced" }, name)).toBe("有声に");
   });
 });

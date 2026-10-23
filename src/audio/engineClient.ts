@@ -6,7 +6,7 @@
 // context is created and resumed inside the first gesture, and resumed again
 // on the next one after any interruption.
 
-import type { PitchTrack } from "../analysis/pyin";
+import type { PitchTrack, PyinOptions } from "../analysis/pyin";
 import type { PreparedSource } from "../engine/engine";
 import type { FromEngine, ToEngine } from "../engine/messages";
 import type { MaterialAnalysis } from "../engine/prepare";
@@ -91,11 +91,11 @@ export class EngineClient {
   }
 
   /** Analyses a material for an engine at `targetRate` (in the Worker); with `track`, only the marks are found again. */
-  analyze(channels: Float32Array[], sampleRate: number, targetRate = this.sampleRate, track?: PitchTrack): Promise<{ analysis: MaterialAnalysis; source: PreparedSource; elapsedMs: number }> {
+  analyze(channels: Float32Array[], sampleRate: number, targetRate = this.sampleRate, track?: PitchTrack, pyin?: PyinOptions): Promise<{ analysis: MaterialAnalysis; source: PreparedSource; elapsedMs: number }> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.waiting.set(id, (response) => (response.ok ? resolve(response) : reject(new Error(response.message))));
-      const request: AnalysisRequest = { id, channels: channels.map((c) => c.slice()), sampleRate, targetRate, track };
+      const request: AnalysisRequest = { id, channels: channels.map((c) => c.slice()), sampleRate, targetRate, track, pyin };
       this.worker.postMessage(request);
     });
   }

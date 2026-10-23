@@ -8,8 +8,8 @@
 // once as a zip. The settings (never the audio) are kept per material and
 // can be saved as JSON. One column, phone first.
 
-import { applyCorrections, CORRECTION_LABELS, type CorrectionKind, type PitchCorrection } from "./analysis/corrections";
-import { pitchLabel } from "./analysis/pitch";
+import { applyCorrections, CORRECTION_LABELS, correctionLabel, type CorrectionKind, type PitchCorrection } from "./analysis/corrections";
+import { midiToHz, pitchLabel } from "./analysis/pitch";
 import { EngineClient } from "./audio/engineClient";
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
@@ -64,6 +64,8 @@ interface Material {
   /** The analysis as it came out of pYIN, which the corrections are re-applied to. */
   original: MaterialAnalysis;
   corrections: PitchCorrection[];
+  /** The pitch search range the analysis ran with (探索範囲), when narrowed. */
+  pitchRange: { low: number; high: number } | null;
   /** For the live engine (at the AudioContext's rate). */
   source: PreparedSource;
   /** For the file, by sample rate (the material's own, or the destination's). */
@@ -287,6 +289,19 @@ function fixButton(kind: CorrectionKind): HTMLButtonElement {
   });
 }
 const fixButtons = (["octave-up", "octave-down", "unvoiced", "voiced"] as const).map(fixButton);
+/** Shift the detected pitch over the selection by `cents` (a fifth or a harmonic lock, not only an octave). */
+function shiftButton(text: string, cents: number): HTMLButtonElement {
+  return button(text, "small", () => {
+    if (!selection) return;
+    void addCorrection({ start: selection.from, end: selection.to, kind: "shift", cents });
+  });
+}
+const shiftButtons = [shiftButton("−1半音", -100), shiftButton("−10¢", -10), shiftButton("+10¢", 10), shiftButton("+1半音", 100)];
+/** Set the detected pitch over the selection to the cut's note (the label follows the note). */
+const setNoteButton = button("音名に", "small", () => {
+  if (!selection) return;
+  void addCorrection({ start: selection.from, end: selection.to, kind: "set", midi: note });
+});
 const clearSelectionButton = button("選択解除", "small", () => {
   selection = null;
   editor.setSelection(null);
@@ -340,7 +355,8 @@ const fixStatus = el("span", { className: "fine fix-status", role: "status" });
 const undoCorrectionButton = button("最後の手直しを取り消す", "small", () => void setCorrections(material?.corrections.slice(0, -1) ?? []));
 const clearCorrectionsButton = button("すべて取り消す", "small", () => void setCorrections([]));
 const fixBar = el("div", { className: "fix-bar" }, [
-  el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, ...fixButtons, clearSelectionButton, fixStatus]),
+  el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, clearSelectionButton, fixStatus]),
+  el("div", { className: "row tight fix-pitch" }, [el("span", { className: "fine", textContent: "判定を直す:" }), ...fixButtons, ...shiftButtons, setNoteButton]),
   el("div", { className: "row tight" }, [removedLabel, undoRemoveButton, clearRemovedButton]),
   el("div", { className: "row tight" }, [correctionsLabel, undoCorrectionButton, clearCorrectionsButton]),
 ]);
@@ -352,12 +368,14 @@ function refreshFixBar(): void {
   selectionLabel.textContent = hasSelection
     ? `選択 ${selection!.from.toFixed(2)}–${selection!.to.toFixed(2)} 秒:`
     : "波形の上を横にドラッグして選ぶと、その部分を削除したり、判定を直したりできます。";
-  for (const b of [removeButton, trimButton, ...fixButtons, clearSelectionButton]) b.hidden = !hasSelection;
+  for (const b of [removeButton, trimButton, ...fixButtons, ...shiftButtons, setNoteButton, clearSelectionButton]) b.hidden = !hasSelection;
+  setNoteButton.textContent = `${pitchLabel(note)} に`;
+  setNoteButton.parentElement!.hidden = !hasSelection;
   removedLabel.textContent = removed.length ? `削除 ${removed.length} か所(${removed.map((r) => `${r.start.toFixed(2)}–${r.end.toFixed(2)} 秒`).join("、")})` : "";
   undoRemoveButton.hidden = removed.length === 0;
   clearRemovedButton.hidden = removed.length < 2;
   removedLabel.parentElement!.hidden = removed.length === 0;
-  correctionsLabel.textContent = count ? `手直し ${count} 件(${material!.corrections.map((c) => CORRECTION_LABELS[c.kind]).join("、")})` : "";
+  correctionsLabel.textContent = count ? `手直し ${count} 件(${material!.corrections.map((c) => correctionLabel(c, pitchLabel)).join("、")})` : "";
   undoCorrectionButton.hidden = count === 0;
   clearCorrectionsButton.hidden = count < 2;
   correctionsLabel.parentElement!.hidden = count === 0;
@@ -438,7 +456,7 @@ const materialPanel = el("section", { className: "panel" }, [
       el("span", { className: "fine", textContent: "判定した音程" }),
       rootLabel,
       rootSource,
-      el("span", { className: "row tight root-nudge" }, [rootButton("−1半音", -1), rootButton("−5¢", -0.05), rootButton("+5¢", 0.05), rootButton("+1半音", 1), detectedButton]),
+      el("span", { className: "row tight root-nudge" }, [rootButton("基準 −1半音", -1), rootButton("基準 −5¢", -0.05), rootButton("基準 +5¢", 0.05), rootButton("基準 +1半音", 1), detectedButton]),
     ]),
     el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, el("span", { className: "spacer" }), undoButton, redoButton, zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
   ]),
@@ -892,6 +910,50 @@ const saveSettingsButton = button("設定を保存(JSON)", "small", () => {
 });
 const loadSettingsButton = el("label", { className: "button small", htmlFor: "file", textContent: "設定を読み込む(JSON)" });
 const settingsStatus = el("span", { className: "fine fix-status", role: "status" });
+// The analysis's pitch search range (探索範囲): pYIN's default is about G1–B5.
+const RANGE_DEFAULT = { low: 31, high: 83 };
+function rangeNoteSelect(ariaLabel: string): HTMLSelectElement {
+  const options: HTMLOptionElement[] = [];
+  for (let midi = 24; midi <= 107; midi++) options.push(el("option", { value: String(midi), textContent: pitchLabel(midi) }));
+  return el("select", { ariaLabel }, options);
+}
+const rangeLowSelect = rangeNoteSelect("探索範囲の下限");
+const rangeHighSelect = rangeNoteSelect("探索範囲の上限");
+const rangeStatus = el("span", { className: "fine fix-status", role: "status" });
+function showPitchRange(): void {
+  const r = material?.pitchRange ?? RANGE_DEFAULT;
+  rangeLowSelect.value = String(r.low);
+  rangeHighSelect.value = String(r.high);
+}
+for (const s of [rangeLowSelect, rangeHighSelect]) {
+  s.addEventListener("change", () => {
+    const low = Number(rangeLowSelect.value);
+    const high = Number(rangeHighSelect.value);
+    if (high <= low) {
+      showPitchRange();
+      return;
+    }
+    void setPitchRange({ low, high });
+  });
+}
+/** Runs the analysis again within `range` (or the default when null), then re-applies the hand corrections. */
+async function setPitchRange(range: { low: number; high: number } | null): Promise<void> {
+  if (!material) return;
+  const target = material;
+  target.pitchRange = range;
+  showPitchRange();
+  rangeStatus.textContent = "判定し直しています…";
+  try {
+    const r = range ?? RANGE_DEFAULT;
+    const { analysis } = await client.analyze(target.channels, target.sampleRate, undefined, undefined, { fminHz: midiToHz(r.low), fmaxHz: midiToHz(r.high) });
+    if (material !== target) return;
+    target.original = analysis;
+    await setCorrections(target.corrections);
+    rangeStatus.textContent = `${pitchLabel(r.low)}〜${pitchLabel(r.high)} で判定し直しました。`;
+  } catch (error) {
+    rangeStatus.textContent = `判定し直せませんでした: ${error instanceof Error ? error.message : error}`;
+  }
+}
 const resetSettingsButton = button("判定し直す(設定を捨てる)", "small", () => {
   if (!material) return;
   if (!confirm("区間・マーカー・手直し・書き出し設定をすべて捨てて、解析結果から作り直します。よろしいですか?(元に戻すで戻せます)")) return;
@@ -913,6 +975,8 @@ const detailsPanel = el("details", { className: "panel params" }, [
   el("div", { className: "params-grid" }, [
     el("fieldset", {}, [
       el("legend", { textContent: "基準ピッチ(素材そのものの高さ)" }),
+      el("div", { className: "row tight" }, [el("span", { className: "control-label", textContent: "判定の探索範囲" }), rangeLowSelect, el("span", { className: "fine", textContent: "〜" }), rangeHighSelect, rangeStatus]),
+      el("p", { className: "fine help", textContent: "判定がオクターブや 5 度で外れるときは、素材の実際の高さだけに絞って判定し直すと直ることがあります(初期値 G1〜B5)。" }),
       el("p", { className: "fine", textContent: "判定が外れているときは、編集画面の「判定した音程」の横のボタンか、点線の「判定 …」の札のドラッグで直します。素材がこの高さで鳴っているものとして、音名との差だけ移調します。" }),
     ]),
     el("fieldset", {}, [
@@ -1688,6 +1752,7 @@ function settingsBody(): Omit<SettingsFile, "app" | "version" | "savedAt"> {
     cuts: cuts.map(({ name, markers: m, params: p, note: n, noteMode: mode }) => ({ name, markers: m, params: p, note: n, noteMode: mode })),
     currentCut: current,
     corrections: material!.corrections,
+    pitchRange: material!.pitchRange ?? undefined,
   };
 }
 
@@ -1821,7 +1886,12 @@ function applySettings(file: SettingsFile): void {
   Object.assign(credit, file.credit);
   setCreditInputs();
   applyCurrentCut();
-  if (file.corrections.length || material.corrections.length) void setCorrections(file.corrections);
+  const range = file.pitchRange ?? null;
+  const currentRange = material.pitchRange;
+  if ((range?.low ?? 0) !== (currentRange?.low ?? 0) || (range?.high ?? 0) !== (currentRange?.high ?? 0)) {
+    material.corrections = file.corrections;
+    void setPitchRange(range);
+  } else if (file.corrections.length || material.corrections.length) void setCorrections(file.corrections);
   else refreshFixBar();
 }
 
@@ -1840,9 +1910,11 @@ async function decode(file: File): Promise<{ channels: Float32Array[]; sampleRat
 async function load(name: string, channels: Float32Array[], sampleRate: number): Promise<void> {
   status.textContent = `「${name}」を解析しています…`;
   resetHistory();
+  rangeStatus.textContent = "";
   try {
     const { analysis, source, elapsedMs } = await client.analyze(channels, sampleRate);
-    material = { name, channels, sampleRate, mono: mixToMono(channels), analysis, original: analysis, corrections: [], source, exportSources: new Map([[source.sampleRate, source]]) };
+    material = { name, channels, sampleRate, mono: mixToMono(channels), analysis, original: analysis, corrections: [], pitchRange: null, source, exportSources: new Map([[source.sampleRate, source]]) };
+    showPitchRange();
     selection = null;
     editor.setMaterial({ mono: material.mono, sampleRate, track: analysis.track });
     refreshFixBar();

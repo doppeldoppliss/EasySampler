@@ -4,7 +4,7 @@ import { Engine } from "../engine/engine";
 import { analyzeMaterial, prepareSource } from "../engine/prepare";
 import { renderNote } from "../export/render";
 import { demoSyllable } from "../testsignals/synthVoice";
-import { collapsedTime, expandedTime, hiddenParts, normalizeRemoved, outputLayout, removedWithin, usedBetween } from "./layout";
+import { collapsedTime, expandedTime, hiddenParts, normalizeRemoved, outputLayout, removedWithin, subtractRanges, usedBetween } from "./layout";
 import { DEFAULT_PARAMS, type InstrumentParams, type Markers } from "./types";
 
 const SR = 44100;
@@ -159,5 +159,18 @@ describe("hiddenParts (鳴らす部分)", () => {
     expect(hiddenParts(markers, { sustain: false, tail: true })).toEqual([{ start: 0.3, end: 0.6 }]);
     expect(hiddenParts(markers, { sustain: true, tail: false })).toEqual([{ start: 0.6, end: 1.1 }]);
     expect(hiddenParts(markers, { sustain: false, tail: false })).toEqual([{ start: 0.3, end: 1.1 }]);
+  });
+});
+
+describe("subtractRanges (a cut never reaches into a hidden part)", () => {
+  it("keeps the pieces outside the given stretches", () => {
+    expect(subtractRanges(0.2, 0.9, [{ start: 0.3, end: 0.6 }])).toEqual([{ start: 0.2, end: 0.3 }, { start: 0.6, end: 0.9 }]);
+    expect(subtractRanges(0.2, 0.9, [{ start: 0.1, end: 1 }])).toEqual([]);
+    expect(subtractRanges(0.2, 0.5, [])).toEqual([{ start: 0.2, end: 0.5 }]);
+    expect(subtractRanges(0.2, 0.9, [{ start: 0.7, end: 0.8 }, { start: 0.3, end: 0.4 }])).toEqual([
+      { start: 0.2, end: 0.3 },
+      { start: 0.4, end: 0.7 },
+      { start: 0.8, end: 0.9 },
+    ]);
   });
 });

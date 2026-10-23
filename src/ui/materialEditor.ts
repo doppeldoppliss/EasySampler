@@ -433,12 +433,40 @@ export class MaterialEditor {
     }
   }
 
-  /** The markers with one moved; neighbours give way so the order holds. */
+  /**
+   * The markers with one moved; neighbours give way so the order holds —
+   * except a hidden part's markers (鳴らす部分), which stay put: the handle
+   * stops as far as it can go without moving them (minimum gaps included).
+   */
   private moved(handle: Handle, time: number): Markers {
+    const original = this.markers!;
+    // What is hidden must come out exactly as it was: the same stretches (a visible handle on their edge
+    // can't move into them) and the same markers inside them.
+    const hiddenBefore = hiddenParts(original, this.parts);
+    const hidden = HANDLE_ORDER.filter((h) => h !== handle && this.hiddenHandle(h));
+    const same = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+    const keepsHidden = (m: Markers) => {
+      const after = hiddenParts(m, this.parts);
+      return after.length === hiddenBefore.length && after.every((r, i) => same(r.start, hiddenBefore[i].start) && same(r.end, hiddenBefore[i].end)) && hidden.every((h) => same(m[h], original[h]));
+    };
+    const wanted = this.placed(handle, time);
+    if (hiddenBefore.length === 0 || keepsHidden(wanted)) return wanted;
+    // Between where the handle was (fine) and where it was asked to go (not): the farthest that still is.
+    let ok = original[handle];
+    let bad = time;
+    for (let i = 0; i < 30 && Math.abs(bad - ok) > 1e-6; i++) {
+      const mid = (ok + bad) / 2;
+      if (keepsHidden(this.placed(handle, mid))) ok = mid;
+      else bad = mid;
+    }
+    return keepsHidden(this.placed(handle, ok)) ? this.placed(handle, ok) : original;
+  }
+
+  private placed(handle: Handle, time: number): Markers {
+    const index = HANDLE_ORDER.indexOf(handle);
     const m = { ...this.markers!, [handle]: time };
     // Moving the sustain end drags a tail start that sat on it along (the usual case).
     if (handle === "sustainEnd" && Math.abs(this.markers!.tailStart - this.markers!.sustainEnd) < 1e-6) m.tailStart = time;
-    const index = HANDLE_ORDER.indexOf(handle);
     for (let i = index + 1; i < HANDLE_ORDER.length; i++) m[HANDLE_ORDER[i]] = Math.max(m[HANDLE_ORDER[i]], time);
     for (let i = index - 1; i >= 0; i--) m[HANDLE_ORDER[i]] = Math.min(m[HANDLE_ORDER[i]], time);
     return clampMarkers(m);

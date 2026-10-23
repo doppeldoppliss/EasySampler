@@ -4,10 +4,12 @@
 // nothing is rendered until the file is written — so any of it can be
 // changed at any time. Times are seconds within the material.
 
-export type SustainMode = "pool" | "loop" | "wavetable" | "none";
+/** How the sustain fills the note: a random walk over steady periods, a loop, a wavetable of a few periods,
+ * the whole region slowed to fit ("stretch": its natural change kept, VocalShifter-style), or not at all. */
+export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
 export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
-export type PresetId = "synth" | "synth-lead" | "wavetable" | "bass" | "jinriki" | "original" | "drum";
+export type PresetId = "synth" | "synth-lead" | "stretch" | "wavetable" | "bass" | "jinriki" | "original" | "drum";
 
 /** Seconds within the material, [start, end). */
 export interface TimeRange {
@@ -156,6 +158,7 @@ export interface Preset {
 export const PRESETS: Preset[] = [
   { id: "synth", label: "シンセ化(平坦)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
   { id: "synth-lead", label: "シンセ化リード(ビブラート)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 25, vibratoHz: 5.8, vibratoDelaySec: 0.2, driftCents: 0, micro: true } }) },
+  { id: "stretch", label: "引き延ばし(変化を残す)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "stretch", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
   { id: "wavetable", label: "ウェーブテーブル(無機質)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "wavetable", wavetableCycles: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false } }) },
   { id: "bass", label: "ベース", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, amp: { ...p.amp, attack: 0.003, release: 0.04 } }) },
   { id: "jinriki", label: "人力(抑揚を少し整える)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0.3, sustainMode: "pool", wobble: { ...p.wobble, vibratoCents: 15, vibratoHz: 5.5, vibratoDelaySec: 0.3, driftCents: 4, micro: true } }) },

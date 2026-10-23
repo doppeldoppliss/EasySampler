@@ -6,7 +6,9 @@ import type { PreparedSource } from "./engine";
 
 export type ToEngine =
   | { type: "source"; source: PreparedSource | null }
-  | { type: "instrument"; markers: Markers; params: InstrumentParams }
+  | { type: "instrument"; markers: Markers; params: InstrumentParams; hold: number }
+  // The note length the "stretch" sustain fills (the export length, in seconds).
+  | { type: "hold"; sec: number }
   | { type: "noteOn"; note: number; velocity: number }
   | { type: "noteOff"; note: number }
   | { type: "allOff" }

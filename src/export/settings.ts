@@ -122,7 +122,7 @@ function sanitizeParams(raw: unknown): InstrumentParams {
     formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
     formantFollow: typeof raw.formantFollow === "boolean" ? raw.formantFollow : d.formantFollow,
     sustainEnabled: typeof raw.sustainEnabled === "boolean" ? raw.sustainEnabled : d.sustainEnabled,
-    sustainMode: raw.sustainMode === "loop" || raw.sustainMode === "none" || raw.sustainMode === "wavetable" ? raw.sustainMode : "pool",
+    sustainMode: raw.sustainMode === "loop" || raw.sustainMode === "none" || raw.sustainMode === "wavetable" || raw.sustainMode === "stretch" ? raw.sustainMode : "pool",
     wavetableCycles: clamp(Math.round(num(raw.wavetableCycles, d.wavetableCycles)), 1, 16),
     stretch: {
       head: clamp(num(isRecord(raw.stretch) ? raw.stretch.head : undefined, d.stretch.head), 0.25, 4),

@@ -107,8 +107,8 @@ export class EngineClient {
     this.post({ type: "source", source });
   }
 
-  setInstrument(markers: Markers, params: InstrumentParams): void {
-    const message: ToEngine = { type: "instrument", markers, params };
+  setInstrument(markers: Markers, params: InstrumentParams, hold = 1): void {
+    const message: ToEngine = { type: "instrument", markers, params, hold };
     this.lastInstrument = message;
     this.pending = this.pending.filter((m) => m.type !== "instrument");
     this.post(message);
@@ -122,6 +122,12 @@ export class EngineClient {
 
   noteOff(note: number): void {
     this.post({ type: "noteOff", note });
+  }
+
+  /** The note length (seconds) a "stretch" sustain fills: the export length. */
+  setHold(sec: number): void {
+    this.pending = this.pending.filter((m) => m.type !== "hold");
+    this.post({ type: "hold", sec });
   }
 
   /** The tempo the tail's length limit counts in. */

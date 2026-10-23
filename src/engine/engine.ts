@@ -18,7 +18,10 @@
 // The material plays in three parts (synthesis markers):
 //   head    – from the range start to the sustain, once, at its own speed
 //   sustain – held as long as the note is: by default a random walk over a
-//             pool of steady periods (no fixed loop to hear), or a loop
+//             pool of steady periods (no fixed loop to hear), or a loop, or
+//             ("stretch") the whole region slowed so it fills the note length
+//             the page says the note has — its natural change kept, as a
+//             VocalShifter time-stretch would — and the pool from its end on
 //   tail    – after the note is released, when enabled: the material's own end
 // With the sustain switched off, the head goes straight on to the tail (or
 // the note ends there), however long the key is held.
@@ -114,6 +117,8 @@ class Voice {
   fadeStep = 0;
   /** Output samples the tail may still run (its length limit); Infinity when unlimited or not in the tail. */
   tailRemaining = Infinity;
+  /** "stretch": the slowed pass through the sustain reached its end; the pool carries on. */
+  stretchDone = false;
 
   driftValue = 0;
   driftTarget = 0;
@@ -145,6 +150,10 @@ export class Engine {
   private seed = 0x2545f491;
   /** For the tail's length limit (1 beat / 1 bar). */
   private bpm = 120;
+  /** The note length (seconds) the "stretch" sustain fills; the export length. */
+  private hold = 1;
+  /** Read speed through the sustain in "stretch" mode (1 / the stretch factor). */
+  private stretchSpeed = 1;
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
@@ -185,6 +194,25 @@ export class Engine {
     this.params = params;
     this.ensureVoices(params.maxVoices);
     this.rebuildPool();
+    this.refreshStretch();
+  }
+
+  /** The note length a "stretch" sustain fills (seconds of output). */
+  setHold(sec: number): void {
+    if (Number.isFinite(sec) && sec > 0) this.hold = sec;
+    this.refreshStretch();
+  }
+
+  /** The stretch mode's read speed: the sustain's material over what the note leaves after the head. */
+  private refreshStretch(): void {
+    const params = this.params;
+    if (!params) return;
+    const sr = this.sampleRate;
+    const sustainSrc = this.playedBetween(this.sustainStart, this.sustainEnd) / sr;
+    const headSec = (this.playedBetween(this.rangeStart, this.sustainStart) / sr) * Math.max(0.05, params.stretch.head);
+    const fill = Math.max(0.05, this.hold - headSec);
+    const factor = sustainSrc > 0 ? Math.max(0.25, Math.min(64, fill / sustainSrc)) : 1;
+    this.stretchSpeed = 1 / factor;
   }
 
   /** The tempo the tail's length limit is counted in. */
@@ -222,7 +250,9 @@ export class Engine {
 
   /** How fast the read position moves through the material here: 1 ÷ the part's stretch factor. */
   private speedAt(position: number): number {
-    const s = this.params!.stretch;
+    const params = this.params!;
+    if (params.sustainMode === "stretch" && position >= this.sustainStart && position < this.sustainEnd) return this.stretchSpeed;
+    const s = params.stretch;
     const factor = position < this.sustainStart ? s.head : position < this.sustainEnd ? s.sustain : s.tail;
     return 1 / Math.max(0.05, factor);
   }
@@ -330,6 +360,7 @@ export class Engine {
     v.fadeGain = 1;
     v.fadeStep = 0;
     v.tailRemaining = Infinity;
+    v.stretchDone = false;
     v.driftValue = 0;
     v.driftTarget = 0;
     v.driftCountdown = 0;
@@ -379,7 +410,7 @@ export class Engine {
       this.jumpToTail(v);
     } else {
       v.phase = Phase.Sustain;
-      if (params.sustainMode === "loop" || this.pool.length < MIN_POOL) v.srcTime = Math.max(v.srcTime, this.sustainStart);
+      if (params.sustainMode === "loop" || params.sustainMode === "stretch" || this.pool.length < MIN_POOL) v.srcTime = Math.max(v.srcTime, this.sustainStart);
     }
   }
 
@@ -425,9 +456,10 @@ export class Engine {
   }
 
   /** Whether the sustain is drawn from the pool of periods (rather than read through). */
-  private fromPool(): boolean {
+  /** Whether this voice's sustain comes from the pool (the random walk / wavetable), rather than a read through the region. */
+  private fromPool(v: Voice): boolean {
     const mode = this.params!.sustainMode;
-    return (mode === "pool" || mode === "wavetable") && this.pool.length >= MIN_POOL;
+    return (mode === "pool" || mode === "wavetable" || (mode === "stretch" && v.stretchDone)) && this.pool.length >= MIN_POOL;
   }
 
   /** Wobble (semitones) at a voice time: vibrato fading in after its delay, plus the slow drift. */
@@ -457,8 +489,14 @@ export class Engine {
     // The head ended with nothing after it (sustain off, tail off).
     if (v.phase === Phase.Done) return false;
 
+    // "stretch": the slowed pass reached the end of the region with the note still held — the pool takes over from there.
+    if (v.phase === Phase.Sustain && params.sustainMode === "stretch" && !v.stretchDone && v.srcTime >= this.sustainEnd && this.pool.length >= MIN_POOL) {
+      v.stretchDone = true;
+      v.poolIndex = this.pool.length - 1;
+      v.previousPoolIndex = -1;
+    }
     let k: number;
-    if (v.phase === Phase.Sustain && this.fromPool()) {
+    if (v.phase === Phase.Sustain && this.fromPool(v)) {
       k = params.sustainMode === "wavetable" ? this.nextCycleMark(v) : this.nextPoolMark(v);
     } else {
       if (v.phase === Phase.Sustain && v.srcTime >= this.sustainEnd) {
@@ -525,7 +563,7 @@ export class Engine {
     v.lastLeft = grain.left;
     v.driftCountdown -= step / this.sampleRate;
     // The read position moves with real time (or faster/slower when resampling), at the part's own speed, past anything cut out.
-    if (!(v.phase === Phase.Sustain && this.fromPool())) {
+    if (!(v.phase === Phase.Sustain && this.fromPool(v))) {
       v.srcTime = this.skipRemoved(v.srcTime + step * (resample ? alpha : 1) * this.speedAt(v.srcTime));
     }
     return true;

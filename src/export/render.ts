@@ -43,6 +43,7 @@ export function renderNote(source: PreparedSource, markers: Markers, params: Ins
   engine.setTempo(bpm);
   engine.setSource(source);
   engine.setInstrument(markers, { ...params, maxVoices: 1 });
+  engine.setHold(holdSec);
   // Nothing to hold: a one-shot, or the sustain switched off.
   const oneShot = params.sustainMode === "none" || !params.sustainEnabled;
   // Without a tail the hold ends early by the release (or the longer 終わりのフェード), so the file is about `holdSec`.

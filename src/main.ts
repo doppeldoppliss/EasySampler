@@ -577,7 +577,19 @@ const tunePanel = el("section", { className: "panel tune" }, [
   el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "音名" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]),
   partsRow,
   partsHelp,
-  select("持続区間の伸ばし方", [["pool", "周期プール(自然)"], ["loop", "ループ"], ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"], ["none", "伸ばさない(ワンショット)"]], () => params.sustainMode, (p, v) => (p.sustainMode = v)),
+  select(
+    "持続区間の伸ばし方",
+    [
+      ["pool", "周期プール(自然)"],
+      ["stretch", "引き延ばし(区間全体をゆっくり通して鳴らす)"],
+      ["loop", "ループ"],
+      ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"],
+      ["none", "伸ばさない(ワンショット)"],
+    ],
+    () => params.sustainMode,
+    (p, v) => (p.sustainMode = v),
+  ),
+  el("p", { className: "fine help", textContent: "引き延ばしは、持続区間を「長さ」に収まるよう遅く再生します(VocalShifter の TIME のように、声の変化を残したまま伸びる)。長さを超えて押し続けると、区間の終わりから周期プールで続きます。" }),
   range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
   select(
     "語尾の長さ",
@@ -1340,7 +1352,7 @@ function removeCut(): void {
 function sendInstrument(): void {
   if (!markers) return;
   built = null;
-  client.setInstrument(markers, params);
+  client.setInstrument(markers, params, exportLengthSec(exportSettings));
   rootLabel.textContent = pitchLabel(params.root);
   rootSource.textContent = params.rootMode === "auto" ? "(自動判定)" : "(手動)";
   refreshExport();
@@ -1349,8 +1361,9 @@ function sendInstrument(): void {
 
 /** The note and export settings → the note row, the length row, the file name, the help, the editor's target line. */
 function refreshExport(): void {
-  // The tail limit counts in the export BPM (the song's own while one plays).
+  // The tail limit counts in the export BPM (the song's own while one plays); a "stretch" sustain fills the export length.
   if (!songPanel.playing) client.setTempo(exportSettings.bpm);
+  client.setHold(exportLengthSec(exportSettings));
   if (noteMode === "auto") note = Math.max(24, Math.min(96, Math.round(params.root)));
   noteSelect.value = String(note);
   noteAutoButton.hidden = noteMode === "auto";

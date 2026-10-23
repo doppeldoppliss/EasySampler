@@ -311,3 +311,39 @@ describe("unvoicedFollow (音程なしの部分も移調に合わせる)", () =>
     expect(onLow).toBeLessThan(offLow * 0.85);
   });
 });
+
+describe("sustain mode \"stretch\"", () => {
+  it("fills the note it was told about, then carries on from the pool while the key is still held", () => {
+    const material = demoSyllable(SR);
+    const { engine } = setup(material, { sustainMode: "stretch" });
+    engine.setHold(1);
+    const out = play(engine, 62, 2.5, 0.2);
+    const level = (sec: number) => rms(out, Math.round(sec * SR), Math.round((sec + 0.05) * SR));
+    // Sounding through the slowed pass (0.245 s head + ~0.75 s of stretched sustain) …
+    expect(level(0.5)).toBeGreaterThan(0.02);
+    expect(level(0.9)).toBeGreaterThan(0.02);
+    // … and still sounding well past it, from the pool.
+    expect(level(2.0)).toBeGreaterThan(0.02);
+    expect(level(2.4)).toBeGreaterThan(0.02);
+  });
+
+  it("reads the sustain at the stretch's pace: early in the hold it is early in the region, late it is late", () => {
+    // A ramp over the sustain (level rising from 20 % to 100 %), with the markers pinned to the unramped
+    // analysis (the ramp would otherwise move them), so where the read is shows in the output level.
+    const material = demoSyllable(SR);
+    const m = analyzeMaterial([material], SR).markers;
+    for (let i = 0; i < material.length; i++) {
+      const t = i / SR;
+      if (t >= m.sustainStart && t < m.sustainEnd) material[i] *= 0.2 + 0.8 * ((t - m.sustainStart) / (m.sustainEnd - m.sustainStart));
+    }
+    const analysis = analyzeMaterial([material], SR);
+    const engine = new Engine(SR);
+    engine.setSource(prepareSource([material], analysis, SR));
+    const root = analysis.root?.midi ?? 62;
+    engine.setInstrument(m, { ...DEFAULT_PARAMS, root, sustainMode: "stretch", amp: { ...DEFAULT_PARAMS.amp, velocitySens: 0 } });
+    engine.setHold(2);
+    const out = play(engine, Math.round(root), 2, 0.1);
+    const level = (sec: number) => rms(out, Math.round(sec * SR), Math.round((sec + 0.1) * SR));
+    expect(level(0.4)).toBeLessThan(level(1.6) * 0.6);
+  });
+});

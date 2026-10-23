@@ -35,6 +35,14 @@ Windows・Mac・iPhone・iPad の Safari / Chrome で動く。生成AIは使わ�
 | 曲で試す(MIDI の読み込み、パート分け、Worklet 内のシーケンサーと簡易伴奏) | `src/song/`、`src/ui/songPanel.ts` |
 | 素材エディタ・鍵盤・画面 | `src/ui/`、`src/main.ts` |
 
+### 聴取レポート(耳の代わりの測定)
+```bash
+npm run listen -- --material demo --preset synth --note D4 --hold 1
+npm run listen -- --material clip.wav --set sustainMode=stretch --set wobble.vibratoCents=25 --out reports/x
+npm run listen -- --material demo --against reports/x   # 前回との差
+```
+書き出しと同じ経路で 1 音を描画し、`reports/<時刻>/` に WAV・スペクトログラム(ピッチ線・波形・音量付き)・`report.md`・`metrics.json` を書く。測るのは音程(ずれ・ゆらぎ・ビブラートの実測)、音量(立ち上がり・ふらつき・フェード)、音色(重心・2–5 kHz・8 kHz 以上・ノイズ感)、不快さの指標(クリック・クリッピング・20–200 Hz の振幅変調 = ざらつき・途切れ・ループの継ぎ目)。しきい値を超えたものは「気になる点」に並ぶ。`--set` は InstrumentParams のドット区切り(`tune.mode=scale`, `fx.chorus.on=true`)。
+
 ```bash
 npm install
 npm run dev       # http://localhost:5173

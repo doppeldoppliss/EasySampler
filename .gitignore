@@ -32,3 +32,6 @@ public/THIRD_PARTY_LICENSES.txt
 # Playwright (npm run test:e2e)
 e2e/.results
 playwright-report
+
+# Listening reports (npm run listen)
+reports

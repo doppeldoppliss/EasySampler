@@ -8,10 +8,13 @@
     "dev:lan": "vite --mode lan",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "listen": "tsx tools/eval/listen.ts"
   },
   "devDependencies": {
+    "@types/node": "^26.6.5",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.3.4",
     "vitest": "^5.0.5"

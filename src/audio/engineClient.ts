@@ -11,6 +11,7 @@ import type { PreparedSource } from "../engine/engine";
 import type { FromEngine, ToEngine } from "../engine/messages";
 import type { MaterialAnalysis } from "../engine/prepare";
 import type { InstrumentParams, Markers } from "../instrument/types";
+import type { SeqNote } from "../song/parts";
 import type { AnalysisRequest, AnalysisResponse } from "../workers/analysis.worker";
 import workletUrl from "../engine/worklet.ts?worker&url";
 
@@ -121,6 +122,42 @@ export class EngineClient {
 
   allOff(): void {
     if (this.node) this.post({ type: "allOff" });
+  }
+
+  // ------------------------------------------------------------ 曲で試す
+
+  /** Hands the song's notes to the engine (stops any song playing). */
+  loadSong(material: SeqNote[], backing: SeqNote[]): void {
+    this.pending = this.pending.filter((m) => m.type !== "song" && m.type !== "songPlay");
+    this.post({ type: "song", material, backing });
+  }
+
+  /**
+   * Plays the loaded song from `fromSec`, a moment from now (so every note
+   * of the first block lands on time). Returns the context time it starts
+   * at, for the playhead. Call from a gesture.
+   */
+  playSong(fromSec: number): number {
+    this.unlock();
+    const context = this.context!;
+    const at = context.currentTime + 0.08;
+    this.post({ type: "songPlay", atFrame: Math.round(at * context.sampleRate), fromSec });
+    return at;
+  }
+
+  stopSong(): void {
+    this.pending = this.pending.filter((m) => m.type !== "songPlay");
+    if (this.node) this.post({ type: "songStop" });
+  }
+
+  setSongGain(backing: number, material: number): void {
+    this.pending = this.pending.filter((m) => m.type !== "songGain");
+    this.post({ type: "songGain", backing, material });
+  }
+
+  /** The audio clock (seconds), or null before the audio started. */
+  get currentTime(): number | null {
+    return this.context?.currentTime ?? null;
   }
 
   /** Plays a rendered buffer (the file as it will be written) once; a second call stops the first. Call from a gesture. */

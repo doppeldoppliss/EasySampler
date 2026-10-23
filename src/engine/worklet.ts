@@ -4,9 +4,11 @@
 
 import { Engine } from "./engine";
 import type { FromEngine, ToEngine } from "./messages";
+import { SongPlayer } from "../song/player";
 
 // The AudioWorklet globals (the project is typed against the DOM library).
 declare const sampleRate: number;
+declare const currentFrame: number;
 declare function registerProcessor(name: string, processor: new () => AudioWorkletProcessorLike): void;
 declare class AudioWorkletProcessorLike {
   readonly port: MessagePort;
@@ -18,6 +20,7 @@ const STATUS_EVERY = 32;
 
 class EngineProcessor extends AudioWorkletProcessor {
   private engine = new Engine(sampleRate);
+  private song = new SongPlayer(sampleRate);
   private quanta = 0;
   private lastVoices = -1;
 
@@ -43,6 +46,20 @@ class EngineProcessor extends AudioWorkletProcessor {
       case "allOff":
         this.engine.allOff();
         break;
+      case "song":
+        this.song.stop(this.engine);
+        this.song.load(message.material, message.backing);
+        break;
+      case "songPlay":
+        this.song.play(message.atFrame, message.fromSec);
+        break;
+      case "songStop":
+        this.song.stop(this.engine);
+        break;
+      case "songGain":
+        this.song.backingGain = message.backing;
+        this.song.materialGain = message.material;
+        break;
     }
   }
 
@@ -51,7 +68,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     const left = output[0];
     if (!left) return true;
     const right = output[1] ?? left;
-    this.engine.render(left, right, left.length);
+    this.song.render(currentFrame, left, right, left.length, this.engine);
     if (++this.quanta >= STATUS_EVERY) {
       this.quanta = 0;
       const voices = this.engine.activeVoices();

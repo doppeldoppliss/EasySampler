@@ -39,6 +39,7 @@ import { el } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 import { clock, RangePicker } from "./ui/rangePicker";
+import { isMidiFile, SongPanel } from "./ui/songPanel";
 
 /** The most material one analysis takes; a longer clip goes through the range picker first. */
 const MAX_MATERIAL_SEC = 60;
@@ -99,6 +100,11 @@ const sink = {
 };
 const piano = new OnScreenKeyboard(sink, 48, SMALL_SCREEN ? 72 : 84);
 const pcKeys = new PcKeyboard(sink);
+// 曲で試す: the material on a part of a MIDI song (one sound at a time with the previews).
+const songPanel = new SongPanel(client, () => note);
+songPanel.onPlayingChange = (playing) => {
+  if (playing) client.stopPreview();
+};
 
 // ---------------------------------------------------------------- audio start
 
@@ -199,7 +205,7 @@ function safeStorage(key: string, value?: string | null): string | null {
 
 // ---------------------------------------------------------------- header, empty state
 
-const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json", multiple: true, className: "visually-hidden", id: "file" });
+const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json,.mid,.midi", multiple: true, className: "visually-hidden", id: "file" });
 const openButton = el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" });
 const demoButton = button("デモ素材", "", () => loadDemo());
 const status = el("p", { className: "status", role: "status" });
@@ -401,6 +407,7 @@ function setNote(n: number, mode: "auto" | "manual"): void {
   note = n;
   noteMode = mode;
   refreshExport();
+  songPanel.noteChanged();
 }
 
 const presetSelect = el("select", { ariaLabel: "プリセット" }, [
@@ -842,11 +849,17 @@ async function deliverQueue(kind: "wavs" | "kit"): Promise<void> {
   }
 }
 
-/** Files dropped or chosen: one opens; several make a queue and open the first. Settings files are read on their own. */
+/** Files dropped or chosen: one opens; several make a queue and open the first. Settings and MIDI files are read on their own. */
 function openFiles(files: readonly File[]): void {
   const isSettings = (f: File) => f.name.toLowerCase().endsWith(".json") || f.type === "application/json";
   const settings = files.filter(isSettings);
-  const audio = files.filter((f) => !isSettings(f));
+  const midi = files.filter((f) => !isSettings(f) && isMidiFile(f));
+  const audio = files.filter((f) => !isSettings(f) && !isMidiFile(f));
+  const lastMidi = midi.at(-1);
+  if (lastMidi) {
+    void songPanel.open(lastMidi);
+    if (!material && audio.length === 0) status.textContent = `${lastMidi.name} を読み込みました。素材を開くと「曲で試す」で鳴らせます。`;
+  }
   for (const f of settings) void openFile(f);
   if (audio.length === 0) return;
   if (audio.length === 1 && queue.length === 0) {
@@ -862,7 +875,7 @@ function openFiles(files: readonly File[]): void {
 
 // ---------------------------------------------------------------- page
 
-const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, exportPanel, detailsPanel]);
+const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, songPanel.element, exportPanel, detailsPanel]);
 
 document.getElementById("app")!.append(
   el("header", { className: "top" }, [el("h1", { textContent: "MADDAW" }), el("div", { className: "row" }, [rePickButton, openButton, demoButton])]),
@@ -1141,6 +1154,7 @@ async function listen(): Promise<void> {
     client.stopPreview();
     return;
   }
+  songPanel.stop();
   const result = await buildCurrent();
   if (!result) return;
   exportStatus.textContent = exportSettings.format === "multisample" ? `試聴: 中央の音(${pitchLabel(note)})` : "";
@@ -1157,6 +1171,7 @@ async function playOriginal(): Promise<void> {
     return;
   }
   if (!material || !markers) return;
+  songPanel.stop();
   const rate = material.sampleRate;
   const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
   const pieces: [number, number][] = [];

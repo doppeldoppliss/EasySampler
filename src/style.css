@@ -705,3 +705,27 @@ details.credit summary {
     flex-direction: column;
   }
 }
+
+/* 曲で試す */
+.song-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.song-body select {
+  max-width: 100%;
+}
+
+.song-transport {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.song-seek {
+  flex: 1 1 200px;
+  min-width: 0;
+  accent-color: var(--accent);
+}

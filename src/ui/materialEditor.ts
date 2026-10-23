@@ -15,7 +15,7 @@
 
 import { pitchLabel } from "../analysis/pitch";
 import type { PitchTrack } from "../analysis/pyin";
-import { collapsedTime, expandedTime, hiddenParts, normalizeRemoved, type OutputLayout } from "../instrument/layout";
+import { collapsedTime, expandedTime, normalizeRemoved, type OutputLayout } from "../instrument/layout";
 import { clampMarkers } from "../instrument/markers";
 import type { Markers, TimeRange } from "../instrument/types";
 import { cssVar, el } from "./dom";
@@ -61,10 +61,8 @@ export class MaterialEditor {
   private material: EditorMaterial | null = null;
   private markers: Markers | null = null;
   private removed: TimeRange[] = [];
-  /** Which parts play (鳴らす部分); a part switched off is not shown. */
+  /** Which parts play (鳴らす部分); a part switched off keeps its waveform and handles but loses its band label. */
   private parts = { sustain: true, tail: true };
-  /** What is closed up on screen: the removed stretches and the hidden parts. */
-  private collapsed: TimeRange[] = [];
   private root = 60;
   /** The note the file is tuned to: where the edited curve is drawn. */
   private target = 60;
@@ -112,7 +110,6 @@ export class MaterialEditor {
     this.material = material;
     this.selection = null;
     this.removed = [];
-    this.collapsed = [];
     this.view = { start: 0, end: this.displayDuration };
     this.playhead = null;
     this.draw();
@@ -122,7 +119,6 @@ export class MaterialEditor {
   setState(markers: Markers, root: number, flatten: number, target = root): void {
     this.markers = markers;
     this.removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
-    this.refreshCollapsed();
     this.root = root;
     this.target = target;
     this.flatten = flatten;
@@ -130,28 +126,11 @@ export class MaterialEditor {
     this.draw();
   }
 
-  /** Which parts play: the ones switched off disappear from the plot. */
+  /** Which parts play: a part switched off loses its band label (nothing else changes). */
   setParts(parts: { sustain: boolean; tail: boolean }): void {
     if (parts.sustain === this.parts.sustain && parts.tail === this.parts.tail) return;
     this.parts = { ...parts };
-    this.refreshCollapsed();
-    // What plays just got longer or shorter: show exactly that.
-    if (this.markers) this.zoomToRange(this.markers.rangeStart, this.markers.rangeEnd);
-    else {
-      this.view = { start: 0, end: this.displayDuration };
-      this.draw();
-      this.announceView();
-    }
-  }
-
-  private refreshCollapsed(): void {
-    const m = this.markers;
-    this.collapsed = m ? normalizeRemoved([...this.removed, ...hiddenParts(m, this.parts)], m.rangeStart, m.rangeEnd) : [];
-  }
-
-  /** A handle of a part that isn't shown can't be seen or grabbed. */
-  private hiddenHandle(handle: Handle): boolean {
-    return (!this.parts.sustain && handle === "sustainEnd") || (!this.parts.tail && (handle === "tailStart" || handle === "rangeEnd"));
+    this.draw();
   }
 
   setSelection(selection: TimeSelection | null): void {
@@ -179,17 +158,17 @@ export class MaterialEditor {
 
   /** The material's length as shown (removed stretches closed up). */
   get displayDuration(): number {
-    return collapsedTime(this.duration, this.collapsed);
+    return collapsedTime(this.duration, this.removed);
   }
 
   /** Source time → display time. */
   disp(t: number): number {
-    return collapsedTime(t, this.collapsed);
+    return collapsedTime(t, this.removed);
   }
 
   /** Display time → source time. */
   src(d: number): number {
-    return expandedTime(d, this.collapsed);
+    return expandedTime(d, this.removed);
   }
 
   /** The source time at a pointer's x (never inside a removed stretch, clamped to the material). */
@@ -289,7 +268,6 @@ export class MaterialEditor {
     let best: Handle | null = null;
     let bestDistance = reach;
     for (const handle of HANDLE_ORDER) {
-      if (this.hiddenHandle(handle)) continue;
       const hx = this.xCss(this.markers[handle], box.width);
       let distance = Math.abs(hx - x);
       // Sustain end and tail start often coincide: the lower half of the strip grabs the tail.
@@ -377,7 +355,6 @@ export class MaterialEditor {
     if (this.dragging?.pointerId === event.pointerId && this.markers) {
       const markers = this.moved(this.dragging.handle, this.timeAt(event.clientX));
       this.markers = markers;
-      this.refreshCollapsed();
       this.draw();
       this.onMarkersChange(markers, false);
       return;
@@ -433,36 +410,8 @@ export class MaterialEditor {
     }
   }
 
-  /**
-   * The markers with one moved; neighbours give way so the order holds —
-   * except a hidden part's markers (鳴らす部分), which stay put: the handle
-   * stops as far as it can go without moving them (minimum gaps included).
-   */
+  /** The markers with one moved; neighbours give way so the order holds. */
   private moved(handle: Handle, time: number): Markers {
-    const original = this.markers!;
-    // What is hidden must come out exactly as it was: the same stretches (a visible handle on their edge
-    // can't move into them) and the same markers inside them.
-    const hiddenBefore = hiddenParts(original, this.parts);
-    const hidden = HANDLE_ORDER.filter((h) => h !== handle && this.hiddenHandle(h));
-    const same = (a: number, b: number) => Math.abs(a - b) < 1e-9;
-    const keepsHidden = (m: Markers) => {
-      const after = hiddenParts(m, this.parts);
-      return after.length === hiddenBefore.length && after.every((r, i) => same(r.start, hiddenBefore[i].start) && same(r.end, hiddenBefore[i].end)) && hidden.every((h) => same(m[h], original[h]));
-    };
-    const wanted = this.placed(handle, time);
-    if (hiddenBefore.length === 0 || keepsHidden(wanted)) return wanted;
-    // Between where the handle was (fine) and where it was asked to go (not): the farthest that still is.
-    let ok = original[handle];
-    let bad = time;
-    for (let i = 0; i < 30 && Math.abs(bad - ok) > 1e-6; i++) {
-      const mid = (ok + bad) / 2;
-      if (keepsHidden(this.placed(handle, mid))) ok = mid;
-      else bad = mid;
-    }
-    return keepsHidden(this.placed(handle, ok)) ? this.placed(handle, ok) : original;
-  }
-
-  private placed(handle: Handle, time: number): Markers {
     const index = HANDLE_ORDER.indexOf(handle);
     const m = { ...this.markers!, [handle]: time };
     // Moving the sustain end drags a tail start that sat on it along (the usual case).
@@ -588,7 +537,7 @@ export class MaterialEditor {
     line(this.target, pitchLabel(this.target), cssVar("--accent"), [], "right", false);
 
     // The pitch curves, broken at removed stretches and outside the window.
-    const inRemoved = (t: number) => this.collapsed.some((r) => t >= r.start && t < r.end);
+    const inRemoved = (t: number) => this.removed.some((r) => t >= r.start && t < r.end);
     const curve = (value: (pitch: number) => number, from: number, to: number) => {
       g.beginPath();
       let drawing = false;
@@ -744,7 +693,6 @@ export class MaterialEditor {
     // The range handles (the cut) are bigger, with a bracket at the top,
     // since they are the first thing to reach for.
     for (const handle of HANDLE_ORDER) {
-      if (this.hiddenHandle(handle)) continue;
       const hx = Math.round(x(markers[handle]));
       if (hx < -12 * dpr || hx > width + 12 * dpr) continue;
       const active = this.dragging?.handle === handle || this.hover === handle;

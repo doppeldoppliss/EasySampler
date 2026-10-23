@@ -18,7 +18,7 @@ import { buildBatch, buildKit, buildOne, type Built, type BuildInput } from "./e
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
 import { exportFileName, safeBaseName } from "./export/render";
 import { parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
-import { hiddenPartsOf, normalizeRemoved, outputLayout, subtractRanges } from "./instrument/layout";
+import { hiddenPartsOf, normalizeRemoved, outputLayout } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
 import {
   DEFAULT_EXPORT,
@@ -292,12 +292,9 @@ const clearSelectionButton = button("選択解除", "small", () => {
   refreshFixBar();
 });
 // Cutting (VocalShifter's TIME: 選択範囲の削除 / トリミング).
-// Parts switched off (鳴らす部分) are out of sight, so a cut never reaches into them:
-// a selection across the seam where one was closed up removes only what is visible.
 const removeButton = button("この範囲を削除", "small", () => {
   if (!selection || !markers) return;
-  const visible = subtractRanges(selection.from, selection.to, hiddenPartsOf(markers, params));
-  const removed = normalizeRemoved([...(markers.removed ?? []), ...visible], markers.rangeStart, markers.rangeEnd);
+  const removed = normalizeRemoved([...(markers.removed ?? []), { start: selection.from, end: selection.to }], markers.rangeStart, markers.rangeEnd);
   markers = clampMarkers({ ...markers, removed });
   selection = null;
   editor.setSelection(null);
@@ -305,21 +302,7 @@ const removeButton = button("この範囲を削除", "small", () => {
 });
 const trimButton = button("選択範囲だけにする", "small", () => {
   if (!selection || !markers) return;
-  const hidden = hiddenPartsOf(markers, params);
-  if (hidden.length === 0) {
-    markers = clampMarkers({ ...markers, rangeStart: selection.from, rangeEnd: selection.to });
-  } else {
-    // With parts hidden, keep them: on each side, the range edge moves only when no hidden part lies beyond the selection;
-    // otherwise what is visible there is removed instead of cut off.
-    const { from, to } = selection;
-    const hiddenBefore = hidden.some((r) => r.start < from);
-    const hiddenAfter = hidden.some((r) => r.end > to);
-    const rangeStart = hiddenBefore ? markers.rangeStart : from;
-    const rangeEnd = hiddenAfter ? markers.rangeEnd : to;
-    const cut = [...(hiddenBefore ? subtractRanges(markers.rangeStart, from, hidden) : []), ...(hiddenAfter ? subtractRanges(to, markers.rangeEnd, hidden) : [])];
-    const removed = normalizeRemoved([...(markers.removed ?? []), ...cut], rangeStart, rangeEnd);
-    markers = clampMarkers({ ...markers, rangeStart, rangeEnd, removed });
-  }
+  markers = clampMarkers({ ...markers, rangeStart: selection.from, rangeEnd: selection.to });
   selection = null;
   editor.setSelection(null);
   afterMarkersEdited();

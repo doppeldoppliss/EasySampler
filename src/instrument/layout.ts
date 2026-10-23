@@ -60,19 +60,6 @@ export function hiddenPartsOf(markers: Markers, params: InstrumentParams): TimeR
   return hiddenParts(markers, { sustain: params.sustainEnabled, tail: params.tail.enabled && params.tail.limit !== "none" });
 }
 
-/** [from, to) minus the given stretches: the pieces left, in order. */
-export function subtractRanges(from: number, to: number, cut: readonly TimeRange[]): TimeRange[] {
-  const out: TimeRange[] = [];
-  let at = from;
-  for (const r of [...cut].sort((a, b) => a.start - b.start)) {
-    if (r.end <= at || r.start >= to) continue;
-    if (r.start > at) out.push({ start: at, end: r.start });
-    at = Math.max(at, r.end);
-  }
-  if (to > at) out.push({ start: at, end: to });
-  return out;
-}
-
 export function collapsedTime(t: number, removed: readonly TimeRange[]): number {
   let out = t;
   for (const r of removed) {

@@ -59,6 +59,8 @@ const MAX_FADE_OUT_SEC = 3;
 const STRIP_HEIGHT = 36;
 /** The "after" lane at the bottom: how the output lays out in time. */
 const LANE_HEIGHT = 30;
+/** The strip across the top of the plot: press or drag there to play the original from that point. */
+const SEEK_HEIGHT = 14;
 const HANDLE_REACH_MOUSE = 8;
 const HANDLE_REACH_TOUCH = 22;
 /** A selection drag shorter than this (CSS px) is a tap: it clears the selection. */
@@ -93,7 +95,9 @@ export class MaterialEditor {
   /** Two fingers: pinch to zoom, move to pan. */
   private pointers = new Map<number, number>();
   private pinch: { span: number; start: number; distance: number; centerX: number } | null = null;
-  private hover: Handle | "root" | LaneGrip | null = null;
+  private hover: Handle | "root" | LaneGrip | "seek" | null = null;
+  /** Scrubbing: the top strip seeks the original (display seconds), the lane seeks the result (output seconds). */
+  private seekDrag: { kind: "original" | "result"; pointerId: number; sec: number } | null = null;
   /** Dragging a fade grip in the "after" lane. */
   private laneDrag: { grip: LaneGrip; pointerId: number; startSec: number; startX: number } | null = null;
   /** The pitch scale of the last draw (CSS px), for turning a pointer's y into a pitch. */
@@ -104,6 +108,8 @@ export class MaterialEditor {
   onRootChange: (root: number, final: boolean) => void = () => {};
   /** A fade grip was dragged: the level with its new attack / fade-out (seconds). */
   onLevelChange: (level: LevelShape, final: boolean) => void = () => {};
+  /** A press or drag in the seek strip (display seconds of the original) or in the lane (output seconds of the result). */
+  onSeek: (kind: "original" | "result", sec: number, final: boolean) => void = () => {};
   onSelect: (selection: TimeSelection | null) => void = () => {};
   onViewChange: (view: { start: number; end: number; total: number }) => void = () => {};
 
@@ -312,6 +318,20 @@ export class MaterialEditor {
     return { sec, x: Math.max(8, Math.min(width - 8, x)) };
   }
 
+  /** Output seconds under a pointer's x in the lane (clamped to the output). */
+  private laneOutputSecAt(clientX: number): number {
+    const dpr = window.devicePixelRatio || 1;
+    const box = this.canvas.getBoundingClientRect();
+    const x = (clientX - box.left) * dpr;
+    const sec = ((x - this.laneMap.x) / this.laneMap.width) * this.laneMap.totalSec;
+    return Math.max(0, Math.min(this.laneMap.totalSec, sec));
+  }
+
+  /** Display seconds under a pointer's x, clamped to what is shown. */
+  private displaySecAt(clientX: number): number {
+    return Math.max(0, Math.min(this.displayDuration, this.displayAt(clientX)));
+  }
+
   /** Output seconds per CSS px in the lane. */
   private laneSecPerPx(): number {
     const dpr = window.devicePixelRatio || 1;
@@ -367,9 +387,19 @@ export class MaterialEditor {
       this.dragging = null;
       this.rootDrag = null;
       this.laneDrag = null;
+      this.seekDrag = null;
       this.selecting = null;
       const [a, b] = [...this.pointers.values()];
       this.pinch = { span: this.view.end - this.view.start, start: this.view.start, distance: Math.max(1, Math.abs(a - b)), centerX: (a + b) / 2 };
+      return;
+    }
+    const boxAt = this.canvas.getBoundingClientRect();
+    const yAt = event.clientY - boxAt.top;
+    if (yAt < SEEK_HEIGHT) {
+      this.capture(event);
+      const sec = this.displaySecAt(event.clientX);
+      this.seekDrag = { kind: "original", pointerId: event.pointerId, sec };
+      this.onSeek("original", sec, false);
       return;
     }
     const handle = this.handleAt(event);
@@ -379,6 +409,13 @@ export class MaterialEditor {
       return;
     }
     const grip = this.laneGripAt(event);
+    if (!grip && yAt > boxAt.height - LANE_HEIGHT && this.layout && this.layout.totalSec > 0) {
+      this.capture(event);
+      const sec = this.laneOutputSecAt(event.clientX);
+      this.seekDrag = { kind: "result", pointerId: event.pointerId, sec };
+      this.onSeek("result", sec, false);
+      return;
+    }
     if (grip) {
       this.capture(event);
       // Relative: the grip moves by as much as the pointer does (so a grip pinned at the edge doesn't jump).
@@ -419,6 +456,12 @@ export class MaterialEditor {
       this.onMarkersChange(markers, false);
       return;
     }
+    if (this.seekDrag?.pointerId === event.pointerId) {
+      const sec = this.seekDrag.kind === "original" ? this.displaySecAt(event.clientX) : this.laneOutputSecAt(event.clientX);
+      this.seekDrag.sec = sec;
+      this.onSeek(this.seekDrag.kind, sec, false);
+      return;
+    }
     if (this.laneDrag?.pointerId === event.pointerId && this.level && this.layout) {
       const sec = this.laneDrag.startSec + (event.clientX - this.laneDrag.startX) * this.laneSecPerPx();
       const total = this.layout.totalSec;
@@ -448,10 +491,17 @@ export class MaterialEditor {
       return;
     }
     // Hovering: show what a press would grab.
-    const hover: Handle | "root" | LaneGrip | null = this.handleAt(event) ?? this.laneGripAt(event) ?? (this.nearRoot(event.clientX, event.clientY, event.pointerType) ? "root" : null);
+    const boxH = this.canvas.getBoundingClientRect();
+    const yH = event.clientY - boxH.top;
+    let hover: Handle | "root" | LaneGrip | "seek" | null;
+    if (yH < SEEK_HEIGHT) hover = "seek";
+    else {
+      hover = this.handleAt(event) ?? this.laneGripAt(event) ?? (this.nearRoot(event.clientX, event.clientY, event.pointerType) ? "root" : null);
+      if (!hover && yH > boxH.height - LANE_HEIGHT && this.layout) hover = "seek";
+    }
     if (hover !== this.hover) {
       this.hover = hover;
-      this.canvas.style.cursor = hover === "root" ? "ns-resize" : hover ? "ew-resize" : this.material ? "crosshair" : "default";
+      this.canvas.style.cursor = hover === "root" ? "ns-resize" : hover === "seek" ? "pointer" : hover ? "ew-resize" : this.material ? "crosshair" : "default";
       this.draw();
     }
   }
@@ -470,6 +520,12 @@ export class MaterialEditor {
     if (this.rootDrag?.pointerId === event.pointerId) {
       this.rootDrag = null;
       this.onRootChange(this.root, true);
+      return;
+    }
+    if (this.seekDrag?.pointerId === event.pointerId) {
+      const { kind, sec } = this.seekDrag;
+      this.seekDrag = null;
+      this.onSeek(kind, sec, true);
       return;
     }
     if (this.laneDrag?.pointerId === event.pointerId) {
@@ -839,6 +895,17 @@ export class MaterialEditor {
         g.fillRect(hx - 3 * dpr, gripTop + 2 * dpr, 6 * dpr, strip / 2 - 4 * dpr);
       }
     }
+
+    // The seek strip along the top: press or drag to play the original from there.
+    g.fillStyle = cssVar("--strip");
+    g.globalAlpha = 0.7;
+    g.fillRect(0, 0, width, SEEK_HEIGHT * dpr);
+    g.globalAlpha = 1;
+    g.fillStyle = cssVar("--line");
+    g.fillRect(0, SEEK_HEIGHT * dpr - 1 * dpr, width, 1 * dpr);
+    g.font = `${9 * dpr}px system-ui, sans-serif`;
+    g.fillStyle = cssVar("--muted");
+    g.fillText("▶ 再生位置", 4 * dpr, 10 * dpr);
 
     // The playhead.
     if (this.playhead) {

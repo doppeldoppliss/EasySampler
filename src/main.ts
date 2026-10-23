@@ -408,7 +408,7 @@ const materialPanel = el("section", { className: "panel" }, [
     el("div", { className: "row tight" }, [playOriginalButton, playResultButton, el("span", { className: "spacer" }), zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
     seekRow,
   ]),
-  el("p", { className: "fine hint", textContent: "両端のハンドルで鳴らす範囲を切り出し、帯の端で頭部(伸ばさない)・持続区間(伸ばす)・語尾を直せます。再生バーで途中から聴け、スペースキーで再生 / 停止(Shift + スペースで元の音)。点線(判定)は上下にドラッグで半音ずつ、Alt でセント単位、ダブルクリックで最寄りの半音に。拡大は Ctrl + ホイールかピンチ、横スクロールはホイールか 2 本指。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。" }),
+  el("p", { className: "fine hint", textContent: "両端のハンドルで鳴らす範囲を切り出し、帯の端で頭部(伸ばさない)・持続区間(伸ばす)・語尾を直せます。一番上の帯を押すか引くとそこから元の音が鳴り、下の「書き出し後」レーンを押すとそこから書き出し後が鳴ります(再生中は飛びます)。スペースキーで再生 / 停止(Shift + スペースで元の音)。点線(判定)は上下にドラッグで半音ずつ、Alt でセント単位、ダブルクリックで最寄りの半音に。拡大は Ctrl + ホイールかピンチ、横スクロールはホイールか 2 本指。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。" }),
   editor.element,
   el("p", { className: "legend fine" }, [
     el("span", { className: "swatch original" }), "元のピッチ  ",
@@ -884,20 +884,70 @@ let pickerClip: { channels: Float32Array[]; sampleRate: number } | null = null;
 const picker = new RangePicker();
 const pickerTitle = el("p", { className: "picker-title" });
 const pickerRange = el("span", { className: "num" });
+// Listening to the selection: from the cue, with a seek bar and a playhead over the overview.
+let pickerPlaying = false;
+let pickerCue = 0;
+let pickerFrame = 0;
+const pickerSeek = el("input", { type: "range", min: "0", max: "1", step: "0.01", value: "0", className: "seek-bar", ariaLabel: "再生位置" });
+const pickerClock = el("span", { className: "fine num seek-clock" });
+function showPickerSeek(sec: number): void {
+  const r = picker.value;
+  const length = Math.max(0.01, r.to - r.from);
+  pickerSeek.max = String(length);
+  pickerSeek.value = String(Math.min(length, sec));
+  pickerClock.textContent = `${clock(r.from + Math.min(length, sec))} / ${clock(r.to)}`;
+}
+pickerSeek.addEventListener("input", () => {
+  pickerCue = Number(pickerSeek.value);
+  showPickerSeek(pickerCue);
+  if (pickerPlaying) client.seekPreview(pickerCue);
+  else picker.setPlayhead(picker.value.from + pickerCue);
+});
+function stopPickerPlayback(): void {
+  cancelAnimationFrame(pickerFrame);
+  if (!pickerPlaying) return;
+  pickerPlaying = false;
+  pickerListen.textContent = "▶ 選択範囲を聴く";
+  picker.setPlayhead(null);
+}
 const pickerListen = button("▶ 選択範囲を聴く", "", () => {
   if (!pickerClip) return;
+  if (pickerPlaying) {
+    client.stopPreview();
+    return;
+  }
   const r = picker.value;
   const rate = pickerClip.sampleRate;
-  client.playBuffer(pickerClip.channels.map((c) => c.slice(Math.round(r.from * rate), Math.round(r.to * rate))), rate);
+  const length = r.to - r.from;
+  if (pickerCue >= length - 0.02) pickerCue = 0;
+  pickerPlaying = true;
+  pickerListen.textContent = "■ 停止";
+  client.playBuffer(pickerClip.channels.map((c) => c.slice(Math.round(r.from * rate), Math.round(r.to * rate))), rate, pickerCue);
+  const step = () => {
+    const pos = client.previewPosition();
+    if (pos === null || !pickerPlaying) return;
+    pickerCue = pos;
+    showPickerSeek(pos);
+    picker.setPlayhead(picker.value.from + pos);
+    pickerFrame = requestAnimationFrame(step);
+  };
+  pickerFrame = requestAnimationFrame(step);
 });
 const pickerUse = button("この範囲を使う", "primary", () => void usePickedRange());
 const pickerPanel = el("section", { className: "panel picker-panel", hidden: true }, [
   pickerTitle,
   picker.element,
   el("div", { className: "row" }, [el("span", { className: "fine" }, ["使う範囲: ", pickerRange]), pickerListen, pickerUse]),
+  el("div", { className: "row tight seek-row" }, [pickerSeek, pickerClock]),
   el("p", { className: "fine", textContent: "ハンドルをドラッグして範囲を決めます。帯の中をドラッグすると範囲ごと動き、外をタップするとそこへ移ります。一度に使えるのは 60 秒までですが、あとから「別の範囲を選ぶ」で何度でも選び直せます。" }),
 ]);
-picker.onChange = (r) => (pickerRange.textContent = `${clock(r.from)} – ${clock(r.to)}(${(r.to - r.from).toFixed(1)} 秒)`);
+picker.onChange = (r) => {
+  pickerRange.textContent = `${clock(r.from)} – ${clock(r.to)}(${(r.to - r.from).toFixed(1)} 秒)`;
+  // A new selection: playback (of the old one) stops, and the cue goes back to its start.
+  if (pickerPlaying) client.stopPreview();
+  pickerCue = 0;
+  showPickerSeek(0);
+};
 const rePickButton = button("別の範囲を選ぶ", "", () => void rePick());
 rePickButton.hidden = true;
 
@@ -1367,7 +1417,7 @@ async function buildAll(): Promise<Built | null> {
 }
 
 /** What is playing right now, for the playhead: the result (output time) or the original (display time, offset by where the range starts). */
-let playing: { kind: "result" } | { kind: "original"; displayStart: number } | null = null;
+let playing: { kind: "result" } | { kind: "original" } | null = null;
 let playheadFrame = 0;
 
 function trackPlayhead(): void {
@@ -1378,7 +1428,7 @@ function trackPlayhead(): void {
       editor.setPlayhead(null);
       return;
     }
-    editor.setPlayhead(playing.kind === "result" ? { kind: "output", sec: pos } : { kind: "display", sec: playing.displayStart + pos });
+    editor.setPlayhead(playing.kind === "result" ? { kind: "output", sec: pos } : { kind: "display", sec: bufferToDisplay(pos) });
     cue = pos;
     showSeek(pos);
     playheadFrame = requestAnimationFrame(step);
@@ -1412,7 +1462,46 @@ async function listen(): Promise<void> {
   trackPlayhead();
 }
 
-/** The material from the head, as recorded, within the range and minus the removed stretches (a short crossfade at each seam). */
+/** The stretches of the material the original preview plays, in order: the range minus the removed stretches and the parts switched off. */
+function originalPieces(): { from: number; to: number }[] {
+  if (!markers) return [];
+  const removed = normalizeRemoved([...(markers.removed ?? []), ...hiddenPartsOf(markers, params)], markers.rangeStart, markers.rangeEnd);
+  const pieces: { from: number; to: number }[] = [];
+  let at = markers.rangeStart;
+  for (const r of removed) {
+    if (r.start > at) pieces.push({ from: at, to: r.start });
+    at = Math.max(at, r.end);
+  }
+  if (markers.rangeEnd > at) pieces.push({ from: at, to: markers.rangeEnd });
+  return pieces;
+}
+
+/** Seconds into the original preview's buffer → display time on the editor. */
+function bufferToDisplay(sec: number): number {
+  let buf = 0;
+  const pieces = originalPieces();
+  for (const p of pieces) {
+    const len = p.to - p.from;
+    if (sec < buf + len) return editor.disp(p.from + (sec - buf));
+    buf += len;
+  }
+  const last = pieces.at(-1);
+  return last ? editor.disp(last.to) : 0;
+}
+
+/** Display time on the editor → seconds into the original preview's buffer (a gap lands on what follows it). */
+function displayToBuffer(displaySec: number): number {
+  const t = editor.src(displaySec);
+  let buf = 0;
+  for (const p of originalPieces()) {
+    if (t < p.from) return buf;
+    if (t < p.to) return buf + (t - p.from);
+    buf += p.to - p.from;
+  }
+  return buf;
+}
+
+/** The material from the head, as recorded, within the range and minus the removed stretches and the parts switched off (a short crossfade at each seam). */
 async function playOriginal(): Promise<void> {
   if (playing?.kind === "original") {
     client.stopPreview();
@@ -1421,22 +1510,14 @@ async function playOriginal(): Promise<void> {
   if (!material || !markers) return;
   songPanel.stop();
   const rate = material.sampleRate;
-  // Left out: the removed stretches and the parts switched off.
-  const removed = normalizeRemoved([...(markers.removed ?? []), ...hiddenPartsOf(markers, params)], markers.rangeStart, markers.rangeEnd);
-  const pieces: [number, number][] = [];
-  let at = markers.rangeStart;
-  for (const r of removed) {
-    if (r.start > at) pieces.push([at, r.start]);
-    at = Math.max(at, r.end);
-  }
-  if (markers.rangeEnd > at) pieces.push([at, markers.rangeEnd]);
+  const pieces = originalPieces();
   const fade = Math.round(0.005 * rate);
-  const total = pieces.reduce((n, [a, b]) => n + Math.round((b - a) * rate), 0);
+  const total = pieces.reduce((n, p) => n + Math.round((p.to - p.from) * rate), 0);
   const out = material.channels.map(() => new Float32Array(total));
   let cursor = 0;
-  for (const [a, b] of pieces) {
-    const from = Math.round(a * rate);
-    const length = Math.round((b - a) * rate);
+  for (const p of pieces) {
+    const from = Math.round(p.from * rate);
+    const length = Math.round((p.to - p.from) * rate);
     for (let c = 0; c < out.length; c++) {
       const src = material.channels[c];
       for (let i = 0; i < length; i++) {
@@ -1450,13 +1531,19 @@ async function playOriginal(): Promise<void> {
   }
   lastPreview = "original";
   setSeekLength(total / rate);
-  playing = { kind: "original", displayStart: editor.disp(markers.rangeStart) };
+  playing = { kind: "original" };
   showPlaying();
   client.playBuffer(out, rate, cue);
   trackPlayhead();
 }
 
 client.onPreviewEnd = () => {
+  if (pickerPlaying) {
+    stopPickerPlayback();
+    if (pickerCue >= Number(pickerSeek.max) - 0.02) pickerCue = 0;
+    showPickerSeek(pickerCue);
+    return;
+  }
   playing = null;
   showPlaying();
   cancelAnimationFrame(playheadFrame);
@@ -1468,6 +1555,12 @@ client.onPreviewEnd = () => {
 // Space plays / stops the last preview (書き出し後 to begin with); Shift + Space the original. A song playing stops.
 window.addEventListener("keydown", (event) => {
   if (event.code !== "Space" || isTypingTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+  // Picking a stretch of a long clip (whatever else is loaded): Space plays / stops the selection.
+  if (!pickerPanel.hidden && pickerClip) {
+    event.preventDefault();
+    pickerListen.click();
+    return;
+  }
   if (!material) return;
   event.preventDefault();
   if (songPanel.playing) {
@@ -1724,6 +1817,33 @@ editor.onLevelChange = (level, final) => {
     p.amp.fadeOut = level.fadeOutSec <= p.amp.release + 1e-6 ? 0 : level.fadeOutSec;
   }, true);
   refreshControls();
+};
+
+// Seeking on the editor: the top strip for the original (display time), the lane for the result (output time).
+// Playing the same thing: it jumps there. Playing the other: that stops and this starts from there. Stopped: the cue is set.
+editor.onSeek = (kind, sec, final) => {
+  if (!material || !markers) return;
+  const bufferSec = kind === "original" ? displayToBuffer(sec) : sec;
+  if (playing && playing.kind === kind) {
+    cue = bufferSec;
+    showSeek(cue);
+    client.seekPreview(cue);
+    return;
+  }
+  if (playing) {
+    client.stopPreview();
+    cue = bufferSec;
+    if (final) void (kind === "original" ? playOriginal() : listen());
+    return;
+  }
+  lastPreview = kind;
+  cue = bufferSec;
+  // The length of what would play: the original's pieces, or the output as laid out (the build may differ a little).
+  if (kind === "original") setSeekLength(originalPieces().reduce((n, p) => n + (p.to - p.from), 0));
+  else setSeekLength(outputLayout(markers, params, exportLengthSec(exportSettings)).totalSec);
+  showSeek(cue);
+  editor.setPlayhead(kind === "result" ? { kind: "output", sec } : { kind: "display", sec });
+  if (final) void (kind === "original" ? playOriginal() : listen());
 };
 
 editor.onSelect = (next) => {

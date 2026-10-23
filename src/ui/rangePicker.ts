@@ -23,7 +23,14 @@ export class RangePicker {
   private maxSec = 60;
   private range: PickedRange = { from: 0, to: 1 };
   private dragging: { which: "from" | "to" | "both"; pointerId: number; grabOffset: number } | null = null;
+  /** Where playback is (seconds within the clip), or null. */
+  private playhead: number | null = null;
   onChange: (range: PickedRange, final: boolean) => void = () => {};
+
+  setPlayhead(sec: number | null): void {
+    this.playhead = sec;
+    this.draw();
+  }
 
   constructor() {
     this.canvas = el("canvas", { className: "picker-canvas", ariaLabel: "素材全体の波形と、使う範囲" });
@@ -184,6 +191,17 @@ export class RangePicker {
       g.fillRect(hx - 1 * dpr, 0, 2 * dpr, height);
       g.fillRect(hx - (dir > 0 ? 1 : 11) * dpr, 0, 12 * dpr, 4 * dpr);
       g.fillRect(hx - (dir > 0 ? 1 : 11) * dpr, height - 4 * dpr, 12 * dpr, 4 * dpr);
+    }
+    // The playhead.
+    if (this.playhead !== null) {
+      const px = Math.round(x(this.playhead));
+      g.fillStyle = cssVar("--accent");
+      g.fillRect(px - 1 * dpr, 0, 2 * dpr, height);
+      g.beginPath();
+      g.moveTo(px - 6 * dpr, 0);
+      g.lineTo(px + 6 * dpr, 0);
+      g.lineTo(px, 8 * dpr);
+      g.fill();
     }
     // Time ticks every 10 s (every minute when long).
     const tick = this.durationSec > 600 ? 60 : 10;

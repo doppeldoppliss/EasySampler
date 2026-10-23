@@ -141,3 +141,27 @@ describe("resample", () => {
     expect(Math.abs(rootPitch(analyzePitch(y, 48000))!.midi - 57)).toBeLessThan(0.05);
   });
 });
+
+describe("tail length limit", () => {
+  /** Renders a held note, releases it, and returns how many samples sound after the release. */
+  function afterRelease(limit: "unlimited" | "beat" | "bar", bpm: number): number {
+    const material = demoSyllable(SR);
+    const { engine } = setup(material, { tail: { enabled: true, limit } });
+    engine.setTempo(bpm);
+    const out = play(engine, 60, 0.6, 4);
+    const releaseAt = Math.round(0.6 * SR);
+    let last = releaseAt;
+    for (let i = releaseAt; i < out.length; i++) if (Math.abs(out[i]) > 1e-4) last = i;
+    return (last - releaseAt) / SR;
+  }
+
+  it("cuts the tail at one beat / one bar of the tempo, and leaves it alone when unlimited", () => {
+    const unlimited = afterRelease("unlimited", 600);
+    // At 600 BPM a beat is 0.1 s, a bar 0.4 s; the cut fades over 30 ms.
+    const beat = afterRelease("beat", 600);
+    expect(beat).toBeLessThan(0.1 + 0.05);
+    expect(beat).toBeGreaterThan(0.05);
+    expect(afterRelease("bar", 600)).toBeLessThanOrEqual(Math.min(unlimited, 0.4 + 0.05));
+    expect(unlimited).toBeGreaterThan(beat);
+  });
+});

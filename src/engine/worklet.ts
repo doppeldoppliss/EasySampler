@@ -46,6 +46,9 @@ class EngineProcessor extends AudioWorkletProcessor {
       case "allOff":
         this.engine.allOff();
         break;
+      case "tempo":
+        this.engine.setTempo(message.bpm);
+        break;
       case "song":
         this.song.stop(this.engine);
         this.song.load(message.material, message.backing);

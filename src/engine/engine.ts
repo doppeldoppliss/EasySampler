@@ -50,6 +50,8 @@ const MIN_POOL = 3;
 const SPARE_VOICES = 4;
 const STEAL_FADE_SEC = 0.006;
 const END_FADE_SEC = 0.01;
+/** A tail cut at its length limit fades out over this long. */
+const TAIL_CUT_FADE_SEC = 0.03;
 /** Micro irregularity: period jitter (share) and level shimmer (share). */
 const JITTER = 0.004;
 const SHIMMER = 0.03;
@@ -108,6 +110,8 @@ class Voice {
   /** Extra fade (stolen voice / end of material): per-sample decrement of fadeGain. */
   fadeGain = 1;
   fadeStep = 0;
+  /** Output samples the tail may still run (its length limit); Infinity when unlimited or not in the tail. */
+  tailRemaining = Infinity;
 
   driftValue = 0;
   driftTarget = 0;
@@ -137,6 +141,8 @@ export class Engine {
   private voices: Voice[] = [];
   private order = 0;
   private seed = 0x2545f491;
+  /** For the tail's length limit (1 beat / 1 bar). */
+  private bpm = 120;
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
@@ -177,6 +183,24 @@ export class Engine {
     this.params = params;
     this.ensureVoices(params.maxVoices);
     this.rebuildPool();
+  }
+
+  /** The tempo the tail's length limit is counted in. */
+  setTempo(bpm: number): void {
+    if (Number.isFinite(bpm) && bpm > 0) this.bpm = bpm;
+  }
+
+  /** Whether released notes play the tail ("none" is an old way of saying off). */
+  private tailOn(): boolean {
+    const tail = this.params!.tail;
+    return tail.enabled && tail.limit !== "none";
+  }
+
+  /** How long the tail may run, in output samples. */
+  private tailLimitSamples(): number {
+    const limit = this.params!.tail.limit;
+    const beats = limit === "beat" ? 1 : limit === "bar" ? 4 : Infinity;
+    return (beats * 60 * this.sampleRate) / this.bpm;
   }
 
   /** The read position moved past any removed stretch it has landed in. */
@@ -242,6 +266,10 @@ export class Engine {
     for (const v of this.voices) {
       if (!v.active) continue;
       this.renderVoice(v, frames);
+      if (v.tailRemaining !== Infinity) {
+        v.tailRemaining -= frames;
+        if (v.tailRemaining <= 0 && v.fadeStep === 0) this.fadeOut(v, TAIL_CUT_FADE_SEC);
+      }
       for (let i = 0; i < frames; i++) {
         outL[i] += v.bufL[i];
         outR[i] += v.bufR[i];
@@ -299,6 +327,7 @@ export class Engine {
     v.level = 0;
     v.fadeGain = 1;
     v.fadeStep = 0;
+    v.tailRemaining = Infinity;
     v.driftValue = 0;
     v.driftTarget = 0;
     v.driftCountdown = 0;
@@ -314,10 +343,10 @@ export class Engine {
   private release(v: Voice): void {
     v.released = true;
     const params = this.params!;
-    if (params.tail.enabled && params.sustainMode !== "none") {
+    if (this.tailOn() && params.sustainMode !== "none") {
       // The tail plays the material's own end at full level; the envelope holds.
       if (v.phase === Phase.Sustain) this.jumpToTail(v);
-    } else if (!params.tail.enabled) {
+    } else if (!this.tailOn()) {
       v.env = Env.Release;
     }
   }
@@ -330,6 +359,7 @@ export class Engine {
   private jumpToTail(v: Voice): void {
     v.phase = Phase.Run;
     v.srcTime = this.skipRemoved(Math.max(this.tailStart, this.sustainStart));
+    v.tailRemaining = this.tailLimitSamples();
   }
 
   /** Moves the voice from head to sustain / run once its read position gets there. */
@@ -338,7 +368,7 @@ export class Engine {
     const params = this.params!;
     if (params.sustainMode === "none") {
       v.phase = Phase.Run;
-    } else if (v.released && params.tail.enabled) {
+    } else if (v.released && this.tailOn()) {
       this.jumpToTail(v);
     } else {
       v.phase = Phase.Sustain;

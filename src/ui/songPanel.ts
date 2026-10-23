@@ -53,10 +53,13 @@ export class SongPanel {
   private readonly client: EngineClient;
   /** The note the current cut is made for (a drum part plays every hit on it). */
   private readonly currentNote: () => number;
+  /** The tempo the engine counts the tail limit in when no song is playing (the export BPM). */
+  private readonly restingBpm: () => number;
 
-  constructor(client: EngineClient, currentNote: () => number) {
+  constructor(client: EngineClient, currentNote: () => number, restingBpm: () => number) {
     this.client = client;
     this.currentNote = currentNote;
+    this.restingBpm = restingBpm;
     this.fileInput.addEventListener("change", () => {
       const file = this.fileInput.files?.[0];
       this.fileInput.value = "";
@@ -219,6 +222,7 @@ export class SongPanel {
   }
 
   private start(): void {
+    if (this.song) this.client.setTempo(this.song.bpm);
     this.startedAt = this.client.playSong(this.from);
     this.playButton.textContent = "■ 停止";
     this.onPlayingChange(true);
@@ -244,6 +248,7 @@ export class SongPanel {
     if (this.startedAt === null) return;
     this.startedAt = null;
     this.client.stopSong();
+    this.client.setTempo(this.restingBpm());
     this.playButton.textContent = "▶ 再生";
     this.seek.value = String(this.from);
     this.showPosition(this.from);

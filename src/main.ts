@@ -101,7 +101,7 @@ const sink = {
 const piano = new OnScreenKeyboard(sink, 48, SMALL_SCREEN ? 72 : 84);
 const pcKeys = new PcKeyboard(sink);
 // 曲で試す: the material on a part of a MIDI song (one sound at a time with the previews).
-const songPanel = new SongPanel(client, () => note);
+const songPanel = new SongPanel(client, () => note, () => exportSettings.bpm);
 songPanel.onPlayingChange = (playing) => {
   if (playing) client.stopPreview();
 };
@@ -614,6 +614,17 @@ const detailsPanel = el("details", { className: "panel params" }, [
       select("持続区間の伸ばし方", [["pool", "周期プール(自然)"], ["loop", "ループ"], ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"], ["none", "伸ばさない(ワンショット)"]], () => params.sustainMode, (p, v) => (p.sustainMode = v)),
       range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
       check("語尾を末尾に付ける", () => params.tail.enabled, (p, v) => (p.tail.enabled = v)),
+      select(
+        "語尾の長さ",
+        [
+          ["unlimited", "最後まで"],
+          ["beat", "1 拍まで"],
+          ["bar", "1 小節(4 拍)まで"],
+        ],
+        () => (params.tail.limit === "none" ? "unlimited" : params.tail.limit),
+        (p, v) => (p.tail = { enabled: p.tail.enabled, limit: v }),
+      ),
+      el("p", { className: "fine help", textContent: "拍は「長さ」の BPM で数えます(「曲で試す」の再生中は曲の BPM)。上限に来た語尾は短くフェードして切れます。" }),
       range("フォルマント", -6, 6, 0.1, () => params.formantSemitones, (p, v) => (p.formantSemitones = v), semis),
       check("大きな移調で声質を少し追従させる", () => params.formantFollow, (p, v) => (p.formantFollow = v)),
     ]),
@@ -1004,6 +1015,8 @@ function sendInstrument(): void {
 
 /** The note and export settings → the note row, the length row, the file name, the help, the editor's target line. */
 function refreshExport(): void {
+  // The tail limit counts in the export BPM (the song's own while one plays).
+  if (!songPanel.playing) client.setTempo(exportSettings.bpm);
   if (noteMode === "auto") note = Math.max(24, Math.min(96, Math.round(params.root)));
   noteSelect.value = String(note);
   noteAutoButton.hidden = noteMode === "auto";

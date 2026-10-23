@@ -120,6 +120,12 @@ export class EngineClient {
     this.post({ type: "noteOff", note });
   }
 
+  /** The tempo the tail's length limit counts in. */
+  setTempo(bpm: number): void {
+    this.pending = this.pending.filter((m) => m.type !== "tempo");
+    this.post({ type: "tempo", bpm });
+  }
+
   allOff(): void {
     if (this.node) this.post({ type: "allOff" });
   }

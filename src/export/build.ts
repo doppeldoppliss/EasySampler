@@ -56,7 +56,7 @@ export async function buildEntries(input: BuildInput, progress?: Progress): Prom
   const info = wavInfo(credit);
 
   if (settings.format === "single" || oneShot) {
-    const rendered = renderNote(source, cut.markers, cut.params, cut.note, holdSec);
+    const rendered = renderNote(source, cut.markers, cut.params, cut.note, holdSec, settings.bpm);
     const fileName = exportFileName(base, cut.note, settings, oneShot);
     const data = new Uint8Array(encodeWavBytes(rendered.channels, rendered.sampleRate, info, { unityNote: cut.note }));
     await progress?.(1, 1);
@@ -75,7 +75,7 @@ export async function buildEntries(input: BuildInput, progress?: Progress): Prom
   }
 
   if (settings.format === "loop") {
-    const rendered = renderNote(source, cut.markers, cut.params, cut.note, Math.max(holdSec, LOOP_MIN_HOLD_SEC));
+    const rendered = renderNote(source, cut.markers, cut.params, cut.note, Math.max(holdSec, LOOP_MIN_HOLD_SEC), settings.bpm);
     const loop = applyLoop(rendered, cut.params);
     const fileName = `${base}_${fileNoteName(cut.note)}_loop.wav`;
     const data = new Uint8Array(encodeWavBytes(rendered.channels, rendered.sampleRate, info, { unityNote: cut.note, loop: loop ?? undefined }));
@@ -92,7 +92,7 @@ export async function buildEntries(input: BuildInput, progress?: Progress): Prom
   let preview: Rendered | null = null;
   for (let i = 0; i < plan.length; i++) {
     const zone = plan[i];
-    const rendered = renderNote(source, cut.markers, { ...cut.params, root: cut.params.root }, zone.note, Math.max(holdSec, LOOP_MIN_HOLD_SEC));
+    const rendered = renderNote(source, cut.markers, { ...cut.params, root: cut.params.root }, zone.note, Math.max(holdSec, LOOP_MIN_HOLD_SEC), settings.bpm);
     const loop = applyLoop(rendered, cut.params);
     const fileName = `${base}_${fileNoteName(zone.note)}.wav`;
     entries.push({ name: `${base}/${samplesDir}/${fileName}`, data: new Uint8Array(encodeWavBytes(rendered.channels, rendered.sampleRate, info, { unityNote: zone.note, loop: loop ?? undefined })) });
@@ -156,7 +156,7 @@ export async function buildKit(inputs: readonly BuildInput[], kitName: string, f
   for (let i = 0; i < inputs.length; i++) {
     const { source, cut, settings, credit } = inputs[i];
     const oneShot = cut.params.sustainMode === "none";
-    const rendered = renderNote(source, cut.markers, cut.params, cut.note, exportLengthSec(settings));
+    const rendered = renderNote(source, cut.markers, cut.params, cut.note, exportLengthSec(settings), settings.bpm);
     let fileName = `${safeBaseName(inputs[i].baseName)}.wav`;
     for (let n = 2; used.has(fileName); n++) fileName = `${safeBaseName(inputs[i].baseName)}_${n}.wav`;
     used.add(fileName);

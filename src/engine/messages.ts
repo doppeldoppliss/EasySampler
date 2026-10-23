@@ -10,6 +10,7 @@ export type ToEngine =
   | { type: "noteOn"; note: number; velocity: number }
   | { type: "noteOff"; note: number }
   | { type: "allOff" }
+  | { type: "tempo"; bpm: number }
   // 曲で試す: the notes, then play from `fromSec` at context frame `atFrame`.
   | { type: "song"; material: SeqNote[]; backing: SeqNote[] }
   | { type: "songPlay"; atFrame: number; fromSec: number }

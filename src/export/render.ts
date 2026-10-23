@@ -31,11 +31,13 @@ const MARGIN_SEC = 0.005;
  * Plays `note` for `holdSec` (the hold ends `release` early so the file is
  * about `holdSec` long when the tail is off) and renders until the voice
  * has finished. A one-shot instrument (sustain "none") ignores `holdSec`
- * and plays the material out.
+ * and plays the material out. `bpm` is what a tail limited to a beat or a
+ * bar is measured in.
  */
-export function renderNote(source: PreparedSource, markers: Markers, params: InstrumentParams, note: number, holdSec: number): Rendered {
+export function renderNote(source: PreparedSource, markers: Markers, params: InstrumentParams, note: number, holdSec: number, bpm = 120): Rendered {
   const rate = source.sampleRate;
   const engine = new Engine(rate);
+  engine.setTempo(bpm);
   engine.setSource(source);
   engine.setInstrument(markers, { ...params, maxVoices: 1 });
   const oneShot = params.sustainMode === "none";

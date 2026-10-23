@@ -1405,6 +1405,11 @@ function cutFor(track: PitchTrack | null, m: Markers, name: string, base: Instru
       Object.assign(p, PRESETS.find((x) => x.id === "synth")!.apply(p));
       preset = "synth";
     }
+    // Short material with hardly anything steady to sustain: play it through as it is, at the note.
+    if (preset === "synth" && isShortMaterial(m)) {
+      Object.assign(p, PRESETS.find((x) => x.id === "short")!.apply(p));
+      preset = "short";
+    }
   } else {
     // Nothing pitched (a hit, a noise), or a one-shot by request: plays as recorded, from its own pitch (C4 when there is none).
     p.root = root?.midi ?? 60;
@@ -1413,6 +1418,12 @@ function cutFor(track: PitchTrack | null, m: Markers, name: string, base: Instru
     preset = "drum";
   }
   return { name, markers: m, params: p, note: Math.max(24, Math.min(96, Math.round(p.root))), noteMode: "auto", presetId: preset, detectedRoot: root?.midi ?? null };
+}
+
+/** A clip with less than this much steady sustain is "short": a shout or a word, not a note to stretch. */
+const SHORT_SUSTAIN_SEC = 0.2;
+function isShortMaterial(m: Markers): boolean {
+  return m.sustainEnd - m.sustainStart < SHORT_SUSTAIN_SEC || m.rangeEnd - m.rangeStart < 0.5;
 }
 
 /** One cut from the analysis, as on a fresh load. */
@@ -2040,7 +2051,8 @@ async function load(name: string, channels: Float32Array[], sampleRate: number):
       freshCuts();
       applyCurrentCut();
     }
-    status.replaceChildren(text + (restored ? " 前回の設定を復元しました。" : ""));
+    const shortNote = !restored && presetId === "short" ? " 伸ばせる部分が短いので「短い素材(長さ保持)」にしました。伸ばして使うならプリセットを「シンセ化」などに。" : "";
+    status.replaceChildren(text + (restored ? " 前回の設定を復元しました。" : "") + shortNote);
     if (restored) status.append(" ", button("最初から", "small", () => resetSettingsButton.click()));
   } catch (error) {
     status.textContent = `読み込めませんでした: ${error instanceof Error ? error.message : error}`;

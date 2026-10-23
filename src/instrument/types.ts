@@ -11,7 +11,7 @@ import type { ScaleId } from "./scale";
 export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
 export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
-export type PresetId = "synth" | "synth-lead" | "stretch" | "kerokero" | "wavetable" | "bass" | "jinriki" | "original" | "drum";
+export type PresetId = "synth" | "synth-lead" | "stretch" | "kerokero" | "wavetable" | "bass" | "jinriki" | "original" | "short" | "short-resample" | "drum";
 
 /** Seconds within the material, [start, end). */
 export interface TimeRange {
@@ -209,6 +209,9 @@ export const PRESETS: Preset[] = [
   { id: "bass", label: "ベース", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, amp: { ...p.amp, attack: 0.003, release: 0.04 } }) },
   { id: "jinriki", label: "人力(抑揚を少し整える)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0.3, wobble: { ...p.wobble, vibratoCents: 15, vibratoHz: 5.5, vibratoDelaySec: 0.3, driftCents: 4, micro: true } }) },
   { id: "original", label: "原型(抑揚そのまま)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
+  // Short material (a shout, a word): played through once at the note, nothing stretched — the 音MAD staple.
+  { id: "short", label: "短い素材(長さ保持・そのまま音程だけ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: true }, unvoicedFollow: true, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, retuneSec: 0 } }) },
+  { id: "short-resample", label: "短い素材(速度連動・早回し質感)", apply: (p) => ({ ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: true }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false } }) },
   { id: "drum", label: "ドラム・効果音(ワンショット)", apply: (p) => ({ ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, amp: { ...p.amp, attack: 0.001, sustain: 1, release: 0.03 } }) },
 ];
 

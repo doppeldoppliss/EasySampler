@@ -4,6 +4,7 @@
 // random walk is seeded, so the same settings give the same file.
 
 import { Engine, type PreparedSource } from "../engine/engine";
+import { outputLayout } from "../instrument/layout";
 import type { ExportSettings, InstrumentParams, Markers } from "../instrument/types";
 
 export interface Rendered {
@@ -77,9 +78,9 @@ export function renderNote(source: PreparedSource, markers: Markers, params: Ins
   }
   const length = Math.min(at, end + 1 + Math.round(MARGIN_SEC * rate));
   const gain = peak > PEAK ? PEAK / peak : 1;
-  // In preserve-length mode the head plays at its own speed; resampling scales it with the pitch.
+  // In preserve-length mode the head plays at its own speed (× its stretch); resampling also scales it with the pitch.
   const headSpeed = params.pitchMode === "resample" ? 2 ** ((note - params.root) / 12) : 1;
-  const headSec = Math.max(0, markers.sustainStart - markers.rangeStart) / headSpeed;
+  const headSec = outputLayout(markers, params, holdSec).headSec / headSpeed;
   return {
     sampleRate: rate,
     headSec,

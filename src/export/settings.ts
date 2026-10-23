@@ -5,6 +5,7 @@
 // to save / load as JSON by hand.
 
 import type { PitchCorrection } from "../analysis/corrections";
+import { normalizeRemoved } from "../instrument/layout";
 import { clampMarkers } from "../instrument/markers";
 import { DEFAULT_EXPORT, DEFAULT_PARAMS, type Credit, type ExportSettings, type InstrumentParams, type Markers } from "../instrument/types";
 
@@ -90,7 +91,13 @@ function sanitizeCut(raw: unknown, index: number): CutSettings | null {
     sustainStart: num(m.sustainStart, 0),
     sustainEnd: num(m.sustainEnd, 1),
     tailStart: num(m.tailStart, 1),
+    removed: Array.isArray(m.removed)
+      ? m.removed.filter((r): r is Record<string, unknown> => isRecord(r)).map((r) => ({ start: num(r.start, 0), end: num(r.end, 0) }))
+      : undefined,
   });
+  const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
+  if (removed.length) markers.removed = removed;
+  else delete markers.removed;
   return {
     name: typeof raw.name === "string" && raw.name.trim() ? raw.name : `区間 ${index + 1}`,
     markers,
@@ -115,6 +122,11 @@ function sanitizeParams(raw: unknown): InstrumentParams {
     formantFollow: typeof raw.formantFollow === "boolean" ? raw.formantFollow : d.formantFollow,
     sustainMode: raw.sustainMode === "loop" || raw.sustainMode === "none" || raw.sustainMode === "wavetable" ? raw.sustainMode : "pool",
     wavetableCycles: clamp(Math.round(num(raw.wavetableCycles, d.wavetableCycles)), 1, 16),
+    stretch: {
+      head: clamp(num(isRecord(raw.stretch) ? raw.stretch.head : undefined, d.stretch.head), 0.25, 4),
+      sustain: clamp(num(isRecord(raw.stretch) ? raw.stretch.sustain : undefined, d.stretch.sustain), 0.25, 8),
+      tail: clamp(num(isRecord(raw.stretch) ? raw.stretch.tail : undefined, d.stretch.tail), 0.25, 4),
+    },
     tail: {
       enabled: typeof tail.enabled === "boolean" ? tail.enabled : d.tail.enabled,
       limit: tail.limit === "none" || tail.limit === "beat" || tail.limit === "bar" ? tail.limit : "unlimited",

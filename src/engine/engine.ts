@@ -25,6 +25,7 @@
 //
 // Nothing here allocates while rendering.
 
+import { normalizeRemoved } from "../instrument/layout";
 import type { InstrumentParams, Markers } from "../instrument/types";
 
 export interface PreparedSource {
@@ -127,6 +128,8 @@ export class Engine {
   private sustainStart = 0;
   private sustainEnd = 0;
   private tailStart = 0;
+  private removedStart = new Float64Array(0);
+  private removedEnd = new Float64Array(0);
   private left = new Float32Array(0);
   private right = new Float32Array(0);
   private period = new Float32Array(0);
@@ -168,9 +171,34 @@ export class Engine {
     this.sustainStart = markers.sustainStart * sr;
     this.sustainEnd = markers.sustainEnd * sr;
     this.tailStart = markers.tailStart * sr;
+    const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
+    this.removedStart = Float64Array.from(removed, (r) => r.start * sr);
+    this.removedEnd = Float64Array.from(removed, (r) => r.end * sr);
     this.params = params;
     this.ensureVoices(params.maxVoices);
     this.rebuildPool();
+  }
+
+  /** The read position moved past any removed stretch it has landed in. */
+  private skipRemoved(position: number): number {
+    for (let i = 0; i < this.removedStart.length; i++) {
+      if (position >= this.removedStart[i] && position < this.removedEnd[i]) position = this.removedEnd[i];
+    }
+    return position;
+  }
+
+  private isRemoved(position: number): boolean {
+    for (let i = 0; i < this.removedStart.length; i++) {
+      if (position >= this.removedStart[i] && position < this.removedEnd[i]) return true;
+    }
+    return false;
+  }
+
+  /** How fast the read position moves through the material here: 1 ÷ the part's stretch factor. */
+  private speedAt(position: number): number {
+    const s = this.params!.stretch;
+    const factor = position < this.sustainStart ? s.head : position < this.sustainEnd ? s.sustain : s.tail;
+    return 1 / Math.max(0.05, factor);
   }
 
   noteOn(note: number, velocity = 0.8): void {
@@ -247,7 +275,7 @@ export class Engine {
     const inside: number[] = [];
     for (let k = 0; k < source.marks.length; k++) {
       const at = source.marks[k];
-      if (at >= this.sustainStart && at < this.sustainEnd && source.voiced[k]) inside.push(k);
+      if (at >= this.sustainStart && at < this.sustainEnd && source.voiced[k] && !this.isRemoved(at)) inside.push(k);
     }
     const skip = Math.max(0, Math.floor((inside.length - MAX_POOL) / 2));
     this.pool = Int32Array.from(inside.slice(skip, skip + MAX_POOL));
@@ -262,7 +290,7 @@ export class Engine {
     v.startOrder = this.order++;
     v.phase = Phase.Head;
     v.cycleIndex = 0;
-    v.srcTime = this.rangeStart;
+    v.srcTime = this.skipRemoved(this.rangeStart);
     v.clock = 0;
     v.poolIndex = Math.floor(this.pool.length / 2);
     v.previousPoolIndex = -1;
@@ -301,7 +329,7 @@ export class Engine {
 
   private jumpToTail(v: Voice): void {
     v.phase = Phase.Run;
-    v.srcTime = Math.max(this.tailStart, this.sustainStart);
+    v.srcTime = this.skipRemoved(Math.max(this.tailStart, this.sustainStart));
   }
 
   /** Moves the voice from head to sustain / run once its read position gets there. */
@@ -395,13 +423,15 @@ export class Engine {
       k = params.sustainMode === "wavetable" ? this.nextCycleMark(v) : this.nextPoolMark(v);
     } else {
       if (v.phase === Phase.Sustain && v.srcTime >= this.sustainEnd) {
-        v.srcTime -= Math.max(1, this.sustainEnd - this.sustainStart); // loop
+        v.srcTime = this.skipRemoved(v.srcTime - Math.max(1, this.sustainEnd - this.sustainStart)); // loop
       }
       if ((v.phase === Phase.Run || v.phase === Phase.Head) && v.srcTime >= this.rangeEnd) {
         v.phase = Phase.Done;
         return false;
       }
       k = this.nearestMark(v.srcTime);
+      // A nearest mark just inside a removed stretch would play a sliver of what was cut: take the next one.
+      if (this.removedStart.length && this.isRemoved(source.marks[k]) && k + 1 < source.marks.length) k++;
     }
 
     const seconds = v.nextCenter / this.sampleRate;
@@ -431,8 +461,9 @@ export class Engine {
     } else {
       spacing = period;
       alpha = 1;
-      // Repeated noise grains sound metallic; alternating their direction hides it.
-      if (v.phase === Phase.Sustain) {
+      // Repeated noise grains sound metallic (and read as a pitch); alternating their direction hides it.
+      // That happens in the sustain, and wherever a slowed-down part reuses its grains.
+      if (v.phase === Phase.Sustain || this.speedAt(v.srcTime) < 1) {
         reverse = v.reverseNext;
         v.reverseNext = !v.reverseNext;
       }
@@ -452,9 +483,9 @@ export class Engine {
     v.nextCenter += step;
     v.lastLeft = grain.left;
     v.driftCountdown -= step / this.sampleRate;
-    // The read position moves with real time (or faster/slower when resampling).
+    // The read position moves with real time (or faster/slower when resampling), at the part's own speed, past anything cut out.
     if (!(v.phase === Phase.Sustain && this.fromPool())) {
-      v.srcTime += step * (resample ? alpha : 1);
+      v.srcTime = this.skipRemoved(v.srcTime + step * (resample ? alpha : 1) * this.speedAt(v.srcTime));
     }
     return true;
   }

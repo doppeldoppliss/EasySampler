@@ -11,6 +11,7 @@
 
 import { pitchLabel } from "../analysis/pitch";
 import type { PitchTrack } from "../analysis/pyin";
+import { normalizeRemoved, type OutputLayout } from "../instrument/layout";
 import { clampMarkers } from "../instrument/markers";
 import type { Markers } from "../instrument/types";
 import { cssVar, el } from "./dom";
@@ -26,9 +27,17 @@ export interface TimeSelection {
   to: number;
 }
 
-type Handle = keyof Markers;
+export interface Vibrato {
+  depthCents: number;
+  rateHz: number;
+  delaySec: number;
+}
+
+type Handle = Exclude<keyof Markers, "removed">;
 
 const STRIP_HEIGHT = 36;
+/** The "after" lane at the bottom: how the output lays out in time. */
+const LANE_HEIGHT = 30;
 const HANDLE_REACH_MOUSE = 8;
 const HANDLE_REACH_TOUCH = 22;
 /** A selection drag shorter than this (CSS px) is a tap: it clears the selection. */
@@ -46,6 +55,8 @@ export class MaterialEditor {
   private target = 60;
   private flatten = 0;
   private selection: TimeSelection | null = null;
+  private layout: OutputLayout | null = null;
+  private vibrato: Vibrato | null = null;
   private dragging: { handle: Handle; pointerId: number } | null = null;
   private rootDrag: { pointerId: number } | null = null;
   private selecting: { pointerId: number; anchor: number; anchorX: number; moved: boolean } | null = null;
@@ -89,6 +100,13 @@ export class MaterialEditor {
     this.draw();
   }
 
+  /** What the output will look like (the lane at the bottom), and the vibrato drawn over its sustain. */
+  setLayout(layout: OutputLayout | null, vibrato: Vibrato | null): void {
+    this.layout = layout;
+    this.vibrato = vibrato;
+    this.draw();
+  }
+
   private get duration(): number {
     return this.material ? this.material.mono.length / this.material.sampleRate : 1;
   }
@@ -110,7 +128,8 @@ export class MaterialEditor {
     const reach = event.pointerType === "mouse" ? HANDLE_REACH_MOUSE : HANDLE_REACH_TOUCH;
     const x = event.clientX - box.left;
     const y = event.clientY - box.top;
-    const inStripLower = y > box.height - STRIP_HEIGHT / 2;
+    if (y > box.height - LANE_HEIGHT) return null; // the "after" lane has nothing to grab
+    const inStripLower = y > box.height - LANE_HEIGHT - STRIP_HEIGHT / 2;
     let best: Handle | null = null;
     let bestDistance = reach;
     for (const handle of HANDLE_ORDER) {
@@ -243,13 +262,38 @@ export class MaterialEditor {
     if (!material || !markers) return;
 
     const strip = STRIP_HEIGHT * dpr;
-    const plotHeight = height - strip;
+    const lane = LANE_HEIGHT * dpr;
+    const plotHeight = height - strip - lane;
+    const stripBottom = plotHeight + strip;
     const x = (t: number) => (t / this.duration) * width;
 
     // Outside the range: shaded.
     g.fillStyle = cssVar("--outside");
-    g.fillRect(0, 0, x(markers.rangeStart), height);
-    g.fillRect(x(markers.rangeEnd), 0, width - x(markers.rangeEnd), height);
+    g.fillRect(0, 0, x(markers.rangeStart), stripBottom);
+    g.fillRect(x(markers.rangeEnd), 0, width - x(markers.rangeEnd), stripBottom);
+
+    // Removed stretches: shaded and hatched (they are skipped on playback).
+    const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
+    for (const r of removed) {
+      const left = x(r.start);
+      const right = x(r.end);
+      g.fillStyle = cssVar("--outside");
+      g.fillRect(left, 0, right - left, stripBottom);
+      g.save();
+      g.beginPath();
+      g.rect(left, 0, right - left, stripBottom);
+      g.clip();
+      g.strokeStyle = cssVar("--handle");
+      g.lineWidth = 1 * dpr;
+      g.globalAlpha = 0.5;
+      g.beginPath();
+      for (let d = -stripBottom; d < right - left; d += 10 * dpr) {
+        g.moveTo(left + d, stripBottom);
+        g.lineTo(left + d + stripBottom, 0);
+      }
+      g.stroke();
+      g.restore();
+    }
 
     // Waveform (min/max per column).
     const samples = material.mono;
@@ -381,15 +425,70 @@ export class MaterialEditor {
       }
     }
 
-    // Handles: a line through everything, a grip in the strip. The range
-    // handles (the cut) are bigger, with a bracket at the top, since they are
-    // the first thing to reach for.
+    // The "after" lane: the output's parts laid out in time, the sustain's stretch written on it, the vibrato over it.
+    g.fillStyle = cssVar("--strip");
+    g.fillRect(0, stripBottom, width, lane);
+    g.fillStyle = cssVar("--line");
+    g.fillRect(0, stripBottom, width, 1 * dpr);
+    const layout = this.layout;
+    if (layout && layout.totalSec > 0) {
+      g.font = `${10 * dpr}px system-ui, sans-serif`;
+      const labelW = g.measureText("書き出し後").width + 10 * dpr;
+      const laneX = labelW;
+      const laneW = width - laneX - 4 * dpr;
+      const px = (sec: number) => laneX + (sec / layout.totalSec) * laneW;
+      g.fillStyle = cssVar("--muted");
+      g.fillText("書き出し後", 4 * dpr, stripBottom + lane / 2 + 4 * dpr);
+      const ratio = (out: number, src: number) => (src > 0 ? `×${(out / src).toFixed(out / src >= 10 ? 0 : 1)}` : "");
+      const parts: [number, number, string, string][] = [
+        [0, layout.headSec, "--band-head", `頭部 ${ratio(layout.headSec, layout.headSrcSec)}`],
+        [layout.headSec, layout.headSec + layout.sustainSec, "--band-sustain", `持続区間 ${layout.elastic ? `${ratio(layout.sustainSec, layout.sustainSrcSec)}(音の長さまで伸ばす)` : ratio(layout.sustainSec, layout.sustainSrcSec)}`],
+        [layout.headSec + layout.sustainSec, layout.totalSec, "--band-tail", `語尾 ${ratio(layout.tailSec, layout.tailSrcSec)}`],
+      ];
+      g.font = `${11 * dpr}px system-ui, sans-serif`;
+      for (const [from, to, color, text] of parts) {
+        if (to - from <= 1e-6) continue;
+        g.fillStyle = cssVar(color);
+        g.fillRect(px(from), stripBottom + 4 * dpr, px(to) - px(from), lane - 8 * dpr);
+        const textWidth = g.measureText(text).width;
+        if (px(to) - px(from) > textWidth + 6 * dpr) {
+          g.fillStyle = cssVar("--band-text");
+          g.fillText(text, px(from) + 4 * dpr, stripBottom + lane / 2 + 4 * dpr);
+        }
+      }
+      // The vibrato, as it will sound: from its delay, over the sustain (and the tail), at its rate and depth.
+      const vib = this.vibrato;
+      if (vib && vib.depthCents > 0 && layout.sustainSec > 0) {
+        const from = Math.max(layout.headSec, vib.delaySec);
+        const to = layout.headSec + layout.sustainSec + layout.tailSec;
+        if (to > from) {
+          g.strokeStyle = cssVar("--pitch-edited");
+          g.lineWidth = 1.5 * dpr;
+          g.beginPath();
+          const mid = stripBottom + lane / 2;
+          const amp = Math.min(lane * 0.4, (vib.depthCents / 100) * lane * 0.4);
+          const steps = Math.max(2, Math.round(px(to) - px(from)));
+          for (let i = 0; i <= steps; i++) {
+            const t = from + ((to - from) * i) / steps;
+            const fadeIn = Math.min(1, (t - from) / 0.15);
+            const yy = mid - amp * fadeIn * Math.sin(2 * Math.PI * vib.rateHz * (t - from));
+            if (i === 0) g.moveTo(px(t), yy);
+            else g.lineTo(px(t), yy);
+          }
+          g.stroke();
+        }
+      }
+    }
+
+    // Handles: a line through the plot and the strip, a grip in the strip.
+    // The range handles (the cut) are bigger, with a bracket at the top,
+    // since they are the first thing to reach for.
     for (const handle of HANDLE_ORDER) {
       const hx = Math.round(x(markers[handle]));
       const active = this.dragging?.handle === handle || this.hover === handle;
       const isRange = handle === "rangeStart" || handle === "rangeEnd";
       g.fillStyle = active ? cssVar("--accent") : cssVar("--handle");
-      g.fillRect(hx - (active || isRange ? 1 : 0.5) * dpr, 0, (active || isRange ? 2 : 1) * dpr, height);
+      g.fillRect(hx - (active || isRange ? 1 : 0.5) * dpr, 0, (active || isRange ? 2 : 1) * dpr, stripBottom);
       if (isRange) {
         const dir = handle === "rangeStart" ? 1 : -1;
         g.fillRect(hx - (dir > 0 ? 1 : 9) * dpr, 0, 10 * dpr, 3 * dpr);

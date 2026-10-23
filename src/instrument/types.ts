@@ -9,10 +9,18 @@ export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
 export type PresetId = "synth" | "synth-lead" | "wavetable" | "bass" | "jinriki" | "original" | "drum";
 
+/** Seconds within the material, [start, end). */
+export interface TimeRange {
+  start: number;
+  end: number;
+}
+
 export interface Markers {
   /** Where the material starts and stops being used (the cut, 切り出し). */
   rangeStart: number;
   rangeEnd: number;
+  /** Stretches cut out of the material (VocalShifter's 選択範囲の削除): skipped on playback, in order, non-overlapping. */
+  removed?: TimeRange[];
   /** End of the head (頭部) = where the sound "lands": the head plays once, unstretched. */
   attack: number;
   /** The sustain region (持続区間): drawn out while the note is held. */
@@ -36,6 +44,11 @@ export interface InstrumentParams {
   sustainMode: SustainMode;
   /** Wavetable sustain: how many consecutive periods are cycled (1 = one period over and over). */
   wavetableCycles: number;
+  /**
+   * Speed of each part, as a stretch factor (1 = as recorded, 2 = twice as long; VocalShifter's TIME).
+   * The sustain's factor only matters when it isn't elastic (sustain mode "none"); otherwise the note's length decides.
+   */
+  stretch: { head: number; sustain: number; tail: number };
   tail: { enabled: boolean; limit: TailLimit };
   wobble: {
     vibratoCents: number;
@@ -68,6 +81,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   formantFollow: true,
   sustainMode: "pool",
   wavetableCycles: 1,
+  stretch: { head: 1, sustain: 1, tail: 1 },
   tail: { enabled: false, limit: "unlimited" },
   wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, driftCents: 0, micro: true },
   amp: { attack: 0.005, decay: 0.1, sustain: 1, release: 0.02, velocitySens: 0.5 },

@@ -143,5 +143,7 @@ export function clampMarkers(m: Markers, minSustainSec = 0.01): Markers {
   const sustainStart = Math.min(Math.max(m.sustainStart, attack), rangeEnd - minSustainSec);
   const sustainEnd = Math.min(Math.max(m.sustainEnd, sustainStart + minSustainSec), rangeEnd);
   const tailStart = Math.min(Math.max(m.tailStart, sustainEnd), rangeEnd);
-  return { rangeStart, rangeEnd, attack, sustainStart, sustainEnd, tailStart };
+  const out: Markers = { rangeStart, rangeEnd, attack, sustainStart, sustainEnd, tailStart };
+  if (m.removed) out.removed = m.removed;
+  return out;
 }

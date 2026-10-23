@@ -17,6 +17,7 @@ import { buildBatch, buildOne, type Built, type BuildInput } from "./export/buil
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
 import { exportFileName, safeBaseName } from "./export/render";
 import { parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
+import { normalizeRemoved, outputLayout } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
 import {
   DEFAULT_EXPORT,
@@ -276,24 +277,73 @@ const clearSelectionButton = button("選択解除", "small", () => {
   editor.setSelection(null);
   refreshFixBar();
 });
+// Cutting (VocalShifter's TIME: 選択範囲の削除 / トリミング).
+const removeButton = button("この範囲を削除", "small", () => {
+  if (!selection || !markers) return;
+  const removed = normalizeRemoved([...(markers.removed ?? []), { start: selection.from, end: selection.to }], markers.rangeStart, markers.rangeEnd);
+  markers = clampMarkers({ ...markers, removed });
+  selection = null;
+  editor.setSelection(null);
+  afterMarkersEdited();
+});
+const trimButton = button("選択範囲だけにする", "small", () => {
+  if (!selection || !markers) return;
+  markers = clampMarkers({ ...markers, rangeStart: selection.from, rangeEnd: selection.to });
+  selection = null;
+  editor.setSelection(null);
+  afterMarkersEdited();
+});
+const removedLabel = el("span", { className: "fine" });
+const undoRemoveButton = button("最後の削除を戻す", "small", () => {
+  if (!markers?.removed?.length) return;
+  markers = clampMarkers({ ...markers, removed: markers.removed.slice(0, -1) });
+  afterMarkersEdited();
+});
+const clearRemovedButton = button("削除をすべて戻す", "small", () => {
+  if (!markers) return;
+  markers = clampMarkers({ ...markers, removed: [] });
+  afterMarkersEdited();
+});
+
+/** The markers changed by a button (not a drag): the root may follow, the engine and the screen update. */
+function afterMarkersEdited(): void {
+  if (!markers) return;
+  if (material && params.rootMode === "auto") {
+    const root = rootForMarkers(material.analysis.track, markers);
+    if (root) {
+      cuts[current].detectedRoot = root.midi;
+      params = { ...params, root: root.midi };
+    }
+  }
+  sendInstrument();
+  refreshFixBar();
+}
+
 const correctionsLabel = el("span", { className: "fine" });
 const undoCorrectionButton = button("最後の手直しを取り消す", "small", () => void setCorrections(material?.corrections.slice(0, -1) ?? []));
 const clearCorrectionsButton = button("すべて取り消す", "small", () => void setCorrections([]));
-const fixBar = el("div", { className: "fix-bar", hidden: true }, [
-  el("div", { className: "row tight" }, [selectionLabel, ...fixButtons, clearSelectionButton]),
+const fixBar = el("div", { className: "fix-bar" }, [
+  el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, ...fixButtons, clearSelectionButton]),
+  el("div", { className: "row tight" }, [removedLabel, undoRemoveButton, clearRemovedButton]),
   el("div", { className: "row tight" }, [correctionsLabel, undoCorrectionButton, clearCorrectionsButton]),
 ]);
 
 function refreshFixBar(): void {
   const count = material?.corrections.length ?? 0;
-  fixBar.hidden = !selection && count === 0;
+  const removed = markers?.removed ?? [];
   const hasSelection = selection !== null;
-  selectionLabel.textContent = hasSelection ? `選択 ${selection!.from.toFixed(2)}–${selection!.to.toFixed(2)} 秒:` : "波形の上を横にドラッグすると、その範囲の判定を直せます。";
-  for (const b of fixButtons) b.hidden = !hasSelection;
-  clearSelectionButton.hidden = !hasSelection;
+  selectionLabel.textContent = hasSelection
+    ? `選択 ${selection!.from.toFixed(2)}–${selection!.to.toFixed(2)} 秒:`
+    : "波形の上を横にドラッグして範囲を選ぶと、その範囲を削除したり、判定を直したりできます。";
+  for (const b of [removeButton, trimButton, ...fixButtons, clearSelectionButton]) b.hidden = !hasSelection;
+  removedLabel.textContent = removed.length ? `削除 ${removed.length} か所(${removed.map((r) => `${r.start.toFixed(2)}–${r.end.toFixed(2)} 秒`).join("、")})` : "";
+  undoRemoveButton.hidden = removed.length === 0;
+  clearRemovedButton.hidden = removed.length < 2;
+  removedLabel.parentElement!.hidden = removed.length === 0;
   correctionsLabel.textContent = count ? `手直し ${count} 件(${material!.corrections.map((c) => CORRECTION_LABELS[c.kind]).join("、")})` : "";
   undoCorrectionButton.hidden = count === 0;
   clearCorrectionsButton.hidden = count < 2;
+  correctionsLabel.parentElement!.hidden = count === 0;
 }
 
 const materialPanel = el("section", { className: "panel" }, [
@@ -371,11 +421,30 @@ const lengthBlock = el("div", { className: "length" }, [
   lengthResult,
 ]);
 
+// Speeds (VocalShifter's TIME, as one factor per part) and the vibrato (VIB), in the open where they are reached for.
+const stretchFormat = (v: number) => `×${v.toFixed(2)}`;
+const sustainStretchRow = range("持続区間の速度(ワンショットのとき)", 0.25, 8, 0.05, () => params.stretch.sustain, (p, v) => (p.stretch.sustain = v), stretchFormat);
+const timePanel = el("details", { className: "sub" }, [
+  el("summary", { textContent: "速度(頭部は等速のまま、など)" }),
+  el("p", { className: "fine", textContent: "各部分の長さの倍率。1.00 が録音のまま。持続区間は普段「音の長さまで伸ばす」ので、倍率が効くのはワンショット(伸ばさない)のときだけです。" }),
+  range("頭部の速度", 0.25, 4, 0.05, () => params.stretch.head, (p, v) => (p.stretch.head = v), stretchFormat),
+  sustainStretchRow,
+  range("語尾の速度", 0.25, 4, 0.05, () => params.stretch.tail, (p, v) => (p.stretch.tail = v), stretchFormat),
+]);
+const vibratoPanel = el("details", { className: "sub" }, [
+  el("summary", { textContent: "ビブラート" }),
+  range("深さ", 0, 100, 1, () => params.wobble.vibratoCents, (p, v) => (p.wobble.vibratoCents = v), (v) => `${v}¢`),
+  range("速さ", 3, 9, 0.1, () => params.wobble.vibratoHz, (p, v) => (p.wobble.vibratoHz = v), (v) => `${v.toFixed(1)} Hz`),
+  range("かかり始め(音の頭から)", 0, 1, 0.01, () => params.wobble.vibratoDelaySec, (p, v) => (p.wobble.vibratoDelaySec = v), ms),
+]);
+
 const tunePanel = el("section", { className: "panel tune" }, [
   el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "音名" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]),
   range("平坦化(抑揚の残し具合)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
   lengthBlock,
+  vibratoPanel,
+  timePanel,
 ]);
 
 // ---------------------------------------------------------------- panel 3: keyboard
@@ -517,10 +586,7 @@ const detailsPanel = el("details", { className: "panel params" }, [
       check("大きな移調で声質を少し追従させる", () => params.formantFollow, (p, v) => (p.formantFollow = v)),
     ]),
     el("fieldset", {}, [
-      el("legend", { textContent: "揺らぎ" }),
-      range("ビブラートの深さ", 0, 100, 1, () => params.wobble.vibratoCents, (p, v) => (p.wobble.vibratoCents = v), (v) => `${v}¢`),
-      range("ビブラートの速さ", 3, 9, 0.1, () => params.wobble.vibratoHz, (p, v) => (p.wobble.vibratoHz = v), (v) => `${v.toFixed(1)} Hz`),
-      range("かかり始め", 0, 1, 0.01, () => params.wobble.vibratoDelaySec, (p, v) => (p.wobble.vibratoDelaySec = v), ms),
+      el("legend", { textContent: "揺らぎ(ビブラートは上の「ビブラート」で)" }),
       range("ゆっくりした揺れ", 0, 30, 1, () => params.wobble.driftCents, (p, v) => (p.wobble.driftCents = v), (v) => `${v}¢`),
       check("細かい揺れ(平坦でも機械的にしない)", () => params.wobble.micro, (p, v) => (p.wobble.micro = v)),
     ]),
@@ -701,7 +767,12 @@ function refreshExport(): void {
   exportStatus.textContent = "";
   built = null;
 
-  if (markers) editor.setState(markers, params.root, params.flatten, note);
+  if (markers) {
+    editor.setState(markers, params.root, params.flatten, note);
+    editor.setLayout(outputLayout(markers, params, held), params.wobble.vibratoCents > 0 ? { depthCents: params.wobble.vibratoCents, rateHz: params.wobble.vibratoHz, delaySec: params.wobble.vibratoDelaySec } : null);
+  }
+  sustainStretchRow.classList.toggle("disabled", !oneShot);
+  refreshFixBar();
   piano.setRoot(note);
   syncCut();
   scheduleSave();

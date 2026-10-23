@@ -108,6 +108,7 @@ const songPanel = new SongPanel(client, () => note, () => exportSettings.bpm);
 songPanel.onPlayingChange = (playing) => {
   if (playing) client.stopPreview();
 };
+songPanel.onUseBpm = (bpm) => updateExport((s) => (s.bpm = Math.max(20, Math.min(400, Math.round(bpm * 10) / 10))));
 
 // ---------------------------------------------------------------- audio start
 
@@ -258,7 +259,7 @@ const cutBar = el("div", { className: "cut-bar" }, [
 
 const rootLabel = el("strong", { className: "root-label num", textContent: "—" });
 const rootSource = el("span", { className: "fine" });
-const detectedButton = button("検出値に戻す", "small", () => {
+const detectedButton = button("判定に戻す", "small", () => {
   const detected = cuts[current]?.detectedRoot;
   if (detected == null) return;
   update((p) => {
@@ -292,7 +293,7 @@ const clearSelectionButton = button("選択解除", "small", () => {
   refreshFixBar();
 });
 // Cutting (VocalShifter's TIME: 選択範囲の削除 / トリミング).
-const removeButton = button("この範囲を削除", "small", () => {
+const removeButton = button("選択した部分を削除", "small", () => {
   if (!selection || !markers) return;
   const removed = normalizeRemoved([...(markers.removed ?? []), { start: selection.from, end: selection.to }], markers.rangeStart, markers.rangeEnd);
   markers = clampMarkers({ ...markers, removed });
@@ -300,7 +301,7 @@ const removeButton = button("この範囲を削除", "small", () => {
   editor.setSelection(null);
   afterMarkersEdited();
 });
-const trimButton = button("選択範囲だけにする", "small", () => {
+const trimButton = button("選択した部分だけ残す", "small", () => {
   if (!selection || !markers) return;
   markers = clampMarkers({ ...markers, rangeStart: selection.from, rangeEnd: selection.to });
   selection = null;
@@ -350,7 +351,7 @@ function refreshFixBar(): void {
   const hasSelection = selection !== null;
   selectionLabel.textContent = hasSelection
     ? `選択 ${selection!.from.toFixed(2)}–${selection!.to.toFixed(2)} 秒:`
-    : "波形の上を横にドラッグして範囲を選ぶと、その範囲を削除したり、判定を直したりできます。";
+    : "波形の上を横にドラッグして選ぶと、その部分を削除したり、判定を直したりできます。";
   for (const b of [removeButton, trimButton, ...fixButtons, clearSelectionButton]) b.hidden = !hasSelection;
   removedLabel.textContent = removed.length ? `削除 ${removed.length} か所(${removed.map((r) => `${r.start.toFixed(2)}–${r.end.toFixed(2)} 秒`).join("、")})` : "";
   undoRemoveButton.hidden = removed.length === 0;
@@ -414,10 +415,10 @@ async function togglePreview(): Promise<void> {
   if (previewMode === "original") await playOriginal();
   else await listen();
 }
-const zoomInButton = button("＋", "small", () => editor.zoom(1.6));
-const zoomOutButton = button("−", "small", () => editor.zoom(1 / 1.6));
+const zoomInButton = button("＋", "small zoom-fine", () => editor.zoom(1.6));
+const zoomOutButton = button("−", "small zoom-fine", () => editor.zoom(1 / 1.6));
 const zoomAllButton = button("全体", "small", () => editor.zoomAll());
-const zoomRangeButton = button("選択 / 範囲に合わせる", "small", () => {
+const zoomRangeButton = button("選択 / 範囲を拡大", "small", () => {
   if (selection) editor.zoomToRange(selection.from, selection.to);
   else if (markers) editor.zoomToRange(markers.rangeStart, markers.rangeEnd);
 });
@@ -433,7 +434,12 @@ editor.onViewChange = (view) => {
 const materialPanel = el("section", { className: "panel" }, [
   cutBar,
   el("div", { className: "editor-bar" }, [
-    el("div", { className: "root-box" }, [el("span", { className: "fine", textContent: "判定した音程" }), rootLabel, rootSource]),
+    el("div", { className: "root-box" }, [
+      el("span", { className: "fine", textContent: "判定した音程" }),
+      rootLabel,
+      rootSource,
+      el("span", { className: "row tight root-nudge" }, [rootButton("−1半音", -1), rootButton("−5¢", -0.05), rootButton("+5¢", 0.05), rootButton("+1半音", 1), detectedButton]),
+    ]),
     el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, el("span", { className: "spacer" }), undoButton, redoButton, zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
   ]),
   el("details", { className: "fine hint" }, [
@@ -571,6 +577,19 @@ const tunePanel = el("section", { className: "panel tune" }, [
   el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "音名" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]),
   partsRow,
   partsHelp,
+  select("持続区間の伸ばし方", [["pool", "周期プール(自然)"], ["loop", "ループ"], ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"], ["none", "伸ばさない(ワンショット)"]], () => params.sustainMode, (p, v) => (p.sustainMode = v)),
+  range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
+  select(
+    "語尾の長さ",
+    [
+      ["unlimited", "最後まで"],
+      ["beat", "1 拍まで"],
+      ["bar", "1 小節(4 拍)まで"],
+    ],
+    () => (params.tail.limit === "none" ? "unlimited" : params.tail.limit),
+    (p, v) => (p.tail = { enabled: p.tail.enabled, limit: v }),
+  ),
+  el("p", { className: "fine help", textContent: "拍は「長さ」の BPM で数えます(「曲で試す」の再生中は曲の BPM)。上限に来た語尾は短くフェードして切れます。" }),
   range("平坦化(抑揚の残し具合)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
   lengthBlock,
@@ -586,8 +605,17 @@ const pcToggle = button("PCキーボード演奏: オン (M)", "small", () => pc
 pcToggle.hidden = SMALL_SCREEN;
 const imeWarning = el("p", { className: "warn", hidden: true, textContent: "日本語入力がオンになっています。鍵盤として弾くには、半角英数に切り替えてください。" });
 
+// On phones the keyboard shows two octaves: these move them (Z / X on a PC keyboard).
+const octaveDown = button("◀ オクターブ", "small", () => shiftPiano(-12));
+const octaveUp = button("オクターブ ▶", "small", () => shiftPiano(12));
+octaveDown.hidden = octaveUp.hidden = !SMALL_SCREEN;
+function shiftPiano(delta: number): void {
+  const span = piano.high - piano.low;
+  const low = Math.max(24, Math.min(96 - span, piano.low + delta));
+  piano.setRange(low, low + span);
+}
 const keysPanel = el("section", { className: "panel keys-panel" }, [
-  el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "試し弾き" }), pcToggle, pcState, el("span", { className: "fine" }, ["同時発音 ", voiceCount])]),
+  el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "試し弾き" }), octaveDown, octaveUp, pcToggle, pcState, el("span", { className: "fine" }, ["同時発音 ", voiceCount])]),
   imeWarning,
   piano.element,
   el("p", { className: "fine", textContent: "●の付いた鍵が、選んだ音名(書き出す高さ)です。" }),
@@ -641,7 +669,7 @@ function fxGroup(key: FxKey, label: string, note: string, controls: HTMLElement[
   return group;
 }
 
-const fxActiveLine = el("p", { className: "fine fx-active" });
+const fxActiveLine = el("span", { className: "fine fx-active" });
 function refreshFxSummaries(): void {
   const on: string[] = [];
   for (const { key, summary, label } of fxSummaries) {
@@ -657,6 +685,7 @@ function refreshFxSummaries(): void {
   fadeSummary.classList.toggle("on", fades.length > 0);
   const all = [...(fades.length ? ["フェード"] : []), ...on];
   fxActiveLine.textContent = all.length ? `オン: ${all.join("、")}` : "すべてオフ(素材の音そのまま)";
+  if (all.length) fxPanel.open = true;
 }
 
 /** A heading between the groups: the effects come in the order they are applied, in sections. */
@@ -679,7 +708,7 @@ function refreshFadeGrips(): void {
 }
 controlsRefreshers.push(refreshFxSummaries);
 
-const fxResetButton = button("すべてオフに戻す", "small", () => {
+const fxResetButton = button("エフェクトとフェードをすべてオフに", "small", () => {
   update((p) => {
     p.fx = structuredClone(DEFAULT_FX);
     p.amp = { ...p.amp, attack: DEFAULT_PARAMS.amp.attack, fadeOut: DEFAULT_PARAMS.amp.fadeOut };
@@ -687,9 +716,9 @@ const fxResetButton = button("すべてオフに戻す", "small", () => {
   refreshControls();
 });
 
-const fxPanel = el("section", { className: "panel fx-panel" }, [
-  el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxResetButton]),
-  fxActiveLine,
+const fxPanel = el("details", { className: "panel fx-panel" }, [
+  el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxActiveLine]),
+  el("div", { className: "row" }, [fxResetButton]),
   el("p", { className: "fine", textContent: "上から順にかかります。試し弾き・「曲で試す」・書き出す WAV のすべてに入ります(Vital 用ウェーブテーブルを除く)。区間ごとの設定です。" }),
   fxHead("音量と立ち上がり"),
   fadeGroup,
@@ -816,10 +845,10 @@ const batchButton = button("すべての区間をまとめて保存(zip)", "", (
 const exportStatus = el("p", { className: "fine", role: "status" });
 
 const exportPanel = el("section", { className: "panel export" }, [
-  el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "形式" }), formatSelect]),
-  formatNote,
   el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "渡す先" }), destinationSelect]),
   destinationHelp,
+  el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "形式" }), formatSelect]),
+  formatNote,
   el("div", { className: "export-actions" }, [listenButton, shareButton, saveButton]),
   el("p", { className: "fine" }, ["ファイル名: ", fileNameLabel]),
   el("div", { className: "row" }, [batchButton]),
@@ -870,25 +899,11 @@ const detailsPanel = el("details", { className: "panel params" }, [
   el("div", { className: "params-grid" }, [
     el("fieldset", {}, [
       el("legend", { textContent: "基準ピッチ(素材そのものの高さ)" }),
-      el("p", { className: "fine", textContent: "判定が外れているときに直します。素材がこの高さで鳴っているものとして、音名との差だけ移調します。" }),
-      el("div", { className: "row tight" }, [rootButton("−1半音", -1), rootButton("−5¢", -0.05), rootButton("+5¢", 0.05), rootButton("+1半音", 1), detectedButton]),
+      el("p", { className: "fine", textContent: "判定が外れているときは、編集画面の「判定した音程」の横のボタンか、点線の「判定 …」の札のドラッグで直します。素材がこの高さで鳴っているものとして、音名との差だけ移調します。" }),
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "鳴らし方" }),
       select("ピッチの変え方", [["preserve-length", "長さ保持(PSOLA)"], ["resample", "速度連動(昔ながら)"]], () => params.pitchMode, (p, v) => (p.pitchMode = v)),
-      select("持続区間の伸ばし方", [["pool", "周期プール(自然)"], ["loop", "ループ"], ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"], ["none", "伸ばさない(ワンショット)"]], () => params.sustainMode, (p, v) => (p.sustainMode = v)),
-      range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
-      select(
-        "語尾の長さ",
-        [
-          ["unlimited", "最後まで"],
-          ["beat", "1 拍まで"],
-          ["bar", "1 小節(4 拍)まで"],
-        ],
-        () => (params.tail.limit === "none" ? "unlimited" : params.tail.limit),
-        (p, v) => (p.tail = { enabled: p.tail.enabled, limit: v }),
-      ),
-      el("p", { className: "fine help", textContent: "拍は「長さ」の BPM で数えます(「曲で試す」の再生中は曲の BPM)。上限に来た語尾は短くフェードして切れます。" }),
       range("フォルマント", -6, 6, 0.1, () => params.formantSemitones, (p, v) => (p.formantSemitones = v), semis),
       check("大きな移調で声質を少し追従させる", () => params.formantFollow, (p, v) => (p.formantFollow = v)),
     ]),
@@ -899,7 +914,6 @@ const detailsPanel = el("details", { className: "panel params" }, [
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "エンベロープ" }),
-      range("アタック(= 入りのフェード)", 0.001, 0.5, 0.001, () => params.amp.attack, (p, v) => (p.amp.attack = v), ms),
       range("ディケイ", 0.01, 2, 0.01, () => params.amp.decay, (p, v) => (p.amp.decay = v), ms),
       range("サステイン", 0, 1, 0.01, () => params.amp.sustain, (p, v) => (p.amp.sustain = v), pct),
       range("リリース", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms),
@@ -1279,7 +1293,10 @@ function applyCurrentCut(): void {
 function rebuildCutSelect(): void {
   cutSelect.replaceChildren(...cuts.map((c, i) => el("option", { value: String(i), textContent: `${i + 1}. ${c.name}` })));
   cutSelect.value = String(current);
-  batchButton.hidden = cuts.length < 2;
+  // One cut: nothing to choose or name yet — only "＋ 区間を追加".
+  const single = cuts.length < 2;
+  for (const node of [cutSelect, cutName, dupCutButton, removeCutButton]) node.hidden = single;
+  batchButton.hidden = single;
 }
 
 function selectCut(index: number): void {

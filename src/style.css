@@ -872,3 +872,43 @@ details.hint > p {
     min-height: 40px;
   }
 }
+
+/* Round 3: the effects panel folds; the root nudge sits with its readout; the head pill is a label, not a switch. */
+details.fx-panel > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.fx-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.fx-panel > summary::before {
+  content: "▸";
+  margin-right: 6px;
+  color: var(--muted);
+}
+
+details.fx-panel[open] > summary::before {
+  content: "▾";
+}
+
+.root-box {
+  flex-wrap: wrap;
+}
+
+.root-nudge {
+  margin-left: 4px;
+}
+
+.part-fixed {
+  background: transparent;
+  color: var(--text);
+  border-style: dashed;
+}
+
+@media (pointer: coarse) {
+  .zoom-fine {
+    display: none;
+  }
+}

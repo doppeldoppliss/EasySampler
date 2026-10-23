@@ -26,6 +26,11 @@ export class SongPanel {
   readonly element: HTMLElement;
   /** Fired when playback starts or stops (the page stops its own previews). */
   onPlayingChange: (playing: boolean) => void = () => {};
+  /** "この曲の BPM を長さに使う": the song's tempo for the export length (and the beat-synced effects). */
+  onUseBpm: (bpm: number) => void = () => {};
+  private readonly useBpmButton = button("この曲の BPM を長さに使う", "small", () => {
+    if (this.song) this.onUseBpm(this.song.bpm);
+  });
 
   private song: Song | null = null;
   private parts: SongPart[] = [];
@@ -96,7 +101,7 @@ export class SongPanel {
       el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "素材で鳴らすパート" }), this.partSelect]),
       this.partNote,
       el("div", { className: "row" }, [
-        el("span", { className: "control-label", textContent: "素材パートの移調" }),
+        el("span", { className: "control-label", textContent: "素材パートの移調(試聴だけ)" }),
         step("−12", -12),
         step("−1", -1),
         this.transposeLabel,
@@ -115,12 +120,14 @@ export class SongPanel {
       el("div", { className: "row" }, [
         el("span", { className: "control-label", textContent: "曲で試す" }),
         button("MIDI を開く", "small", () => this.fileInput.click()),
+        this.useBpmButton,
         this.fileInput,
       ]),
       this.info,
       this.body,
     ]);
     this.info.textContent = "MIDI ファイル(.mid)を開くと、素材をその曲のメロディで鳴らして確かめられます。ページにドロップしても開けます。";
+    this.useBpmButton.hidden = true;
     this.refreshTranspose();
   }
 
@@ -156,6 +163,7 @@ export class SongPanel {
     const bars = song.bars.length - 1;
     this.info.textContent = `${file.name}: ${Math.round(song.bpm * 10) / 10} BPM${song.hasTempoChanges ? "(途中でテンポが変わります)" : ""}・${bars} 小節・${clock(song.durationSec)}・パート ${this.parts.filter((p) => p.drumPitch === null).length}`;
     this.body.hidden = false;
+    this.useBpmButton.hidden = false;
     this.refreshTranspose();
     this.refreshPartNote();
     this.showPosition(0);

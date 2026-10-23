@@ -24,11 +24,42 @@ export class OnScreenKeyboard {
   /** Which note each finger / pointer is holding. */
   private held = new Map<number, number>();
   private rootKey: HTMLElement | null = null;
+  private rootMidi: number | null = null;
   private sink: NoteSink;
+  low: number;
+  high: number;
 
   constructor(sink: NoteSink, low = 48, high = 84) {
     this.sink = sink;
+    this.low = low;
+    this.high = high;
     this.element = el("div", { className: "piano", role: "group", ariaLabel: "鍵盤" });
+    this.build();
+    this.element.addEventListener("pointerdown", (event) => this.press(event));
+    this.element.addEventListener("pointermove", (event) => this.slide(event));
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
+      this.element.addEventListener(type, (event) => this.lift(event.pointerId));
+    }
+    this.element.addEventListener("contextmenu", (event) => event.preventDefault());
+  }
+
+  /** Shows another stretch of notes (the same width), keeping the root mark. */
+  setRange(low: number, high: number): void {
+    for (const [id, note] of this.held) {
+      this.sink.noteOff(note);
+      this.held.delete(id);
+    }
+    this.low = low;
+    this.high = high;
+    this.build();
+    this.setRoot(this.rootMidi);
+  }
+
+  private build(): void {
+    const { low, high } = this;
+    this.element.replaceChildren();
+    this.keys.clear();
+    this.rootKey = null;
     const whites = [...Array(high - low + 1).keys()].map((i) => low + i).filter((n) => !BLACK.has(n % 12));
     const whiteWidth = 100 / whites.length;
     let whiteIndex = 0;
@@ -47,17 +78,11 @@ export class OnScreenKeyboard {
       this.keys.set(note, key);
       this.element.append(key);
     }
-
-    this.element.addEventListener("pointerdown", (event) => this.press(event));
-    this.element.addEventListener("pointermove", (event) => this.slide(event));
-    for (const type of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
-      this.element.addEventListener(type, (event) => this.lift(event.pointerId));
-    }
-    this.element.addEventListener("contextmenu", (event) => event.preventDefault());
   }
 
   /** Marks the key nearest the root pitch (where the material plays as it is). */
   setRoot(midi: number | null): void {
+    this.rootMidi = midi;
     this.rootKey?.classList.remove("root");
     this.rootKey = midi === null ? null : (this.keys.get(Math.round(midi)) ?? null);
     this.rootKey?.classList.add("root");

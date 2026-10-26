@@ -1128,3 +1128,25 @@ details.sub.credit > summary {
 .material-bar .material-select {
   max-width: 18em;
 }
+
+/* A drum track's rows: the cut each plays. */
+.pad-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 8px;
+  padding: 6px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+.pad-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pad-row select {
+  max-width: 18em;
+}

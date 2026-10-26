@@ -53,6 +53,48 @@ class EngineSound implements TrackSound {
   }
 }
 
+/** A drum track: each row a rendered one-shot, played as it is (no pitch change, no note-off). */
+class SampleSound implements TrackSound {
+  /** Row → sample, as the track was loaded. */
+  rows: (Float32Array[] | null)[] = [];
+  private voices: { sample: Float32Array[]; at: number; gain: number }[] = [];
+  private static readonly MAX_VOICES = 16;
+  noteOn(row: number, velocity: number): void {
+    const sample = this.rows[row];
+    if (!sample) return;
+    if (this.voices.length >= SampleSound.MAX_VOICES) this.voices.shift();
+    this.voices.push({ sample, at: 0, gain: velocity });
+  }
+  noteOff(): void {
+    // a one-shot plays to its end
+  }
+  allOff(): void {
+    this.voices = [];
+  }
+  render(left: Float32Array, right: Float32Array, frames: number): void {
+    left.fill(0, 0, frames);
+    if (right !== left) right.fill(0, 0, frames);
+    for (const v of this.voices) {
+      const l = v.sample[0];
+      const r = v.sample[1] ?? l;
+      const n = Math.min(frames, l.length - v.at);
+      for (let i = 0; i < n; i++) {
+        left[i] += l[v.at + i] * v.gain;
+        if (right !== left) right[i] += r[v.at + i] * v.gain;
+      }
+      v.at += n;
+    }
+    this.voices = this.voices.filter((v) => v.at < v.sample[0].length);
+  }
+  idle(): boolean {
+    return this.voices.length === 0;
+  }
+
+  get sounding(): number {
+    return this.voices.length;
+  }
+}
+
 class BackingSound implements TrackSound {
   private readonly synth = new BackingSynth(sampleRate);
   noteOn(note: number, velocity: number, drum: boolean): void {
@@ -76,6 +118,9 @@ class BackingSound implements TrackSound {
 
 class EngineProcessor extends AudioWorkletProcessor {
   private readonly sources = new Map<string, PreparedSource | null>();
+  /** Rendered one-shots (drum rows), by id. */
+  private readonly samples = new Map<string, Float32Array[]>();
+  private readonly samplePreview = new SampleSound();
   private readonly instruments = new Map<string, Instrument>();
   private readonly song = new SongPlayer(sampleRate);
   /** The sounds of the song's tracks, by track id (kept across reloads, so a track keeps its engine). */
@@ -128,10 +173,11 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.song.stop();
     const next = new Map<string, TrackSound>();
     for (const t of tracks) {
-      const wantsEngine = t.instrument !== "backing";
+      const kind = t.instrument === "backing" ? BackingSound : t.instrument === "drum" ? SampleSound : EngineSound;
       let sound = this.trackSounds.get(t.id);
-      if (!sound || (sound instanceof EngineSound) !== wantsEngine) sound = wantsEngine ? new EngineSound() : new BackingSound();
+      if (!(sound instanceof kind)) sound = new kind();
       if (sound instanceof EngineSound && sound.instrument !== t.instrument) this.apply(sound, t.instrument);
+      if (sound instanceof SampleSound) sound.rows = (t.samples ?? []).map((id) => (id ? (this.samples.get(id) ?? null) : null));
       next.set(t.id, sound);
     }
     this.trackSounds = next;
@@ -168,6 +214,23 @@ class EngineProcessor extends AudioWorkletProcessor {
       case "allOff":
         this.live.allOff();
         break;
+      case "sample":
+        if (message.channels) this.samples.set(message.id, message.channels);
+        else this.samples.delete(message.id);
+        // Drum tracks on it hear the new one from their next hit.
+        for (const t of this.trackSpecs) {
+          const sound = this.trackSounds.get(t.id);
+          if (sound instanceof SampleSound) sound.rows = (t.samples ?? []).map((id) => (id ? (this.samples.get(id) ?? null) : null));
+        }
+        break;
+      case "previewSample": {
+        const sample = this.samples.get(message.id);
+        if (sample) {
+          this.samplePreview.rows = [sample];
+          this.samplePreview.noteOn(0, 0.8);
+        }
+        break;
+      }
       case "preview":
         if (this.preview.instrument !== message.instrument) this.apply(this.preview, message.instrument);
         if (this.previewNote >= 0) this.preview.noteOff(this.previewNote);
@@ -229,6 +292,11 @@ class EngineProcessor extends AudioWorkletProcessor {
       for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
       if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
     }
+    if (!this.samplePreview.idle()) {
+      this.samplePreview.render(this.liveL, this.liveR, frames);
+      for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
+      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
+    }
     if (!this.preview.idle()) {
       if (this.previewNote >= 0) {
         this.previewLeft -= frames;
@@ -245,7 +313,10 @@ class EngineProcessor extends AudioWorkletProcessor {
     if (++this.quanta >= STATUS_EVERY) {
       this.quanta = 0;
       let voices = this.live.engine.activeVoices();
-      for (const sound of this.trackSounds.values()) if (sound instanceof EngineSound) voices += sound.engine.activeVoices();
+      for (const sound of this.trackSounds.values()) {
+        if (sound instanceof EngineSound) voices += sound.engine.activeVoices();
+        else if (sound instanceof SampleSound) voices += sound.sounding;
+      }
       if (voices !== this.lastVoices) {
         this.lastVoices = voices;
         this.port.postMessage({ type: "status", voices } satisfies FromEngine);

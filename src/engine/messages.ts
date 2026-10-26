@@ -11,9 +11,11 @@ import type { PreparedSource } from "./engine";
 
 export interface TrackSpec extends MixSettings {
   id: string;
-  /** The instrument the notes play on, or "backing" for the plain backing synth. */
-  instrument: string | "backing";
+  /** The instrument the notes play on, "backing" for the plain backing synth, or "drum" for rendered one-shots. */
+  instrument: string | "backing" | "drum";
   notes: SeqNote[];
+  /** A drum track: the one-shot (by sample id) each row plays; a note's pitch is its row. */
+  samples?: (string | null)[];
 }
 
 export type ToEngine =
@@ -28,6 +30,9 @@ export type ToEngine =
   | { type: "noteOn"; note: number; velocity: number }
   | { type: "noteOff"; note: number }
   | { type: "allOff" }
+  // A rendered one-shot (a drum row's sound), kept by id; null forgets it.
+  | { type: "sample"; id: string; channels: Float32Array[] | null }
+  | { type: "previewSample"; id: string }
   // A short note on an instrument (placing a note on a track's roll), apart from the keyboard.
   | { type: "preview"; instrument: string; note: number; sec: number }
   // A song: its tracks (replacing any), then play from `fromSec` at context frame `atFrame`.

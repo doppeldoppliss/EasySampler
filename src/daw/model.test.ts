@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fromSongNotes, sanitizeProject, shifted, snap, snapDown, songEnd, toSeqNotes, type Note } from "./model";
+import { fromSongNotes, newDrumTrack, removePad, sanitizeProject, shifted, snap, snapDown, songEnd, toSeqNotes, type Note } from "./model";
 
 const note = (start: number, length: number, pitch: number): Note => ({ id: 0, start, length, pitch, velocity: 0.8 });
 
@@ -28,6 +28,18 @@ describe("daw model", () => {
     expect(copy[0]).toMatchObject({ start: 6, pitch: 74 });
     expect(copy[0].id).not.toBe(notes[0].id);
     expect(songEnd([...notes, ...copy])).toBe(6.5);
+  });
+
+  it("drum rows: removing one drops its notes and moves the rows below up", () => {
+    const t = newDrumTrack("ドラム 1", "m/kick");
+    t.pads.push({ instrument: "m/snare" }, { instrument: "m/hat" });
+    t.notes = [note(0, 1, 0), note(1, 1, 1), note(2, 1, 2)];
+    removePad(t, 1);
+    expect(t.pads.map((p) => p.instrument)).toEqual(["m/kick", "m/hat"]);
+    expect(t.notes.map((n) => [n.start, n.pitch])).toEqual([
+      [0, 0],
+      [2, 1],
+    ]);
   });
 
   it("repairs a stored project", () => {

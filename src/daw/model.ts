@@ -24,8 +24,12 @@ export interface Track {
   /** Stable within the project (the mixer and the audio thread know a track by it). */
   id: string;
   name: string;
+  /** "melodic": one cut played at the notes' pitches. "drum": one row per pad, each pad a cut played as recorded. */
+  kind: "melodic" | "drum";
   /** The cut it plays: "materialId/cutId" (design.md 13.1, a track = one cut), or null when none is chosen. */
   instrument: string | null;
+  /** A drum track's rows, top to bottom; a note's pitch is its row's index. */
+  pads: Pad[];
   notes: Note[];
   /** The track's effects (design.md 13.1: effects are the song side's, not the cut's). */
   fx: FxSettings;
@@ -37,8 +41,24 @@ export interface Track {
   solo: boolean;
 }
 
+export interface Pad {
+  /** The cut the row plays (as recorded, once per note), or null. */
+  instrument: string | null;
+}
+
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false };
+  return { id: newTrackId(), name, kind: "melodic", instrument, pads: [], notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false };
+}
+
+/** A drum track: its first row plays the given cut (if any). */
+export function newDrumTrack(name: string, instrument: string | null = null): Track {
+  return { ...newTrack(name, null), kind: "drum", pads: instrument ? [{ instrument }] : [] };
+}
+
+/** A drum track loses a row: its notes go, the rows below move up. */
+export function removePad(track: Track, index: number): void {
+  track.pads.splice(index, 1);
+  track.notes = track.notes.filter((n) => n.pitch !== index).map((n) => (n.pitch > index ? { ...n, pitch: n.pitch - 1 } : n));
 }
 
 export function newTrackId(): string {
@@ -176,7 +196,14 @@ export function sanitizeProject(raw: unknown): Project {
         return {
           id: typeof tr.id === "string" && tr.id ? tr.id : newTrackId(),
           name: typeof tr.name === "string" && tr.name ? tr.name : `トラック ${i + 1}`,
+          kind: tr.kind === "drum" ? ("drum" as const) : ("melodic" as const),
           instrument: typeof tr.instrument === "string" && tr.instrument.includes("/") ? tr.instrument : null,
+          pads: Array.isArray(tr.pads)
+            ? tr.pads.map((p) => {
+                const pad = (p && typeof p === "object" ? p : {}) as Record<string, unknown>;
+                return { instrument: typeof pad.instrument === "string" && pad.instrument.includes("/") ? pad.instrument : null };
+              })
+            : [],
           notes: sortNotes(notes),
           fx: sanitizeFx(tr.fx),
           gain: num(tr.gain, 1, 0, 4),

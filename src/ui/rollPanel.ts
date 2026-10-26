@@ -11,7 +11,9 @@ import {
   beatsToSec,
   emptyProject,
   fromSongNotes,
+  newDrumTrack,
   newTrack,
+  removePad,
   sanitizeProject,
   secToBeats,
   shifted,
@@ -61,6 +63,8 @@ export class RollPanel {
   onPlayingChange: (playing: boolean) => void = () => {};
   /** The selected track changed, or the project was replaced: the page shows that track's effects. */
   onTrackChange: () => void = () => {};
+  /** Drum rows: the page renders these cuts' one-shots (once per change of their settings) and hands them to the engine. */
+  ensureSamples: (instruments: string[]) => void = () => {};
 
   private project: Project = emptyProject();
   private selected = 0;
@@ -78,6 +82,8 @@ export class RollPanel {
   private saveTimer = 0;
 
   private readonly trackList = el("div", { className: "track-list" });
+  /** A drum track's rows: the cut each plays. */
+  private readonly padList = el("div", { className: "pad-list" });
   private readonly playButton = button("▶ 再生", "big", () => this.toggle());
   private readonly loopButton = button("", "small", () => this.setLoopOn(!this.project.loop.on));
   private readonly bpmInput = el("input", { type: "number", min: "20", max: "400", step: "1", inputMode: "decimal", ariaLabel: "BPM" });
@@ -154,7 +160,8 @@ export class RollPanel {
         this.position,
       ]),
       this.trackList,
-      el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack())]),
+      el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack()), button("＋ ドラムトラックを追加", "small", () => this.addTrack(true))]),
+      this.padList,
       el("div", { className: "row roll-tools" }, [this.undoButton, this.redoButton, this.deleteButton, this.duplicateButton, ...this.transposeButtons, this.selectToggle, button("−", "small", () => this.roll.zoom(1 / 1.5), "縮小"), button("+", "small", () => this.roll.zoom(1.5), "拡大")]),
       this.roll.element,
       el("p", {
@@ -207,7 +214,10 @@ export class RollPanel {
   /** A material leaves the project: tracks that played one of its cuts play nothing until another is chosen. */
   removeMaterial(id: string): void {
     this.project.materials = this.project.materials.filter((m) => m.id !== id);
-    for (const t of this.project.tracks) if (t.instrument?.startsWith(`${id}/`)) t.instrument = null;
+    for (const t of this.project.tracks) {
+      if (t.instrument?.startsWith(`${id}/`)) t.instrument = null;
+      for (const p of t.pads) if (p.instrument?.startsWith(`${id}/`)) p.instrument = null;
+    }
     if (this.project.editing === id) this.project.editing = this.project.materials.at(-1)?.id ?? null;
     this.renderTracks();
     this.reload();
@@ -216,7 +226,7 @@ export class RollPanel {
 
   /** Whether a track plays a cut of this material. */
   usesMaterial(id: string): boolean {
-    return this.project.tracks.some((t) => t.instrument?.startsWith(`${id}/`));
+    return this.project.tracks.some((t) => t.instrument?.startsWith(`${id}/`) || t.pads.some((p) => p.instrument?.startsWith(`${id}/`)));
   }
 
   setEditing(id: string): void {
@@ -237,9 +247,13 @@ export class RollPanel {
       this.scheduleSave();
     }
     // A cut that is gone (removed on the sampling side): the track plays nothing.
-    for (const t of this.project.tracks) if (t.instrument && !options.some((o) => o.id === t.instrument)) t.instrument = null;
+    for (const t of this.project.tracks) {
+      if (t.instrument && !options.some((o) => o.id === t.instrument)) t.instrument = null;
+      for (const p of t.pads) if (p.instrument && !options.some((o) => o.id === p.instrument)) p.instrument = null;
+    }
     this.renderTracks();
     this.showRoot();
+    if (this.track.kind === "drum") this.roll.setRows(this.track.pads.map((p, i) => this.padLabel(p.instrument, i)));
   }
 
   private applyProject(): void {
@@ -247,8 +261,8 @@ export class RollPanel {
     this.bpmInput.value = String(this.project.bpm);
     this.roll.setBeatsPerBar(this.project.beatsPerBar);
     this.roll.setLoop(this.project.loop);
-    this.roll.setNotes(this.track.notes);
-    this.roll.frame(60);
+    this.showTrackInRoll();
+    if (this.track.kind !== "drum") this.roll.frame(60);
     this.sendLoop();
     this.client.setMasterFx(this.project.masterFx);
     this.renderTracks();
@@ -288,21 +302,35 @@ export class RollPanel {
 
   // ------------------------------------------------------------- tracks
 
+  /** The roll shows the selected track: keys for a melodic one, its rows for a drum track. */
+  private showTrackInRoll(): void {
+    const t = this.track;
+    this.roll.setRows(t.kind === "drum" ? t.pads.map((p, i) => this.padLabel(p.instrument, i)) : null);
+    this.roll.setNotes(t.notes);
+    if (t.kind === "drum") this.roll.frame(0);
+  }
+
+  private padLabel(instrument: string | null, index: number): string {
+    const label = this.options.find((o) => o.id === instrument)?.label;
+    return label ? `${index + 1}. ${label}` : `${index + 1}. (なし)`;
+  }
+
   private selectTrack(index: number): void {
     if (index === this.selected || !this.project.tracks[index]) return;
     this.selected = index;
-    this.roll.setNotes(this.track.notes);
+    this.showTrackInRoll();
     this.renderTracks();
     this.showRoot();
     this.refreshButtons();
     this.onTrackChange();
   }
 
-  private addTrack(): void {
-    const t = newTrack(`トラック ${this.project.tracks.length + 1}`, this.editedInstrument);
+  private addTrack(drum = false): void {
+    const name = drum ? `ドラム ${this.project.tracks.filter((x) => x.kind === "drum").length + 1}` : `トラック ${this.project.tracks.length + 1}`;
+    const t = drum ? newDrumTrack(name, this.editedInstrument) : newTrack(name, this.editedInstrument);
     this.project.tracks.push(t);
     this.selected = this.project.tracks.length - 1;
-    this.roll.setNotes([]);
+    this.showTrackInRoll();
     this.reload();
     this.renderTracks();
     this.showRoot();
@@ -317,7 +345,7 @@ export class RollPanel {
     if (t.notes.length && !window.confirm(`「${t.name}」と音符 ${t.notes.length} 個を消しますか?`)) return;
     this.project.tracks.splice(index, 1);
     this.selected = Math.min(this.selected > index ? this.selected - 1 : this.selected, this.project.tracks.length - 1);
-    this.roll.setNotes(this.track.notes);
+    this.showTrackInRoll();
     this.reload();
     this.renderTracks();
     this.showRoot();
@@ -341,17 +369,19 @@ export class RollPanel {
         t.name = name.value.trim() || `トラック ${i + 1}`;
         this.scheduleSave();
       });
-      const instrument = el("select", { ariaLabel: "鳴らす区間" }, [
+      const instrument: HTMLElement = t.kind === "drum" ? el("span", { className: "fine track-drum", textContent: `ドラム(${t.pads.length} 行)` }) : el("select", { ariaLabel: "鳴らす区間" }, [
         el("option", { value: "", textContent: "(区間を選ぶ)" }),
         ...this.options.map((o) => el("option", { value: o.id, textContent: o.label })),
       ]);
-      instrument.value = t.instrument ?? "";
-      instrument.addEventListener("change", () => {
-        t.instrument = instrument.value || null;
-        this.reload();
-        this.showRoot();
-        this.scheduleSave();
-      });
+      if (instrument instanceof HTMLSelectElement) {
+        instrument.value = t.instrument ?? "";
+        instrument.addEventListener("change", () => {
+          t.instrument = instrument.value || null;
+          this.reload();
+          this.showRoot();
+          this.scheduleSave();
+        });
+      }
       const mute = button("M", `small toggle${t.mute ? " on" : ""}`, () => {
         this.mix(t, (x) => (x.mute = !x.mute));
         mute.classList.toggle("on", t.mute);
@@ -391,10 +421,68 @@ export class RollPanel {
       return row;
     });
     this.trackList.replaceChildren(...rows);
+    this.renderPads();
+  }
+
+  /** The selected drum track's rows: one per cut it plays (a row is added, its cut chosen, or removed). */
+  private renderPads(): void {
+    const t = this.track;
+    this.padList.hidden = t.kind !== "drum";
+    if (t.kind !== "drum") {
+      this.padList.replaceChildren();
+      return;
+    }
+    const rows = t.pads.map((pad, i) => {
+      const select = el("select", { ariaLabel: `${i + 1} 行目の区間` }, [el("option", { value: "", textContent: "(区間を選ぶ)" }), ...this.options.map((o) => el("option", { value: o.id, textContent: o.label }))]);
+      select.value = pad.instrument ?? "";
+      select.addEventListener("change", () => {
+        pad.instrument = select.value || null;
+        this.padsChanged();
+        if (pad.instrument) this.previewRow(i);
+      });
+      const remove = button("×", "small", () => {
+        if (t.notes.some((n) => n.pitch === i) && !window.confirm(`${i + 1} 行目と、その行の音符を消しますか?`)) return;
+        removePad(t, i);
+        this.padsChanged();
+      }, "この行を消す");
+      return el("div", { className: "pad-row" }, [el("span", { className: "fine num", textContent: `${i + 1}.` }), select, button("▶", "small", () => this.previewRow(i), "この行の音を聴く"), remove]);
+    });
+    this.padList.replaceChildren(
+      el("p", { className: "fine", textContent: "ドラムの行(上から順に)。割り当てた区間の数だけピアノロールに行ができ、各行は区間を録音どおりの高さで 1 回鳴らします。" }),
+      ...rows,
+      el("div", { className: "row" }, [
+        button("＋ 行を追加", "small", () => {
+          t.pads.push({ instrument: this.editedInstrument });
+          this.padsChanged();
+        }),
+      ]),
+    );
+  }
+
+  private padsChanged(): void {
+    this.showTrackInRoll();
+    this.renderTracks();
+    this.reload();
+    this.scheduleSave();
+  }
+
+  /** Every cut a drum row plays (for the page to keep their one-shots up to date). */
+  padInstruments(): string[] {
+    const set = new Set<string>();
+    for (const t of this.project.tracks) if (t.kind === "drum") for (const p of t.pads) if (p.instrument) set.add(p.instrument);
+    return [...set];
+  }
+
+  private previewRow(row: number): void {
+    const instrument = this.track.pads[row]?.instrument;
+    if (!instrument || this.playing) return;
+    this.ensureSamples([instrument]);
+    this.client.previewSample(instrument);
   }
 
   /** The keys mark the note the selected track's cut is made for. */
   private showRoot(): void {
+    if (this.track.kind === "drum") return;
     const option = this.options.find((o) => o.id === this.track.instrument);
     this.roll.setRoot(option ? option.note : null);
   }
@@ -434,16 +522,31 @@ export class RollPanel {
   }
 
   private trackSpecs(): TrackSpec[] {
+    this.ensureSamples(this.padInstruments());
     return this.project.tracks
-      .filter((t) => t.instrument !== null)
-      .map((t) => ({ id: t.id, instrument: t.instrument!, notes: toSeqNotes(t.notes, this.project.bpm), fx: t.fx, gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo }));
+      .filter((t) => (t.kind === "drum" ? t.pads.length > 0 : t.instrument !== null))
+      .map((t) => ({
+        id: t.id,
+        instrument: t.kind === "drum" ? "drum" : t.instrument!,
+        samples: t.kind === "drum" ? t.pads.map((p) => p.instrument) : undefined,
+        notes: toSeqNotes(t.notes, this.project.bpm),
+        fx: t.fx,
+        gain: t.gain,
+        pan: t.pan,
+        mute: t.mute,
+        solo: t.solo,
+      }));
   }
 
   // ------------------------------------------------------------- playback
 
   private preview(pitch: number): void {
-    if (this.playing || !this.track.instrument) return;
-    this.client.previewNote(this.track.instrument, pitch);
+    if (this.playing) return;
+    if (this.track.kind === "drum") {
+      this.previewRow(pitch);
+      return;
+    }
+    if (this.track.instrument) this.client.previewNote(this.track.instrument, pitch);
   }
 
   private sendLoop(): void {

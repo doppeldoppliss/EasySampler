@@ -143,6 +143,19 @@ export class EngineClient {
     this.post({ type: "dropInstrument", id });
   }
 
+  /** A rendered one-shot (a drum row's sound) for the engine, by id; null forgets it. */
+  setSample(id: string, channels: Float32Array[] | null): void {
+    this.pending = this.pending.filter((m) => !(m.type === "sample" && m.id === id));
+    this.post({ type: "sample", id, channels });
+  }
+
+  /** Plays a kept one-shot once (a drum row being placed). */
+  previewSample(id: string): void {
+    this.claimPlayback();
+    this.unlock();
+    this.post({ type: "previewSample", id });
+  }
+
   /** A short note on an instrument (placing a note on a track), apart from the keyboard. */
   previewNote(instrument: string, note: number, sec = 0.25): void {
     this.claimPlayback();

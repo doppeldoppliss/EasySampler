@@ -74,6 +74,34 @@ export class PianoRoll {
   private topPitch = 84;
   private pxPerBeat = COARSE ? 56 : 48;
   private drag: Drag | null = null;
+  /** Drum rows (top to bottom), or null for the keyboard. In row mode a note's pitch is its row's index. */
+  private rowNames: string[] | null = null;
+  /** Row mode: the first row shown. */
+  private scrollRow = 0;
+
+  private get keysW(): number {
+    return this.rowNames ? (COARSE ? 96 : 120) : KEYS_W;
+  }
+
+  private get rowH(): number {
+    return this.rowNames ? (COARSE ? 34 : 26) : ROW_H;
+  }
+
+  private clampP(pitch: number): number {
+    return this.rowNames ? Math.max(0, Math.min(this.rowNames.length - 1, Math.round(pitch))) : clampPitch(pitch);
+  }
+
+  /** Drum rows (names, top to bottom), or null for the keyboard. */
+  setRows(names: string[] | null): void {
+    this.rowNames = names ? [...names] : null;
+    this.scrollRow = Math.max(0, Math.min(this.scrollRow, (names?.length ?? 1) - 1));
+    this.draw();
+  }
+
+  get rowCount(): number | null {
+    return this.rowNames?.length ?? null;
+  }
+
   /** A frame() asked for before the roll had a size (it was hidden): done on the first sized draw. */
   private pendingFrame: number | null = null;
   /** The user scrolled or zoomed: the view is theirs, a new root does not move it. */
@@ -144,6 +172,12 @@ export class PianoRoll {
     }
     this.pendingFrame = null;
     this.viewTouched = false;
+    if (this.rowNames) {
+      this.scrollRow = 0;
+      this.scrollBeat = this.notesList.length ? Math.max(0, snapDown(Math.min(...this.notesList.map((n) => n.start)), this.beatsPerBar)) : 0;
+      this.draw();
+      return;
+    }
     const rows = this.visibleRows();
     if (this.notesList.length) {
       const lo = Math.min(...this.notesList.map((n) => n.pitch));
@@ -213,7 +247,7 @@ export class PianoRoll {
   transposeSelected(semitones: number): void {
     if (!this.selected.size) return;
     this.edit(() => {
-      for (const n of this.selection()) n.pitch = clampPitch(n.pitch + semitones);
+      for (const n of this.selection()) n.pitch = this.clampP(n.pitch + semitones);
     });
     const first = this.selection()[0];
     if (first) this.onPreview(first.pitch);
@@ -264,10 +298,10 @@ export class PianoRoll {
     this.restore(next);
   }
 
-  zoom(factor: number, atX = KEYS_W + (this.width() - KEYS_W) / 2): void {
+  zoom(factor: number, atX = this.keysW + (this.width() - this.keysW) / 2): void {
     const beat = this.beatAt(atX);
     this.pxPerBeat = Math.max(6, Math.min(400, this.pxPerBeat * factor));
-    this.scrollBeat = Math.max(0, beat - (atX - KEYS_W) / this.pxPerBeat);
+    this.scrollBeat = Math.max(0, beat - (atX - this.keysW) / this.pxPerBeat);
     this.draw();
   }
 
@@ -319,31 +353,33 @@ export class PianoRoll {
   }
 
   private visibleRows(): number {
-    return Math.max(1, (this.canvas.clientHeight - RULER_H) / ROW_H);
+    return Math.max(1, (this.canvas.clientHeight - RULER_H) / this.rowH);
   }
 
   private visibleBeats(): number {
-    return Math.max(0.5, (this.width() - KEYS_W) / this.pxPerBeat);
+    return Math.max(0.5, (this.width() - this.keysW) / this.pxPerBeat);
   }
 
   private beatAt(x: number): number {
-    return this.scrollBeat + (x - KEYS_W) / this.pxPerBeat;
+    return this.scrollBeat + (x - this.keysW) / this.pxPerBeat;
   }
 
   private xOf(beat: number): number {
-    return KEYS_W + (beat - this.scrollBeat) * this.pxPerBeat;
+    return this.keysW + (beat - this.scrollBeat) * this.pxPerBeat;
   }
 
   private pitchAt(y: number): number {
-    return clampPitch(Math.ceil(this.topPitch - (y - RULER_H) / ROW_H));
+    if (this.rowNames) return this.clampP(Math.floor((y - RULER_H) / this.rowH) + this.scrollRow);
+    return this.clampP(Math.ceil(this.topPitch - (y - RULER_H) / this.rowH));
   }
 
   private yOf(pitch: number): number {
-    return RULER_H + (this.topPitch - pitch) * ROW_H;
+    if (this.rowNames) return RULER_H + (pitch - this.scrollRow) * this.rowH;
+    return RULER_H + (this.topPitch - pitch) * this.rowH;
   }
 
   private noteAt(x: number, y: number, edgeReach = EDGE_MOUSE): { note: Note; edge: boolean } | null {
-    if (x < KEYS_W || y < RULER_H) return null;
+    if (x < this.keysW || y < RULER_H) return null;
     const pitch = this.pitchAt(y);
     for (let i = this.notesList.length - 1; i >= 0; i--) {
       const n = this.notesList[i];
@@ -357,6 +393,10 @@ export class PianoRoll {
 
   private clampView(): void {
     this.scrollBeat = Math.max(0, this.scrollBeat);
+    if (this.rowNames) {
+      this.scrollRow = Math.max(0, Math.min(Math.max(0, this.rowNames.length - Math.floor(this.visibleRows())), Math.round(this.scrollRow)));
+      return;
+    }
     const rows = this.visibleRows();
     this.topPitch = Math.max(Math.min(127, rows - 1), Math.min(127, this.topPitch));
   }
@@ -375,11 +415,11 @@ export class PianoRoll {
     const fine = e.pointerType === "mouse" || e.pointerType === "pen";
     this.canvas.setPointerCapture(e.pointerId);
     this.gestureStart = this.snapshot();
-    if (y < RULER_H && x >= KEYS_W) {
+    if (y < RULER_H && x >= this.keysW) {
       this.drag = { kind: "ruler", x, moved: false };
       return;
     }
-    if (x < KEYS_W) {
+    if (x < this.keysW) {
       this.onPreview(this.pitchAt(y));
       this.drag = null;
       return;
@@ -434,14 +474,15 @@ export class PianoRoll {
       case "pending": {
         if (Math.hypot(x - d.x, y - d.y) < TAP_PX) return;
         if (d.fine || this.selectMode) this.drag = { kind: "box", x0: d.x, y0: d.y, x1: x, y1: y, add: d.shift ? new Set(this.selected) : new Set() };
-        else this.drag = { kind: "pan", x: d.x, y: d.y, beat: this.scrollBeat, top: this.topPitch };
+        else this.drag = { kind: "pan", x: d.x, y: d.y, beat: this.scrollBeat, top: this.rowNames ? this.scrollRow : this.topPitch };
         this.move(e);
         return;
       }
       case "pan":
         this.viewTouched = true;
         this.scrollBeat = d.beat - (x - d.x) / this.pxPerBeat;
-        this.topPitch = d.top + (y - d.y) / ROW_H;
+        if (this.rowNames) this.scrollRow = Math.round(d.top - (y - d.y) / this.rowH);
+        else this.topPitch = d.top + (y - d.y) / this.rowH;
         this.clampView();
         this.draw();
         return;
@@ -470,7 +511,7 @@ export class PianoRoll {
           const o = d.orig.get(n.id);
           if (!o) continue;
           n.start = o.start + dBeat;
-          n.pitch = clampPitch(o.pitch + dPitch);
+          n.pitch = this.clampP(o.pitch + dPitch);
         }
         if (d.anchor.pitch !== d.lastPitch) {
           d.lastPitch = d.anchor.pitch;
@@ -513,6 +554,7 @@ export class PianoRoll {
     const { x, y } = this.local(e);
     switch (d.kind) {
       case "pending": {
+        if (this.rowNames && this.rowNames.length === 0) return; // a drum track with no rows yet
         // A tap on empty grid: a note there.
         const start = Math.max(0, snapDown(this.beatAt(x), this.grid));
         const note: Note = { id: newId(), start, length: this.lastLength, pitch: this.pitchAt(y), velocity: 0.8 };
@@ -572,14 +614,15 @@ export class PianoRoll {
     e.preventDefault();
     this.viewTouched = true;
     if (e.ctrlKey || e.metaKey) {
-      this.zoom(Math.exp(-e.deltaY * 0.01), Math.max(KEYS_W, x));
+      this.zoom(Math.exp(-e.deltaY * 0.01), Math.max(this.keysW, x));
       return;
     }
     const unit = e.deltaMode === 1 ? 16 : 1;
     if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
       const delta = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * unit;
       this.scrollBeat += delta / this.pxPerBeat;
-    } else this.topPitch -= (e.deltaY * unit) / ROW_H / 2;
+    } else if (this.rowNames) this.scrollRow += Math.sign(e.deltaY);
+    else this.topPitch -= (e.deltaY * unit) / this.rowH / 2;
     this.clampView();
     this.draw();
   }
@@ -632,18 +675,28 @@ export class PianoRoll {
     }
     this.clampView();
 
-    const firstPitch = this.pitchAt(ch - 1);
-    const lastPitch = this.pitchAt(RULER_H);
-    // Rows: the black keys' rows shaded, a line under every C.
+    const rowsMode = this.rowNames !== null;
+    const firstPitch = Math.min(this.pitchAt(ch - 1), this.pitchAt(RULER_H));
+    const lastPitch = rowsMode ? Math.min(this.rowNames!.length - 1, Math.max(this.pitchAt(ch - 1), this.pitchAt(RULER_H))) : Math.max(this.pitchAt(ch - 1), this.pitchAt(RULER_H));
+    // Rows: the black keys' rows shaded and a line under every C, or (drum rows) every other row shaded and a line under each.
     for (let p = firstPitch; p <= lastPitch; p++) {
       const y = this.yOf(p);
+      if (rowsMode) {
+        if (p % 2) {
+          g.fillStyle = cssVar("--outside");
+          g.fillRect(this.keysW, y, cw - this.keysW, this.rowH);
+        }
+        g.fillStyle = cssVar("--grid");
+        g.fillRect(this.keysW, y + this.rowH - 1, cw - this.keysW, 1);
+        continue;
+      }
       if (isBlack(p)) {
         g.fillStyle = cssVar("--outside");
-        g.fillRect(KEYS_W, y, cw - KEYS_W, ROW_H);
+        g.fillRect(this.keysW, y, cw - this.keysW, this.rowH);
       }
       if (p % 12 === 0) {
         g.fillStyle = cssVar("--grid-strong");
-        g.fillRect(KEYS_W, y + ROW_H - 1, cw - KEYS_W, 1);
+        g.fillRect(this.keysW, y + this.rowH - 1, cw - this.keysW, 1);
       }
     }
     // The loop range, under everything.
@@ -652,7 +705,7 @@ export class PianoRoll {
     if (this.loop.on) {
       g.globalAlpha = 0.08;
       g.fillStyle = cssVar("--accent");
-      g.fillRect(Math.max(KEYS_W, lx0), RULER_H, Math.max(0, Math.min(cw, lx1) - Math.max(KEYS_W, lx0)), ch - RULER_H);
+      g.fillRect(Math.max(this.keysW, lx0), RULER_H, Math.max(0, Math.min(cw, lx1) - Math.max(this.keysW, lx0)), ch - RULER_H);
       g.globalAlpha = 1;
     }
     // Vertical lines: the grid, the beats, the bars.
@@ -673,27 +726,27 @@ export class PianoRoll {
     const accent = cssVar("--accent");
     const selectedColor = cssVar("--warn");
     const text = cssVar("--text");
-    g.font = `${Math.min(11, ROW_H - 3)}px system-ui, sans-serif`;
+    g.font = `${Math.min(11, this.rowH - 3)}px system-ui, sans-serif`;
     g.textBaseline = "middle";
     for (const n of this.notesList) {
       if (n.pitch < firstPitch || n.pitch > lastPitch) continue;
       const x0 = this.xOf(n.start);
       const x1 = this.xOf(n.start + n.length);
-      if (x1 < KEYS_W || x0 > cw) continue;
+      if (x1 < this.keysW || x0 > cw) continue;
       const y = this.yOf(n.pitch);
       const sel = this.selected.has(n.id);
       g.globalAlpha = 0.45 + 0.55 * n.velocity;
       g.fillStyle = sel ? selectedColor : accent;
-      g.fillRect(Math.max(KEYS_W, x0) + 0.5, y + 1, Math.max(2, x1 - Math.max(KEYS_W, x0) - 1), ROW_H - 2);
+      g.fillRect(Math.max(this.keysW, x0) + 0.5, y + 1, Math.max(2, x1 - Math.max(this.keysW, x0) - 1), this.rowH - 2);
       g.globalAlpha = 1;
       if (sel) {
         g.strokeStyle = text;
         g.lineWidth = 1;
-        g.strokeRect(Math.max(KEYS_W, x0) + 0.5, y + 1.5, Math.max(2, x1 - Math.max(KEYS_W, x0) - 1), ROW_H - 3);
+        g.strokeRect(Math.max(this.keysW, x0) + 0.5, y + 1.5, Math.max(2, x1 - Math.max(this.keysW, x0) - 1), this.rowH - 3);
       }
-      if (x1 - x0 > 28 && ROW_H >= 12) {
+      if (!rowsMode && x1 - x0 > 28 && this.rowH >= 12) {
         g.fillStyle = cssVar("--accent-text");
-        g.fillText(NAMES[n.pitch % 12] + (Math.floor(n.pitch / 12) - 1), Math.max(KEYS_W, x0) + 3, y + ROW_H / 2);
+        g.fillText(NAMES[n.pitch % 12] + (Math.floor(n.pitch / 12) - 1), Math.max(this.keysW, x0) + 3, y + this.rowH / 2);
       }
     }
 
@@ -706,28 +759,43 @@ export class PianoRoll {
       g.setLineDash([]);
     }
 
-    // The keys on the left.
+    // The keys on the left (or the drum rows' names).
     g.fillStyle = cssVar("--panel");
-    g.fillRect(0, RULER_H, KEYS_W, ch - RULER_H);
-    for (let p = firstPitch; p <= lastPitch; p++) {
+    g.fillRect(0, RULER_H, this.keysW, ch - RULER_H);
+    if (rowsMode) {
+      g.font = `${COARSE ? 13 : 12}px system-ui, sans-serif`;
+      for (let p = firstPitch; p <= lastPitch; p++) {
+        const y = this.yOf(p);
+        g.fillStyle = cssVar(p % 2 ? "--outside" : "--panel");
+        g.fillRect(0, y, this.keysW - 1, this.rowH);
+        g.fillStyle = cssVar("--text");
+        let label = this.rowNames![p] ?? "";
+        while (label.length > 1 && g.measureText(label).width > this.keysW - 10) label = label.slice(0, -1);
+        g.fillText(label === this.rowNames![p] ? label : `${label.slice(0, -1)}…`, 5, y + this.rowH / 2);
+      }
+      if (this.rowNames!.length === 0) {
+        g.fillStyle = cssVar("--muted");
+        g.fillText("行がありません", 5, RULER_H + 16);
+      }
+    } else for (let p = firstPitch; p <= lastPitch; p++) {
       const y = this.yOf(p);
       g.fillStyle = cssVar(p === this.root ? "--key-root" : isBlack(p) ? "--key-black" : "--key-white");
-      g.fillRect(0, y, isBlack(p) ? KEYS_W * 0.62 : KEYS_W - 1, ROW_H - (isBlack(p) ? 1 : 0));
+      g.fillRect(0, y, isBlack(p) ? this.keysW * 0.62 : this.keysW - 1, this.rowH - (isBlack(p) ? 1 : 0));
       if (p % 12 === 0 || p === this.root) {
         g.fillStyle = p === this.root ? cssVar("--accent-text") : cssVar("--muted");
-        g.fillText(`${NAMES[p % 12]}${Math.floor(p / 12) - 1}`, 3, y + ROW_H / 2);
+        g.fillText(`${NAMES[p % 12]}${Math.floor(p / 12) - 1}`, 3, y + this.rowH / 2);
       }
     }
     g.fillStyle = cssVar("--line");
-    g.fillRect(KEYS_W - 1, RULER_H, 1, ch - RULER_H);
+    g.fillRect(this.keysW - 1, RULER_H, 1, ch - RULER_H);
 
     // The ruler: bar numbers and the loop.
     g.fillStyle = cssVar("--strip");
     g.fillRect(0, 0, cw, RULER_H);
-    if (lx1 > KEYS_W && lx0 < cw) {
+    if (lx1 > this.keysW && lx0 < cw) {
       g.fillStyle = this.loop.on ? accent : cssVar("--muted");
       g.globalAlpha = this.loop.on ? 0.55 : 0.25;
-      g.fillRect(Math.max(KEYS_W, lx0), 3, Math.max(0, Math.min(cw, lx1) - Math.max(KEYS_W, lx0)), RULER_H - 6);
+      g.fillRect(Math.max(this.keysW, lx0), 3, Math.max(0, Math.min(cw, lx1) - Math.max(this.keysW, lx0)), RULER_H - 6);
       g.globalAlpha = 1;
     }
     g.fillStyle = cssVar("--muted");
@@ -736,7 +804,7 @@ export class PianoRoll {
     for (let bar = Math.floor(view0 / this.beatsPerBar); bar * this.beatsPerBar <= view1; bar++) {
       if (bar % every) continue;
       const x = this.xOf(bar * this.beatsPerBar);
-      if (x < KEYS_W - 1) continue;
+      if (x < this.keysW - 1) continue;
       g.fillRect(Math.round(x), RULER_H - 8, 1, 8);
       g.fillText(String(bar + 1), x + 3, RULER_H / 2);
     }
@@ -746,7 +814,7 @@ export class PianoRoll {
     // The playhead.
     if (this.playhead !== null) {
       const x = this.xOf(this.playhead);
-      if (x >= KEYS_W && x <= cw) {
+      if (x >= this.keysW && x <= cw) {
         g.fillStyle = text;
         g.fillRect(Math.round(x), 0, 2, ch);
       }

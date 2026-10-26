@@ -17,7 +17,7 @@ import { mixToMono, prepareSource, rootForMarkers, type MaterialAnalysis } from 
 import type { PitchTrack } from "./analysis/pyin";
 import { buildBatch, buildKit, buildOne, type Built, type BuildInput } from "./export/build";
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
-import { exportFileName, safeBaseName, stripExtension } from "./export/render";
+import { exportFileName, renderNote, safeBaseName, stripExtension } from "./export/render";
 import { newCutId, parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
 import { hiddenPartsOf, normalizeRemoved, outputLayout } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
@@ -192,6 +192,7 @@ async function matchEngineRate(): Promise<void> {
     client.setSource(source, m.id);
   }
   client.resendInstrument();
+  ensurePadSamples(rollPanel.padInstruments());
 }
 
 // ---------------------------------------------------------------- building blocks
@@ -1645,6 +1646,7 @@ function sendInstrument(): void {
     client.setHold(exportLengthSec(exportSettings));
     client.setLive(id, null);
     refreshInstruments();
+    if (rollPanel.padInstruments().includes(id)) schedulePadRefresh();
   }
   rootLabel.textContent = pitchLabel(params.root);
   rootSource.textContent = params.rootMode === "auto" ? "(自動判定)" : "(手動)";
@@ -2272,6 +2274,42 @@ function defineMaterialCuts(): void {
   syncCut();
   for (const cut of cuts) client.defineInstrument(instrumentId(material.id, cut.id), material.id, cut.markers, cut.params);
   refreshInstruments();
+}
+
+/** What each drum row's one-shot was last rendered from (so it is rendered again only when that changes). */
+const padSampleKeys = new Map<string, string>();
+
+/**
+ * Drum rows (design.md 13.1): each plays a cut's one-shot, rendered here once
+ * per change of the cut's settings and kept by the engine, so a drum track
+ * costs a playback, not a voice of pitch shifting.
+ */
+function ensurePadSamples(instruments: string[]): void {
+  for (const id of instruments) {
+    const [materialId, cutId] = id.split("/");
+    const entry = library.get(materialId);
+    if (!entry) continue;
+    const editing = material?.id === materialId;
+    if (editing) syncCut();
+    const cut = (editing ? cuts : (entry.settings?.cuts ?? [])).find((c) => c.id === cutId);
+    if (!cut) continue;
+    const exportOf = editing ? exportSettings : (entry.settings?.export ?? DEFAULT_EXPORT);
+    const hold = exportLengthSec(exportOf);
+    const source = entry.material.source;
+    const key = JSON.stringify([cut.markers, cut.params, cut.note, hold, source.sampleRate]);
+    if (padSampleKeys.get(id) === key) continue;
+    const rendered = renderNote(source, cut.markers, { ...cut.params, maxVoices: DEFAULT_PARAMS.maxVoices }, cut.note, hold, exportOf.bpm);
+    client.setSample(id, rendered.channels);
+    padSampleKeys.set(id, key);
+  }
+}
+rollPanel.ensureSamples = ensurePadSamples;
+
+/** The cut being edited changed: a drum row on it gets its one-shot again, once the changes settle. */
+let padRefreshTimer = 0;
+function schedulePadRefresh(): void {
+  clearTimeout(padRefreshTimer);
+  padRefreshTimer = window.setTimeout(() => ensurePadSamples(rollPanel.padInstruments()), 300);
 }
 
 /** The cuts of every material, for the tracks' lists. */

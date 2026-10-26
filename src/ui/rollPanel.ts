@@ -1,18 +1,33 @@
-// 打ち込み (design.md 13, phase 1): a song of one track, written on the piano
-// roll and played by the material open now. The song is kept in the browser
-// and comes back on the next visit; a part of the MIDI file opened in 曲で試す
-// can be taken over as a start.
+// 打ち込み (design.md 13): the song. Tracks, each playing one cut of a material
+// (design.md 13.1), with their own notes, effects, volume, pan, mute and solo;
+// the piano roll edits the selected track. The project (tracks, the list of
+// materials, tempo, loop) is kept in the browser and comes back on the next
+// visit; a part of the MIDI file opened in 曲で試す can be taken over as a start.
 
-import { CURRENT_INSTRUMENT, type EngineClient } from "../audio/engineClient";
+import type { EngineClient } from "../audio/engineClient";
+import { keep, kept } from "../audio/store";
+import type { TrackSpec } from "../engine/messages";
+import {
+  beatsToSec,
+  emptyProject,
+  fromSongNotes,
+  newTrack,
+  sanitizeProject,
+  secToBeats,
+  shifted,
+  songEnd,
+  toSeqNotes,
+  type Note,
+  type Project,
+  type ProjectMaterial,
+  type Track,
+} from "../daw/model";
 import type { FxSettings } from "../instrument/types";
-import { keep, kept } from "../audio/lastMaterial";
-import { beatsToSec, emptyProject, fromSongNotes, sanitizeProject, secToBeats, shifted, songEnd, toSeqNotes, type Note, type Project } from "../daw/model";
 import type { SongPart } from "../song/parts";
 import { el } from "./dom";
 import { PianoRoll } from "./pianoRoll";
 
 const STORE_KEY = "project";
-const TRACK_ID = "track-0";
 const COARSE = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 /** How far past the last note playback runs before it stops on its own (beats). */
 const END_PAD_BEATS = 2;
@@ -32,15 +47,26 @@ const GRIDS: [number, string][] = [
   [0, "吸着なし"],
 ];
 
+/** A cut a track can play: its instrument id, how it reads in the list, and the note it is made for (marked on the keys). */
+export interface InstrumentOption {
+  id: string;
+  label: string;
+  note: number;
+}
+
 export class RollPanel {
   readonly element: HTMLElement;
   readonly roll = new PianoRoll();
   /** Playback started or stopped (the page stops its other players). */
   onPlayingChange: (playing: boolean) => void = () => {};
-  /** The project was replaced (restored): the page shows the track's effects again. */
-  onProjectChange: () => void = () => {};
+  /** The selected track changed, or the project was replaced: the page shows that track's effects. */
+  onTrackChange: () => void = () => {};
 
   private project: Project = emptyProject();
+  private selected = 0;
+  private options: InstrumentOption[] = [];
+  /** The cut being edited on the sampling side: what a new track plays. */
+  private editedInstrument: string | null = null;
   private readonly client: EngineClient;
   private readonly restingBpm: () => number;
   private readonly importPart: () => { part: SongPart; bpm: number; transpose: number } | null;
@@ -51,6 +77,7 @@ export class RollPanel {
   private frame = 0;
   private saveTimer = 0;
 
+  private readonly trackList = el("div", { className: "track-list" });
   private readonly playButton = button("▶ 再生", "big", () => this.toggle());
   private readonly loopButton = button("", "small", () => this.setLoopOn(!this.project.loop.on));
   private readonly bpmInput = el("input", { type: "number", min: "20", max: "400", step: "1", inputMode: "decimal", ariaLabel: "BPM" });
@@ -70,7 +97,7 @@ export class RollPanel {
     button("+12", "small", () => this.roll.transposeSelected(12), "1 オクターブ上げる(Shift+↑)"),
   ];
   private readonly importButton = button("曲で試すのパートを取り込む", "small", () => this.takePart());
-  private readonly clearButton = button("すべて消す", "small", () => {
+  private readonly clearButton = button("このトラックの音符をすべて消す", "small", () => {
     if (!this.roll.notes.length) return;
     this.roll.setNotes([], true);
     this.changed(this.roll.notes);
@@ -118,7 +145,7 @@ export class RollPanel {
     this.selectToggle.hidden = !COARSE;
 
     this.element = el("section", { className: "panel roll-panel" }, [
-      el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "打ち込み" }), this.importButton, this.clearButton]),
+      el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "打ち込み" }), this.importButton]),
       el("div", { className: "row roll-transport" }, [
         this.playButton,
         this.loopButton,
@@ -126,6 +153,8 @@ export class RollPanel {
         el("label", { className: "inline" }, ["吸着 ", this.gridSelect]),
         this.position,
       ]),
+      this.trackList,
+      el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack())]),
       el("div", { className: "row roll-tools" }, [this.undoButton, this.redoButton, this.deleteButton, this.duplicateButton, ...this.transposeButtons, this.selectToggle, button("−", "small", () => this.roll.zoom(1 / 1.5), "縮小"), button("+", "small", () => this.roll.zoom(1.5), "拡大")]),
       this.roll.element,
       el("p", {
@@ -134,70 +163,106 @@ export class RollPanel {
           ? "空いたところをタップで音符、音符をドラッグで移動、右端をドラッグで長さ。上の目盛りはタップで位置、2 回タップで再生、ドラッグでループ範囲。"
           : "クリックで音符、ドラッグで範囲選択、音符のドラッグで移動(Ctrl で複製・Alt で吸着なし)、右端で長さ、ダブルクリックか右クリックで削除。上の目盛りはクリックで位置、ダブルクリックで再生、ドラッグでループ範囲。Space で再生 / 停止。",
       }),
+      el("div", { className: "row" }, [this.clearButton]),
       this.info,
     ]);
     this.applyProject();
-    void this.restore();
   }
 
   get playing(): boolean {
     return this.startedAt !== null;
   }
 
-  // ------------------------------------------------------------- the track's effects
-
-  /** The effects of the track being edited. */
-  trackFx(): FxSettings {
-    return this.project.tracks[0].fx;
-  }
-
-  /** Changes the track's effects (heard at once, kept). */
-  updateTrackFx(change: (fx: FxSettings) => void): void {
-    const track = this.project.tracks[0];
-    const fx = structuredClone(track.fx);
-    change(fx);
-    track.fx = fx;
-    this.client.setTrackMix(TRACK_ID, { gain: track.gain, pan: track.pan, mute: track.mute, solo: track.solo, fx });
-    this.scheduleSave();
-  }
-
-  private trackSpecs() {
-    const t = this.project.tracks[0];
-    return [{ id: TRACK_ID, instrument: CURRENT_INSTRUMENT, notes: toSeqNotes(this.roll.notes, this.project.bpm), fx: t.fx, gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo }];
-  }
-
-  /** The material's note (marked on the keys) — where an empty roll opens. */
-  setRoot(pitch: number): void {
-    this.roll.setRoot(pitch);
+  private get track(): Track {
+    return this.project.tracks[this.selected];
   }
 
   // ------------------------------------------------------------- the project
 
-  private async restore(): Promise<void> {
+  /** Reads the kept project (call once at start); the page then opens its materials. */
+  async restore(): Promise<Project> {
     const stored = await kept(STORE_KEY);
-    if (stored === undefined || this.roll.notes.length) return;
-    this.project = sanitizeProject(stored);
-    this.applyProject();
-    if (this.roll.notes.length) this.info.textContent = `前回の打ち込み(音符 ${this.roll.notes.length} 個)を開きました。`;
+    if (stored !== undefined) {
+      this.project = sanitizeProject(stored);
+      this.selected = 0;
+      this.applyProject();
+    }
+    return this.project;
+  }
+
+  get materials(): readonly ProjectMaterial[] {
+    return this.project.materials;
+  }
+
+  get editing(): string | null {
+    return this.project.editing;
+  }
+
+  addMaterial(material: ProjectMaterial): void {
+    if (!this.project.materials.some((m) => m.id === material.id)) this.project.materials.push(material);
+    this.project.editing = material.id;
+    this.scheduleSave();
+  }
+
+  /** A material leaves the project: tracks that played one of its cuts play nothing until another is chosen. */
+  removeMaterial(id: string): void {
+    this.project.materials = this.project.materials.filter((m) => m.id !== id);
+    for (const t of this.project.tracks) if (t.instrument?.startsWith(`${id}/`)) t.instrument = null;
+    if (this.project.editing === id) this.project.editing = this.project.materials.at(-1)?.id ?? null;
+    this.renderTracks();
+    this.reload();
+    this.scheduleSave();
+  }
+
+  /** Whether a track plays a cut of this material. */
+  usesMaterial(id: string): boolean {
+    return this.project.tracks.some((t) => t.instrument?.startsWith(`${id}/`));
+  }
+
+  setEditing(id: string): void {
+    this.project.editing = id;
+    this.scheduleSave();
+  }
+
+  /** The cuts tracks can play (all materials' cuts), and the one being edited (what a new track plays). */
+  setInstruments(options: InstrumentOption[], edited: string | null): void {
+    const same = JSON.stringify(options) === JSON.stringify(this.options) && edited === this.editedInstrument;
+    if (same) return; // (called on every change of the cut: the list is only rebuilt when it differs)
+    this.options = options;
+    this.editedInstrument = edited;
+    // A project of one track that plays nothing yet: it plays the cut being edited.
+    const only = this.project.tracks.length === 1 ? this.project.tracks[0] : null;
+    if (only && only.instrument === null && edited) {
+      only.instrument = edited;
+      this.scheduleSave();
+    }
+    // A cut that is gone (removed on the sampling side): the track plays nothing.
+    for (const t of this.project.tracks) if (t.instrument && !options.some((o) => o.id === t.instrument)) t.instrument = null;
+    this.renderTracks();
+    this.showRoot();
   }
 
   private applyProject(): void {
+    this.selected = Math.min(this.selected, this.project.tracks.length - 1);
     this.bpmInput.value = String(this.project.bpm);
     this.roll.setBeatsPerBar(this.project.beatsPerBar);
     this.roll.setLoop(this.project.loop);
-    this.roll.setNotes(this.project.tracks[0].notes);
+    this.roll.setNotes(this.track.notes);
     this.roll.frame(60);
     this.sendLoop();
+    this.client.setMasterFx(null);
+    this.renderTracks();
     this.refreshButtons();
     this.showPosition(this.from);
-    this.onProjectChange();
+    this.onTrackChange();
   }
 
   private changed(notes: Note[]): void {
-    this.project.tracks[0].notes = notes;
+    this.track.notes = notes;
     this.info.textContent = "";
     this.reload();
     this.scheduleSave();
+    this.renderTracks();
   }
 
   private scheduleSave(): void {
@@ -205,7 +270,7 @@ export class RollPanel {
     this.saveTimer = window.setTimeout(() => void keep(STORE_KEY, this.project), 400);
   }
 
-  /** The part chosen in 曲で試す, as notes on the roll (one undoable step), with its tempo. */
+  /** The part chosen in 曲で試す, as notes on the selected track (one undoable step), with its tempo. */
   private takePart(): void {
     const picked = this.importPart();
     if (!picked) {
@@ -218,16 +283,154 @@ export class RollPanel {
     this.roll.setNotes(notes, true);
     this.roll.frame(60);
     this.changed(this.roll.notes);
-    this.info.textContent = `「${picked.part.label}」の音符 ${notes.length} 個を取り込みました(${this.project.bpm} BPM)。取り消しで戻せます。`;
+    this.info.textContent = `「${picked.part.label}」の音符 ${notes.length} 個を「${this.track.name}」に取り込みました(${this.project.bpm} BPM)。取り消しで戻せます。`;
+  }
+
+  // ------------------------------------------------------------- tracks
+
+  private selectTrack(index: number): void {
+    if (index === this.selected || !this.project.tracks[index]) return;
+    this.selected = index;
+    this.roll.setNotes(this.track.notes);
+    this.renderTracks();
+    this.showRoot();
+    this.refreshButtons();
+    this.onTrackChange();
+  }
+
+  private addTrack(): void {
+    const t = newTrack(`トラック ${this.project.tracks.length + 1}`, this.editedInstrument);
+    this.project.tracks.push(t);
+    this.selected = this.project.tracks.length - 1;
+    this.roll.setNotes([]);
+    this.reload();
+    this.renderTracks();
+    this.showRoot();
+    this.refreshButtons();
+    this.onTrackChange();
+    this.scheduleSave();
+  }
+
+  private removeTrack(index: number): void {
+    if (this.project.tracks.length < 2) return;
+    const t = this.project.tracks[index];
+    if (t.notes.length && !window.confirm(`「${t.name}」と音符 ${t.notes.length} 個を消しますか?`)) return;
+    this.project.tracks.splice(index, 1);
+    this.selected = Math.min(this.selected > index ? this.selected - 1 : this.selected, this.project.tracks.length - 1);
+    this.roll.setNotes(this.track.notes);
+    this.reload();
+    this.renderTracks();
+    this.showRoot();
+    this.onTrackChange();
+    this.scheduleSave();
+  }
+
+  /** Volume, pan, mute, solo of a track: heard at once, kept. */
+  private mix(t: Track, change: (t: Track) => void): void {
+    change(t);
+    this.client.setTrackMix(t.id, { gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, fx: t.fx });
+    this.scheduleSave();
+  }
+
+  private renderTracks(): void {
+    const rows = this.project.tracks.map((t, i) => {
+      const selected = i === this.selected;
+      const name = el("input", { type: "text", value: t.name, className: "track-name", ariaLabel: "トラックの名前", maxLength: 30 });
+      name.addEventListener("focus", () => this.selectTrack(i));
+      name.addEventListener("change", () => {
+        t.name = name.value.trim() || `トラック ${i + 1}`;
+        this.scheduleSave();
+      });
+      const instrument = el("select", { ariaLabel: "鳴らす区間" }, [
+        el("option", { value: "", textContent: "(区間を選ぶ)" }),
+        ...this.options.map((o) => el("option", { value: o.id, textContent: o.label })),
+      ]);
+      instrument.value = t.instrument ?? "";
+      instrument.addEventListener("change", () => {
+        t.instrument = instrument.value || null;
+        this.reload();
+        this.showRoot();
+        this.scheduleSave();
+      });
+      const mute = button("M", `small toggle${t.mute ? " on" : ""}`, () => {
+        this.mix(t, (x) => (x.mute = !x.mute));
+        mute.classList.toggle("on", t.mute);
+      }, "ミュート");
+      const solo = button("S", `small toggle${t.solo ? " on" : ""}`, () => {
+        this.mix(t, (x) => (x.solo = !x.solo));
+        solo.classList.toggle("on", t.solo);
+      }, "ソロ");
+      const volume = el("input", { type: "range", min: "0", max: "1.5", step: "0.01", value: String(t.gain), ariaLabel: "音量" });
+      volume.addEventListener("input", () => this.mix(t, (x) => (x.gain = Number(volume.value))));
+      volume.addEventListener("dblclick", () => {
+        volume.value = "1";
+        this.mix(t, (x) => (x.gain = 1));
+      });
+      const pan = el("input", { type: "range", min: "-1", max: "1", step: "0.05", value: String(t.pan), ariaLabel: "パン" });
+      pan.addEventListener("input", () => this.mix(t, (x) => (x.pan = Number(pan.value))));
+      pan.addEventListener("dblclick", () => {
+        pan.value = "0";
+        this.mix(t, (x) => (x.pan = 0));
+      });
+      const remove = button("×", "small", () => this.removeTrack(i), "このトラックを消す");
+      remove.hidden = this.project.tracks.length < 2;
+      const row = el("div", { className: `track-row${selected ? " selected" : ""}` }, [
+        el("span", { className: "track-count fine num", textContent: `${t.notes.length}` }),
+        name,
+        instrument,
+        mute,
+        solo,
+        el("label", { className: "inline fine" }, ["音量 ", volume]),
+        el("label", { className: "inline fine" }, ["パン ", pan]),
+        remove,
+      ]);
+      row.addEventListener("pointerdown", (e) => {
+        if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLButtonElement)) this.selectTrack(i);
+      });
+      instrument.addEventListener("focus", () => this.selectTrack(i));
+      return row;
+    });
+    this.trackList.replaceChildren(...rows);
+  }
+
+  /** The keys mark the note the selected track's cut is made for. */
+  private showRoot(): void {
+    const option = this.options.find((o) => o.id === this.track.instrument);
+    this.roll.setRoot(option ? option.note : null);
+  }
+
+  // ------------------------------------------------------------- the selected track's effects
+
+  /** The effects of the selected track. */
+  trackFx(): FxSettings {
+    return this.track.fx;
+  }
+
+  get trackName(): string {
+    return this.track.name;
+  }
+
+  /** Changes the selected track's effects (heard at once, kept). */
+  updateTrackFx(change: (fx: FxSettings) => void): void {
+    const t = this.track;
+    const fx = structuredClone(t.fx);
+    change(fx);
+    t.fx = fx;
+    this.client.setTrackMix(t.id, { gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, fx });
+    this.scheduleSave();
+  }
+
+  private trackSpecs(): TrackSpec[] {
+    return this.project.tracks
+      .filter((t) => t.instrument !== null)
+      .map((t) => ({ id: t.id, instrument: t.instrument!, notes: toSeqNotes(t.notes, this.project.bpm), fx: t.fx, gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo }));
   }
 
   // ------------------------------------------------------------- playback
 
   private preview(pitch: number): void {
-    if (this.playing) return;
-    this.client.unlock();
-    this.client.noteOn(pitch, 0.8);
-    window.setTimeout(() => this.client.noteOff(pitch), 220);
+    if (this.playing || !this.track.instrument) return;
+    this.client.previewNote(this.track.instrument, pitch);
   }
 
   private sendLoop(): void {
@@ -243,7 +446,7 @@ export class RollPanel {
     this.scheduleSave();
   }
 
-  /** The notes to the engine again; a song playing goes on from where it is. */
+  /** The tracks to the engine again; a song playing goes on from where it is. */
   private reload(): void {
     const position = this.currentSec();
     this.client.loadTracks(this.trackSpecs());
@@ -272,13 +475,17 @@ export class RollPanel {
     return secToBeats(this.currentSec(), this.project.bpm);
   }
 
+  private lastBeat(): number {
+    return Math.max(0, ...this.project.tracks.map((t) => songEnd(t.notes)));
+  }
+
   toggle(): void {
     if (this.playing) {
       this.from = this.currentSec();
       this.stop();
       return;
     }
-    const endSec = beatsToSec(songEnd(this.roll.notes), this.project.bpm);
+    const endSec = beatsToSec(this.lastBeat(), this.project.bpm);
     if (!this.project.loop.on && this.from >= endSec) this.from = 0;
     this.start();
   }
@@ -294,7 +501,7 @@ export class RollPanel {
     const tick = () => {
       if (this.startedAt === null) return;
       const beat = this.currentBeat();
-      if (!this.project.loop.on && beat > songEnd(this.roll.notes) + END_PAD_BEATS) {
+      if (!this.project.loop.on && beat > this.lastBeat() + END_PAD_BEATS) {
         this.from = 0;
         this.stop();
         return;

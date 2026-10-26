@@ -1077,3 +1077,54 @@ details.sub.credit > summary {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* 打ち込み: the tracks (one row each: notes, name, the cut it plays, mute, solo, volume, pan). */
+.track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.track-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.track-row.selected {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.track-row .track-name {
+  width: 9em;
+}
+
+.track-row select {
+  max-width: 16em;
+}
+
+.track-row input[type="range"] {
+  width: 80px;
+}
+
+.track-count {
+  min-width: 2em;
+  text-align: right;
+}
+
+.button.toggle.on {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.material-bar .material-select {
+  max-width: 18em;
+}

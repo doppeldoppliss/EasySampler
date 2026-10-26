@@ -11,14 +11,14 @@
 import { applyCorrections, CORRECTION_LABELS, correctionLabel, type CorrectionKind, type PitchCorrection } from "./analysis/corrections";
 import { midiToHz, pitchLabel } from "./analysis/pitch";
 import { EngineClient } from "./audio/engineClient";
-import { loadLastMaterial, saveLastMaterial } from "./audio/lastMaterial";
+import { askToPersist, forget, keep, kept } from "./audio/store";
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
 import type { PitchTrack } from "./analysis/pyin";
 import { buildBatch, buildKit, buildOne, type Built, type BuildInput } from "./export/build";
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
 import { exportFileName, safeBaseName, stripExtension } from "./export/render";
-import { parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
+import { newCutId, parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
 import { hiddenPartsOf, normalizeRemoved, outputLayout } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
 import {
@@ -45,7 +45,7 @@ import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 import { clock, RangePicker } from "./ui/rangePicker";
 import { KEY_NAMES, quantizeToScale, SCALE_LABELS, type ScaleId } from "./instrument/scale";
 import { isMidiFile, SongPanel } from "./ui/songPanel";
-import { RollPanel } from "./ui/rollPanel";
+import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 
 /** The most material one analysis takes; a longer clip goes through the range picker first. */
 const MAX_MATERIAL_SEC = 60;
@@ -65,6 +65,8 @@ const DECODE_REFUSE_SEC = IOS ? 300 : 1800;
 // ---------------------------------------------------------------- state
 
 interface Material {
+  /** Its id in the project (its samples and settings are kept under audio:id and settings:id). */
+  id: string;
   name: string;
   channels: Float32Array[];
   sampleRate: number;
@@ -90,6 +92,14 @@ interface Cut extends CutSettings {
 }
 
 let material: Material | null = null;
+/**
+ * Every material of the project (design.md 13.1): the one in the editor is
+ * `material` (its cuts live in `cuts`); the others wait here with their
+ * settings as last saved, their sources already with the engine.
+ */
+const library = new Map<string, { material: Material; settings: SettingsFile | null }>();
+/** A cut as the engine and the tracks name it. */
+const instrumentId = (materialId: string, cutId: string) => `${materialId}/${cutId}`;
 let cuts: Cut[] = [];
 let current = 0;
 // The current cut, unpacked (kept in sync by syncCut()).
@@ -126,7 +136,10 @@ songPanel.onPlayingChange = (playing) => {
 };
 // (Development only: a handle for checking playback where the page's animation frames do not run.)
 if (import.meta.env.DEV) Object.assign(window, { __easysampler: { client, rollPanel, songPanel } });
-rollPanel.onProjectChange = () => refreshControls();
+rollPanel.onTrackChange = () => {
+  fxTrackLabel.textContent = `「${rollPanel.trackName}」`;
+  refreshControls();
+};
 rollPanel.onPlayingChange = (playing) => {
   if (!playing) return;
   client.stopPreview();
@@ -154,11 +167,13 @@ for (const type of ["pointerdown", "pointerup", "touchend", "click", "keydown"])
 
 /** The material was prepared before the audio started (at a guessed rate): redo it at the real one. */
 async function matchEngineRate(): Promise<void> {
-  if (!material || client.sourceMatchesRate()) return;
-  const { source } = await client.analyze(material.channels, material.sampleRate, undefined, material.analysis.track);
-  material.source = source;
-  material.exportSources.set(source.sampleRate, source);
-  client.setSource(source);
+  for (const { material: m } of library.values()) {
+    if (client.sourceMatchesRate(m.id)) continue;
+    const { source } = await client.analyze(m.channels, m.sampleRate, undefined, m.analysis.track);
+    m.source = source;
+    m.exportSources.set(source.sampleRate, source);
+    client.setSource(source, m.id);
+  }
   client.resendInstrument();
 }
 
@@ -274,10 +289,16 @@ cutName.addEventListener("input", () => {
   cuts[current].name = cutName.value;
   rebuildCutSelect();
   refreshExport();
+  refreshInstruments();
 });
 const addCutButton = button("＋ 区間を追加", "small", () => addCut("next"));
 const dupCutButton = button("複製", "small", () => addCut("copy"));
 const removeCutButton = button("この区間を削除", "small", () => removeCut());
+const materialSelect = el("select", { ariaLabel: "編集する素材", className: "material-select" });
+materialSelect.addEventListener("change", () => switchMaterial(materialSelect.value));
+const removeMaterialButton = button("この素材を外す", "small", () => material && removeMaterial(material.id));
+/** Another file into the project (the one shown now stays in it). */
+const openMoreButton = el("label", { className: "button small", htmlFor: "file", textContent: "＋ 素材を追加" });
 const cutBar = el("div", { className: "cut-bar" }, [
   el("span", { className: "control-label", textContent: "区間" }),
   cutSelect,
@@ -478,6 +499,7 @@ editor.onViewChange = (view) => {
 };
 
 const materialPanel = el("section", { className: "panel" }, [
+  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, openMoreButton, removeMaterialButton]),
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [
@@ -824,6 +846,8 @@ function fxGroup(key: FxKey, label: string, note: string, controls: HTMLElement[
 }
 
 const fxActiveLine = el("span", { className: "fine fx-active" });
+/** Which track the effects panel is showing. */
+const fxTrackLabel = el("span", { className: "fine" });
 function refreshFxSummaries(): void {
   const on: string[] = [];
   for (const { key, summary, label } of fxSummaries) {
@@ -847,9 +871,9 @@ const fxResetButton = button("エフェクトをすべてオフに", "small", ()
 });
 
 const fxPanel = el("details", { className: "panel fx-panel" }, [
-  el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxActiveLine]),
+  el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxTrackLabel, fxActiveLine]),
   el("div", { className: "row" }, [fxResetButton]),
-  el("p", { className: "fine", textContent: "打ち込みのトラックにかかります(上から順に)。試し弾きと、書き出す単音の WAV には入りません。" }),
+  el("p", { className: "fine", textContent: "打ち込みで選んでいるトラックにかかります(上から順に)。試し弾きと、書き出す単音の WAV には入りません。" }),
   fxHead("立ち上がり"),
   fxGroup("transient", "トランジェント(立ち上がり)", "音の頭(アタック)と、そのあとの伸び(サステイン)を別々に上げ下げします。", [
     fxRange("アタック", -12, 12, 0.5, () => fxNow().transient.attackDb, (f, v) => (f.transient.attackDb = v), db, true),
@@ -1495,7 +1519,7 @@ function cutFor(track: PitchTrack | null, m: Markers, name: string, base: Instru
     Object.assign(p, PRESETS.find((x) => x.id === "drum")!.apply(p));
     preset = "drum";
   }
-  return { name, markers: m, params: p, note: Math.max(24, Math.min(96, Math.round(p.root))), noteMode: "auto", presetId: preset, detectedRoot: root?.midi ?? null };
+  return { id: newCutId(), name, markers: m, params: p, note: Math.max(24, Math.min(96, Math.round(p.root))), noteMode: "auto", presetId: preset, detectedRoot: root?.midi ?? null };
 }
 
 /** A clip with less than this much steady sustain is "short": a shout or a word, not a note to stretch. */
@@ -1563,7 +1587,7 @@ function addCut(how: "copy" | "next"): void {
   const duration = material.analysis.durationSec;
   let cut: Cut;
   if (how === "copy") {
-    cut = { ...structuredClone(cuts[current]), name: `${cuts[current].name} のコピー` };
+    cut = { ...structuredClone(cuts[current]), id: newCutId(), name: `${cuts[current].name} のコピー` };
   } else {
     const length = Math.max(0.05, markers.rangeEnd - markers.rangeStart);
     let from = markers.rangeEnd;
@@ -1574,13 +1598,17 @@ function addCut(how: "copy" | "next"): void {
   cuts.splice(current + 1, 0, cut);
   current++;
   applyCurrentCut();
+  defineMaterialCuts();
 }
 
 function removeCut(): void {
   if (cuts.length < 2) return;
+  const gone = cuts[current];
   cuts.splice(current, 1);
   current = Math.min(current, cuts.length - 1);
   applyCurrentCut();
+  if (material && gone) client.dropInstrument(instrumentId(material.id, gone.id));
+  defineMaterialCuts();
 }
 
 // ---------------------------------------------------------------- state → screen
@@ -1588,7 +1616,13 @@ function removeCut(): void {
 function sendInstrument(): void {
   if (!markers) return;
   built = null;
-  client.setInstrument(markers, params, exportLengthSec(exportSettings));
+  if (material && cuts[current]) {
+    const id = instrumentId(material.id, cuts[current].id);
+    client.defineInstrument(id, material.id, markers, params);
+    client.setHold(exportLengthSec(exportSettings));
+    client.setLive(id, null);
+    refreshInstruments();
+  }
   rootLabel.textContent = pitchLabel(params.root);
   rootSource.textContent = params.rootMode === "auto" ? "(自動判定)" : "(手動)";
   refreshExport();
@@ -1600,7 +1634,7 @@ function refreshExport(): void {
   // The tail limit counts in the export BPM (the song's own while one plays); a "stretch" sustain fills the export length.
   if (!songPanel.playing && !rollPanel.playing) client.setTempo(exportSettings.bpm);
   client.setHold(exportLengthSec(exportSettings));
-  rollPanel.setRoot(note);
+  refreshInstruments();
   tuneScaleRow.hidden = params.tune.mode !== "scale";
   refreshSustainHelp();
   if (noteMode === "auto") note = Math.max(24, Math.min(96, Math.round(params.root)));
@@ -1984,7 +2018,7 @@ function settingsBody(): Omit<SettingsFile, "app" | "version" | "savedAt"> {
     material: { name: material!.name, durationSec: material!.analysis.durationSec, sampleRate: material!.sampleRate, channels: material!.channels.length },
     export: exportSettings,
     credit: { ...credit },
-    cuts: cuts.map(({ name, markers: m, params: p, note: n, noteMode: mode, presetId: preset }) => ({ name, markers: m, params: p, note: n, noteMode: mode, presetId: preset })),
+    cuts: cuts.map(({ id, name, markers: m, params: p, note: n, noteMode: mode, presetId: preset }) => ({ id, name, markers: m, params: p, note: n, noteMode: mode, presetId: preset })),
     currentCut: current,
     corrections: material!.corrections,
     pitchRange: material!.pitchRange ?? undefined,
@@ -2099,6 +2133,7 @@ function saveNow(): void {
   if (!material) return;
   const json = serializeSettings(settingsBody());
   safeStorage(settingsKey(material.name, material.channels[0].length, material.sampleRate), json);
+  void keep(`settings:${material.id}`, json);
   recordHistory(json);
 }
 function scheduleSave(): void {
@@ -2123,7 +2158,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 /** Puts a settings file into effect for the loaded material. */
-function applySettings(file: SettingsFile): void {
+function applySettings(file: SettingsFile, analysed = false): void {
   if (!material) return;
   const duration = material.analysis.durationSec;
   cuts = file.cuts.map((c) => {
@@ -2139,6 +2174,10 @@ function applySettings(file: SettingsFile): void {
   Object.assign(credit, file.credit);
   setCreditInputs();
   applyCurrentCut();
+  if (analysed) {
+    refreshFixBar();
+    return;
+  }
   const range = file.pitchRange ?? null;
   const currentRange = material.pitchRange;
   if ((range?.low ?? 0) !== (currentRange?.low ?? 0) || (range?.high ?? 0) !== (currentRange?.high ?? 0)) {
@@ -2196,18 +2235,149 @@ function formatHint(file: File): string {
   return "対応していない形式かもしれません。mp3 / wav / m4a / mp4 などで試してください";
 }
 
-async function load(name: string, channels: Float32Array[], sampleRate: number): Promise<void> {
+/** The editor's material goes back to the library, its settings as they are now. */
+function stashMaterial(): void {
+  if (!material) return;
+  flushSave();
+  const entry = library.get(material.id);
+  if (entry) entry.settings = parseSettings(serializeSettings(settingsBody()));
+}
+
+/** Every cut of the editor's material, as instruments the tracks can play. */
+function defineMaterialCuts(): void {
+  if (!material) return;
+  syncCut();
+  for (const cut of cuts) client.defineInstrument(instrumentId(material.id, cut.id), material.id, cut.markers, cut.params);
+  refreshInstruments();
+}
+
+/** The cuts of every material, for the tracks' lists. */
+function refreshInstruments(): void {
+  const options: InstrumentOption[] = [];
+  const multi = library.size > 1;
+  for (const { material: m, settings } of library.values()) {
+    const list = material && m.id === material.id ? cuts : (settings?.cuts ?? []);
+    for (const cut of list) options.push({ id: instrumentId(m.id, cut.id), label: multi || list.length > 1 ? `${m.name} / ${cut.name}` : m.name, note: cut.note });
+  }
+  rollPanel.setInstruments(options, material && cuts[current] ? instrumentId(material.id, cuts[current].id) : null);
+}
+
+/** A material of the project comes back without being shown: its source and cuts go to the engine. */
+async function loadInBackground(id: string, name: string, channels: Float32Array[], sampleRate: number, settings: SettingsFile | null): Promise<void> {
+  const { analysis: plain, source: plainSource } = await client.analyze(channels, sampleRate);
+  let analysis = plain;
+  let source = plainSource;
+  // Its hand corrections and search range, as the editor would apply them.
+  if (settings && (settings.corrections.length || settings.pitchRange)) {
+    const pyin = settings.pitchRange ? { fminHz: midiToHz(settings.pitchRange.low), fmaxHz: midiToHz(settings.pitchRange.high) } : undefined;
+    const base = settings.pitchRange ? (await client.analyze(channels, sampleRate, undefined, undefined, pyin)).analysis : plain;
+    const corrected = applyCorrections(base.track, settings.corrections);
+    const again = await client.analyze(channels, sampleRate, undefined, corrected);
+    analysis = again.analysis;
+    source = again.source;
+  }
+  const m: Material = { id, name, channels, sampleRate, mono: mixToMono(channels), analysis, original: plain, corrections: settings?.corrections ?? [], pitchRange: settings?.pitchRange ?? null, source, exportSources: new Map([[source.sampleRate, source]]) };
+  library.set(id, { material: m, settings });
+  client.setSource(source, id);
+  for (const cut of settings?.cuts ?? []) client.defineInstrument(instrumentId(id, cut.id), id, cut.markers, { ...cut.params, maxVoices: DEFAULT_PARAMS.maxVoices });
+}
+
+/** Shows another material of the project in the editor. */
+function switchMaterial(id: string): void {
+  const entry = library.get(id);
+  if (!entry || entry.material === material) return;
+  stashMaterial();
+  resetHistory();
+  material = entry.material;
+  showPitchRange();
+  selection = null;
+  editor.setMaterial({ mono: material.mono, sampleRate: material.sampleRate, track: material.analysis.track });
+  rollPanel.setEditing(id);
+  if (entry.settings) applySettings(entry.settings, true);
+  else {
+    freshCuts();
+    applyCurrentCut();
+  }
+  defineMaterialCuts();
+  refreshMaterialSelect();
+  status.textContent = `「${material.name}」を編集しています。`;
+  saveNow();
+}
+
+/** Takes a material out of the project (its samples and settings are forgotten). */
+function removeMaterial(id: string): void {
+  const entry = library.get(id);
+  if (!entry) return;
+  const used = rollPanel.usesMaterial(id);
+  if (!confirm(`「${entry.material.name}」をプロジェクトから外しますか?${used ? "この素材を鳴らしているトラックは無音になります。" : ""}`)) return;
+  const settings = material?.id === id ? settingsBody() : entry.settings;
+  for (const cut of settings?.cuts ?? []) client.dropInstrument(instrumentId(id, cut.id));
+  client.setSource(null, id);
+  library.delete(id);
+  rollPanel.removeMaterial(id);
+  void forget(`audio:${id}`);
+  void forget(`settings:${id}`);
+  if (material?.id === id) {
+    material = null;
+    const next = [...library.keys()].at(-1);
+    if (next) switchMaterialFrom(next);
+    else {
+      workspace.hidden = true;
+      emptyState.hidden = false;
+      status.textContent = "素材を外しました。";
+    }
+  }
+  refreshInstruments();
+  refreshMaterialSelect();
+}
+
+/** switchMaterial without stashing (the editor's material is already gone). */
+function switchMaterialFrom(id: string): void {
+  const entry = library.get(id)!;
+  resetHistory();
+  material = entry.material;
+  showPitchRange();
+  selection = null;
+  editor.setMaterial({ mono: material.mono, sampleRate: material.sampleRate, track: material.analysis.track });
+  rollPanel.setEditing(id);
+  if (entry.settings) applySettings(entry.settings, true);
+  else {
+    freshCuts();
+    applyCurrentCut();
+  }
+  defineMaterialCuts();
+  status.textContent = `「${material.name}」を編集しています。`;
+}
+
+function refreshMaterialSelect(): void {
+  materialSelect.replaceChildren(...[...library.values()].map(({ material: m }) => el("option", { value: m.id, textContent: m.name })));
+  if (material) materialSelect.value = material.id;
+}
+
+/**
+ * Opens a material in the editor: a new one (it joins the project, its samples
+ * are kept) or, with `kept`, one coming back from the store with its settings.
+ */
+async function load(name: string, channels: Float32Array[], sampleRate: number, kept?: { id: string; settings: SettingsFile | null }): Promise<void> {
   status.textContent = `「${name}」を解析しています…`;
+  stashMaterial();
   resetHistory();
   rangeStatus.textContent = "";
   try {
     const { analysis, source, elapsedMs } = await client.analyze(channels, sampleRate);
-    material = { name, channels, sampleRate, mono: mixToMono(channels), analysis, original: analysis, corrections: [], pitchRange: null, source, exportSources: new Map([[source.sampleRate, source]]) };
+    const id = kept?.id ?? newCutId();
+    material = { id, name, channels, sampleRate, mono: mixToMono(channels), analysis, original: analysis, corrections: [], pitchRange: null, source, exportSources: new Map([[source.sampleRate, source]]) };
+    library.set(id, { material, settings: null });
+    if (!kept) {
+      void keep(`audio:${id}`, { name, sampleRate, channels });
+      askToPersist();
+    }
+    rollPanel.addMaterial({ id, name });
     showPitchRange();
     selection = null;
     editor.setMaterial({ mono: material.mono, sampleRate, track: analysis.track });
     refreshFixBar();
-    client.setSource(source);
+    client.setSource(source, id);
     emptyState.hidden = true;
     workspace.hidden = false;
 
@@ -2216,7 +2386,8 @@ async function load(name: string, channels: Float32Array[], sampleRate: number):
     let text =
       `「${name}」 ${seconds} 秒 — 解析 ${Math.round(elapsedMs)} ms。` +
       (root ? ` 音程 ${pitchLabel(root.midi)}(信頼度 ${Math.round(root.confidence * 100)}%)。` : " 音程が見つからなかったので、ワンショット(ドラム・効果音)として扱います。");
-    const stored = safeStorage(settingsKey(name, channels[0].length, sampleRate));
+    // Its settings: as kept in the project, or (a file opened again) as last saved for that file.
+    const stored = kept ? (kept.settings ? serializeSettings(kept.settings) : null) : safeStorage(settingsKey(name, channels[0].length, sampleRate));
     let restored = false;
     if (stored) {
       try {
@@ -2232,9 +2403,10 @@ async function load(name: string, channels: Float32Array[], sampleRate: number):
     }
     const shortNote = !restored && presetId === "short" ? " 伸ばせる部分が短いので「短い素材(長さ保持)」にしました。伸ばして使うならプリセットを「シンセ化」などに。" : "";
     status.replaceChildren(text + (restored ? " 前回の設定を復元しました。" : "") + shortNote);
-    if (restored) status.append(" ", button("最初から", "small", () => resetSettingsButton.click()));
-    // Kept for next time: closing the browser and opening it again comes back here, edits and all.
-    void saveLastMaterial(name === DEMO_NAME && channels.length === 1 && sampleRate === DEMO_RATE ? { kind: "demo" } : { kind: "clip", name, sampleRate, channels });
+    if (restored && !kept) status.append(" ", button("最初から", "small", () => resetSettingsButton.click()));
+    defineMaterialCuts();
+    refreshMaterialSelect();
+    saveNow();
   } catch (error) {
     status.textContent = `読み込めませんでした: ${error instanceof Error ? error.message : error}`;
   }
@@ -2403,14 +2575,26 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
 refreshControls();
 refreshExport();
 
-// The material open when the page was last closed comes back (its edits are restored by load()).
+// The project comes back: its tracks, then its materials (the one being edited last, so it is the one shown).
 void (async () => {
-  const last = await loadLastMaterial();
-  if (!last || material || !pickerPanel.hidden) return; // nothing kept, or something was opened meanwhile
-  if (last.kind === "demo") loadDemo();
-  else {
-    longClip = null;
-    rePickButton.hidden = true;
-    await load(last.name, last.channels, last.sampleRate);
+  const project = await rollPanel.restore();
+  const order = [...project.materials].sort((a, b) => Number(a.id === project.editing) - Number(b.id === project.editing));
+  for (const m of order) {
+    const audio = (await kept(`audio:${m.id}`)) as { name: string; sampleRate: number; channels: Float32Array[] } | undefined;
+    if (!audio?.channels?.length) {
+      rollPanel.removeMaterial(m.id);
+      continue;
+    }
+    const stored = await kept(`settings:${m.id}`);
+    let settings: SettingsFile | null = null;
+    try {
+      settings = typeof stored === "string" ? parseSettings(stored) : null;
+    } catch {
+      settings = null;
+    }
+    if (m.id === project.editing || m === order.at(-1)) await load(audio.name, audio.channels, audio.sampleRate, { id: m.id, settings });
+    else await loadInBackground(m.id, audio.name, audio.channels, audio.sampleRate, settings);
   }
+  refreshInstruments();
+  refreshMaterialSelect();
 })();

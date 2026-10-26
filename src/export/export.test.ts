@@ -19,7 +19,7 @@ function setup() {
   const material = demoSyllable(SR);
   const analysis = analyzeMaterial([material], SR);
   const source = prepareSource([material], analysis, SR);
-  const cut: CutSettings = { name: "区間 1", markers: analysis.markers, params: { ...DEFAULT_PARAMS, root: analysis.root!.midi }, note: 62, noteMode: "auto" };
+  const cut: CutSettings = { id: "c1", name: "区間 1", markers: analysis.markers, params: { ...DEFAULT_PARAMS, root: analysis.root!.midi }, note: 62, noteMode: "auto" };
   const credit = { title: "テスト", url: "https://example.com/sm1", timecode: "0:12", memo: "" };
   return { material, analysis, source, cut, credit };
 }

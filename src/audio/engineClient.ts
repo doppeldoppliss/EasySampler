@@ -139,8 +139,19 @@ export class EngineClient {
     this.post({ type: "dropInstrument", id });
   }
 
+  /** A short note on an instrument (placing a note on a track), apart from the keyboard. */
+  previewNote(instrument: string, note: number, sec = 0.25): void {
+    this.claimPlayback();
+    this.unlock();
+    this.post({ type: "preview", instrument, note, sec });
+  }
+
+  /** The instrument the keyboard plays (曲で試す plays its material part on it too). */
+  private liveInstrument: string = CURRENT_INSTRUMENT;
+
   /** What the keyboard plays, and through which effects. */
   setLive(instrument: string | null, fx: FxSettings | null): void {
+    if (instrument) this.liveInstrument = instrument;
     this.pending = this.pending.filter((m) => m.type !== "live");
     this.post({ type: "live", instrument, fx });
   }
@@ -208,7 +219,7 @@ export class EngineClient {
   loadSong(material: SeqNote[], backing: SeqNote[]): void {
     const plain = { pan: 0, mute: false, solo: false };
     this.loadTracks([
-      { id: "material", instrument: CURRENT_INSTRUMENT, notes: material, gain: 1, fx: null, ...plain },
+      { id: "material", instrument: this.liveInstrument, notes: material, gain: 1, fx: null, ...plain },
       { id: "backing", instrument: "backing", notes: backing, gain: this.backingGain, fx: null, ...plain },
     ]);
   }

@@ -21,7 +21,11 @@ export interface Note {
 }
 
 export interface Track {
+  /** Stable within the project (the mixer and the audio thread know a track by it). */
+  id: string;
   name: string;
+  /** The cut it plays: "materialId/cutId" (design.md 13.1, a track = one cut), or null when none is chosen. */
+  instrument: string | null;
   notes: Note[];
   /** The track's effects (design.md 13.1: effects are the song side's, not the cut's). */
   fx: FxSettings;
@@ -33,8 +37,18 @@ export interface Track {
   solo: boolean;
 }
 
-export function newTrack(name: string): Track {
-  return { name, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false };
+export function newTrack(name: string, instrument: string | null = null): Track {
+  return { id: newTrackId(), name, instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false };
+}
+
+export function newTrackId(): string {
+  return `t${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/** A material in the project: its samples and settings are kept under their own keys (audio:id, settings:id). */
+export interface ProjectMaterial {
+  id: string;
+  name: string;
 }
 
 export interface Project {
@@ -42,8 +56,11 @@ export interface Project {
   bpm: number;
   /** Beats in a bar (4/4 for now: no time-signature changes, design.md 13). */
   beatsPerBar: number;
-  /** Phase 1 edits one track; it plays on the material open now. */
   tracks: Track[];
+  /** The materials, in the order they were opened. */
+  materials: ProjectMaterial[];
+  /** The material shown in the editor. */
+  editing: string | null;
   /** The loop in beats, and whether playback follows it. */
   loop: { start: number; end: number; on: boolean };
   /** Effects on the whole mix. */
@@ -54,7 +71,7 @@ export const MIN_LENGTH = 1 / 64;
 export const DEFAULT_VELOCITY = 0.8;
 
 export function emptyProject(): Project {
-  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("素材")], loop: { start: 0, end: 16, on: false }, masterFx: structuredClone(DEFAULT_FX) };
+  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, masterFx: structuredClone(DEFAULT_FX) };
 }
 
 let nextId = 1;
@@ -157,7 +174,9 @@ export function sanitizeProject(raw: unknown): Project {
               }))
           : [];
         return {
+          id: typeof tr.id === "string" && tr.id ? tr.id : newTrackId(),
           name: typeof tr.name === "string" && tr.name ? tr.name : `トラック ${i + 1}`,
+          instrument: typeof tr.instrument === "string" && tr.instrument.includes("/") ? tr.instrument : null,
           notes: sortNotes(notes),
           fx: sanitizeFx(tr.fx),
           gain: num(tr.gain, 1, 0, 4),
@@ -175,6 +194,12 @@ export function sanitizeProject(raw: unknown): Project {
     bpm: num(r.bpm, d.bpm, 20, 400),
     beatsPerBar: Math.round(num(r.beatsPerBar, 4, 1, 16)),
     tracks: tracks.length ? tracks : d.tracks,
+    materials: Array.isArray(r.materials)
+      ? r.materials
+          .filter((m): m is Record<string, unknown> => !!m && typeof m === "object" && typeof (m as Record<string, unknown>).id === "string")
+          .map((m) => ({ id: m.id as string, name: typeof m.name === "string" ? m.name : "素材" }))
+      : [],
+    editing: typeof r.editing === "string" ? r.editing : null,
     loop: end > start ? { start, end, on: loop.on === true } : d.loop,
     masterFx: sanitizeFx(r.masterFx),
   };

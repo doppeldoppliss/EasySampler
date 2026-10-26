@@ -73,7 +73,7 @@ describe("buildWavetable", () => {
 
   it("is exported as one mono WAV whose length is a whole number of frames", async () => {
     const { analysis, source } = setup();
-    const cut = { name: "x", markers: analysis.markers, params: { ...DEFAULT_PARAMS, root: analysis.root!.midi }, note: 62, noteMode: "auto" as const };
+    const cut = { id: "c1", name: "x", markers: analysis.markers, params: { ...DEFAULT_PARAMS, root: analysis.root!.midi }, note: 62, noteMode: "auto" as const };
     const built = await buildOne({ baseName: "ore", source, cut, settings: { ...DEFAULT_EXPORT, format: "wavetable" }, credit: { title: "", url: "", timecode: "", memo: "" } });
     expect(built.fileName).toBe("ore_wavetable.wav");
     const chunks = readWavChunks(await built.blob.arrayBuffer());

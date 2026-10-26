@@ -28,6 +28,8 @@ export type ToEngine =
   | { type: "noteOn"; note: number; velocity: number }
   | { type: "noteOff"; note: number }
   | { type: "allOff" }
+  // A short note on an instrument (placing a note on a track's roll), apart from the keyboard.
+  | { type: "preview"; instrument: string; note: number; sec: number }
   // A song: its tracks (replacing any), then play from `fromSec` at context frame `atFrame`.
   | { type: "song"; tracks: TrackSpec[] }
   | { type: "songMix"; id: string; mix: MixSettings }

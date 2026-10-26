@@ -10,6 +10,8 @@ import { clampMarkers } from "../instrument/markers";
 import { DEFAULT_EXPORT, DEFAULT_FX, DEFAULT_PARAMS, type Credit, type ExportSettings, type FxBeats, type FxSettings, type InstrumentParams, type Markers } from "../instrument/types";
 
 export interface CutSettings {
+  /** Stable within its material: a track names the cut it plays by it. */
+  id: string;
   name: string;
   markers: Markers;
   params: InstrumentParams;
@@ -32,6 +34,11 @@ export interface SettingsFile {
   corrections: PitchCorrection[];
   /** The pitch search range the analysis was run with (探索範囲), when narrowed. */
   pitchRange?: { low: number; high: number };
+}
+
+/** A fresh id for a cut (or a material): short, random enough within a project. */
+export function newCutId(): string {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
 
 export function serializeSettings(file: Omit<SettingsFile, "app" | "version" | "savedAt">): string {
@@ -116,6 +123,7 @@ function sanitizeCut(raw: unknown, index: number): CutSettings | null {
   if (removed.length) markers.removed = removed;
   else delete markers.removed;
   return {
+    id: typeof raw.id === "string" && raw.id ? raw.id : newCutId(),
     name: typeof raw.name === "string" && raw.name.trim() ? raw.name : `区間 ${index + 1}`,
     markers,
     params: sanitizeParams(raw.params),

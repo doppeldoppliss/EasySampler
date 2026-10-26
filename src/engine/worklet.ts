@@ -82,6 +82,10 @@ class EngineProcessor extends AudioWorkletProcessor {
   private trackSounds = new Map<string, TrackSound>();
   private trackSpecs: TrackSpec[] = [];
   private readonly live = new EngineSound();
+  /** Placing a note on a track: its instrument, briefly, without effects. */
+  private readonly preview = new EngineSound();
+  private previewLeft = 0;
+  private previewNote = -1;
   private readonly liveFx = new FxChain(sampleRate);
   private liveFxOn = false;
   private readonly master = new FxChain(sampleRate);
@@ -116,7 +120,7 @@ class EngineProcessor extends AudioWorkletProcessor {
 
   /** Every engine on an instrument (or on any instrument of a material) gets it again. */
   private refresh(match: (inst: string) => boolean): void {
-    const all = [this.live, ...this.trackSounds.values()];
+    const all = [this.live, this.preview, ...this.trackSounds.values()];
     for (const sound of all) if (sound instanceof EngineSound && sound.instrument !== null && match(sound.instrument)) this.apply(sound, sound.instrument);
   }
 
@@ -164,13 +168,20 @@ class EngineProcessor extends AudioWorkletProcessor {
       case "allOff":
         this.live.allOff();
         break;
+      case "preview":
+        if (this.preview.instrument !== message.instrument) this.apply(this.preview, message.instrument);
+        if (this.previewNote >= 0) this.preview.noteOff(this.previewNote);
+        this.preview.noteOn(message.note, 0.8);
+        this.previewNote = message.note;
+        this.previewLeft = Math.round(message.sec * sampleRate);
+        break;
       case "hold":
         this.hold = message.sec;
-        for (const sound of [this.live, ...this.trackSounds.values()]) if (sound instanceof EngineSound) sound.engine.setHold(message.sec);
+        for (const sound of [this.live, this.preview, ...this.trackSounds.values()]) if (sound instanceof EngineSound) sound.engine.setHold(message.sec);
         break;
       case "tempo":
         this.bpm = message.bpm;
-        for (const sound of [this.live, ...this.trackSounds.values()]) if (sound instanceof EngineSound) sound.engine.setTempo(message.bpm);
+        for (const sound of [this.live, this.preview, ...this.trackSounds.values()]) if (sound instanceof EngineSound) sound.engine.setTempo(message.bpm);
         this.liveFx.setTempo(message.bpm);
         this.master.setTempo(message.bpm);
         this.song.setTempo(message.bpm);
@@ -215,6 +226,18 @@ class EngineProcessor extends AudioWorkletProcessor {
     if (!this.live.idle()) {
       this.live.render(this.liveL, this.liveR, frames);
       if (this.liveFxOn) this.liveFx.process(this.liveL, this.liveR, frames);
+      for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
+      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
+    }
+    if (!this.preview.idle()) {
+      if (this.previewNote >= 0) {
+        this.previewLeft -= frames;
+        if (this.previewLeft <= 0) {
+          this.preview.noteOff(this.previewNote);
+          this.previewNote = -1;
+        }
+      }
+      this.preview.render(this.liveL, this.liveR, frames);
       for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
       if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
     }

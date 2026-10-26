@@ -32,8 +32,7 @@ export class EngineClient {
   private instruments = new Map<string, Extract<ToEngine, { type: "instrument" }>>();
   /** The song's tracks as last loaded (for mix changes on top). */
   private songTracks: TrackSpec[] = [];
-  /** The one-material screens' cut: its effects follow its settings until tracks own effects. */
-  private currentFx: FxSettings | null = null;
+
   private worker = new Worker(new URL("../workers/analysis.worker.ts", import.meta.url), { type: "module" });
   private nextId = 1;
   private waiting = new Map<number, (response: AnalysisResponse) => void>();
@@ -148,15 +147,13 @@ export class EngineClient {
 
   /**
    * The one-material screens' call: the cut being edited is instrument
-   * "current" of the material, the keyboard plays it through its effects, and
-   * so does a song track on it.
+   * "current" of the material, and the keyboard plays it dry (effects are a
+   * track's, design.md 13.1).
    */
   setInstrument(markers: Markers, params: InstrumentParams, hold = 1): void {
     this.defineInstrument(CURRENT_INSTRUMENT, MAIN_MATERIAL, markers, params);
     this.setHold(hold);
-    this.currentFx = params.fx;
-    this.setLive(CURRENT_INSTRUMENT, params.fx);
-    for (const t of this.songTracks) if (t.instrument === CURRENT_INSTRUMENT) this.setTrackMix(t.id, { ...t, fx: params.fx });
+    this.setLive(CURRENT_INSTRUMENT, null);
   }
 
   // Notes played before the worklet is up (the very first tap starts the
@@ -211,7 +208,7 @@ export class EngineClient {
   loadSong(material: SeqNote[], backing: SeqNote[]): void {
     const plain = { pan: 0, mute: false, solo: false };
     this.loadTracks([
-      { id: "material", instrument: CURRENT_INSTRUMENT, notes: material, gain: 1, fx: this.currentFx, ...plain },
+      { id: "material", instrument: CURRENT_INSTRUMENT, notes: material, gain: 1, fx: null, ...plain },
       { id: "backing", instrument: "backing", notes: backing, gain: this.backingGain, fx: null, ...plain },
     ]);
   }

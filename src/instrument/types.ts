@@ -119,8 +119,6 @@ export interface InstrumentParams {
    */
   amp: { attack: number; decay: number; sustain: number; release: number; velocitySens: number; fadeOut: number };
   maxVoices: number;
-  /** The effect rack (エフェクト), after the voices: what the keyboard, 曲で試す and the file all get. */
-  fx: FxSettings;
 }
 
 /** LFO speeds, in beats per cycle (counted in the export BPM, or the song's while 曲で試す plays). */
@@ -190,7 +188,6 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, vibratoAttackSec: 0.15, vibratoReleaseSec: 0, vibratoPhase: 0, tremoloDepth: 0, driftCents: 0, micro: true, smoothSec: 0, keepDrift: 1, keepModulation: 1 },
   amp: { attack: 0.005, decay: 0.1, sustain: 1, release: 0.02, velocitySens: 0.5, fadeOut: 0 },
   maxVoices: 24,
-  fx: DEFAULT_FX,
 };
 
 export interface Preset {

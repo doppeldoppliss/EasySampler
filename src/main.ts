@@ -126,6 +126,7 @@ songPanel.onPlayingChange = (playing) => {
 };
 // (Development only: a handle for checking playback where the page's animation frames do not run.)
 if (import.meta.env.DEV) Object.assign(window, { __easysampler: { client, rollPanel, songPanel } });
+rollPanel.onProjectChange = () => refreshControls();
 rollPanel.onPlayingChange = (playing) => {
   if (!playing) return;
   client.stopPreview();
@@ -652,7 +653,7 @@ function refreshSustainHelp(): void {
 const tunePanel = el("section", { className: "panel tune" }, [
   el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "音名" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]),
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
-  el("p", { className: "fine help", textContent: "プリセットは出発点です。つまみを動かすと「(カスタム)」になります。伸ばし方・フェード・エフェクトは変えません。" }),
+  el("p", { className: "fine help", textContent: "プリセットは出発点です。つまみを動かすと「(カスタム)」になります。伸ばし方・フェードは変えません。" }),
   partsRow,
   partsHelp,
   select(
@@ -757,18 +758,52 @@ const BEATS: [string, string][] = [
   ["8", "2 小節"],
 ];
 
+/** The track's effect rack (design.md 13.1: effects are the song side's). */
+function fxNow(): FxSettings {
+  return rollPanel.trackFx();
+}
+
+function fxRange(label: string, min: number, max: number, step: number, get: () => number, set: (f: FxSettings, v: number) => void, format: (v: number) => string, _keep?: boolean): HTMLElement {
+  const input = el("input", { type: "range", min: String(min), max: String(max), step: String(step) });
+  const value = el("output", { className: "num" });
+  const refresh = () => {
+    input.value = String(get());
+    value.textContent = format(get());
+  };
+  input.addEventListener("input", () => {
+    rollPanel.updateTrackFx((f) => set(f, Number(input.value)));
+    value.textContent = format(Number(input.value));
+  });
+  controlsRefreshers.push(refresh);
+  return el("label", { className: "control" }, [el("span", { className: "control-label", textContent: label }), input, value]);
+}
+
+function fxSelect<T extends string>(label: string, options: [T, string][], get: () => T, set: (f: FxSettings, v: T) => void, _keep?: boolean): HTMLElement {
+  const input = el("select", {}, options.map(([value, text]) => el("option", { value, textContent: text })));
+  controlsRefreshers.push(() => (input.value = get()));
+  input.addEventListener("change", () => rollPanel.updateTrackFx((f) => set(f, input.value as T)));
+  return el("label", { className: "control" }, [el("span", { className: "control-label", textContent: label }), input]);
+}
+
+function fxCheck(label: string, get: () => boolean, set: (f: FxSettings, v: boolean) => void): HTMLElement {
+  const input = el("input", { type: "checkbox" });
+  controlsRefreshers.push(() => (input.checked = get()));
+  input.addEventListener("change", () => rollPanel.updateTrackFx((f) => set(f, input.checked)));
+  return el("label", { className: "control check" }, [input, el("span", { textContent: label })]);
+}
+
 /** A log-scaled frequency slider (0–1000 on the slider, `lo`–`hi` Hz); with `off`, its end reads as off. */
-function fxFreq(label: string, lo: number, hi: number, get: () => number, set: (p: InstrumentParams, v: number) => void, off?: { at: number; text: string }): HTMLElement {
+function fxFreq(label: string, lo: number, hi: number, get: () => number, set: (f: FxSettings, v: number) => void, off?: { at: number; text: string }): HTMLElement {
   const toPos = (f: number) => (1000 * Math.log(f / lo)) / Math.log(hi / lo);
   const toHz = (pos: number) => lo * (hi / lo) ** (pos / 1000);
   const isOff = (pos: number) => off !== undefined && Math.abs(toHz(pos) - off.at) / off.at < 0.02;
-  return range(
+  return fxRange(
     label,
     0,
     1000,
     1,
     () => toPos(Math.max(lo, Math.min(hi, get() || lo))),
-    (p, v) => set(p, isOff(v) ? off!.at : Math.round(toHz(v))),
+    (f, v) => set(f, isOff(v) ? off!.at : Math.round(toHz(v))),
     (v) => (isOff(v) ? off!.text : hz(toHz(v))),
     true,
   );
@@ -779,7 +814,7 @@ function fxGroup(key: FxKey, label: string, note: string, controls: HTMLElement[
   fxSummaries.push({ key, summary, label });
   const group = el("details", { className: "sub fx" }, [
     summary,
-    check("オン", () => params.fx[key].on, (p, v) => (p.fx[key].on = v), true),
+    fxCheck("オン", () => fxNow()[key].on, (f, v) => (f[key].on = v)),
     el("p", { className: "fine help", textContent: note }),
     ...controls,
   ]);
@@ -792,25 +827,87 @@ const fxActiveLine = el("span", { className: "fine fx-active" });
 function refreshFxSummaries(): void {
   const on: string[] = [];
   for (const { key, summary, label } of fxSummaries) {
-    const active = params.fx[key].on;
+    const active = fxNow()[key].on;
     summary.textContent = active ? `${label}(オン)` : label;
     summary.classList.toggle("on", active);
     if (active) on.push(label.replace(/\(.*\)$/, ""));
   }
-  const fades: string[] = [];
-  if (params.amp.attack >= 0.02) fades.push(`入り ${ms(params.amp.attack)}`);
-  if (params.amp.fadeOut > 0) fades.push(`終わり ${ms(params.amp.fadeOut)}`);
-  fadeSummary.textContent = fades.length ? `フェード(${fades.join("・")})` : "フェード(入り・終わり)";
-  fadeSummary.classList.toggle("on", fades.length > 0);
-  const all = [...(fades.length ? ["フェード"] : []), ...on];
-  fxActiveLine.textContent = all.length ? `オン: ${all.join("、")}` : "すべてオフ(素材の音そのまま)";
-  if (all.length) fxPanel.open = true;
+  fxActiveLine.textContent = on.length ? `オン: ${on.join("、")}` : "すべてオフ";
+  if (on.length) fxPanel.open = true;
 }
 
 /** A heading between the groups: the effects come in the order they are applied, in sections. */
 function fxHead(text: string): HTMLElement {
   return el("h3", { className: "fx-head", textContent: text });
 }
+
+const fxResetButton = button("エフェクトをすべてオフに", "small", () => {
+  rollPanel.updateTrackFx((f) => Object.assign(f, structuredClone(DEFAULT_FX)));
+  refreshControls();
+});
+
+const fxPanel = el("details", { className: "panel fx-panel" }, [
+  el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxActiveLine]),
+  el("div", { className: "row" }, [fxResetButton]),
+  el("p", { className: "fine", textContent: "打ち込みのトラックにかかります(上から順に)。試し弾きと、書き出す単音の WAV には入りません。" }),
+  fxHead("立ち上がり"),
+  fxGroup("transient", "トランジェント(立ち上がり)", "音の頭(アタック)と、そのあとの伸び(サステイン)を別々に上げ下げします。", [
+    fxRange("アタック", -12, 12, 0.5, () => fxNow().transient.attackDb, (f, v) => (f.transient.attackDb = v), db, true),
+    fxRange("サステイン", -12, 12, 0.5, () => fxNow().transient.sustainDb, (f, v) => (f.transient.sustainDb = v), db, true),
+  ]),
+  fxHead("音色"),
+  fxGroup("eq", "EQ", "低域カット・低域・中域(ベル)・高域・高域カット。", [
+    fxFreq("低域カット", 20, 2000, () => fxNow().eq.lowCutHz, (f, v) => (f.eq.lowCutHz = v <= 20 ? 0 : v), { at: 20, text: "オフ" }),
+    fxRange("低域", -18, 18, 0.5, () => fxNow().eq.lowDb, (f, v) => (f.eq.lowDb = v), db, true),
+    fxFreq("低域の周波数", 20, 1000, () => fxNow().eq.lowHz, (f, v) => (f.eq.lowHz = v)),
+    fxRange("中域", -18, 18, 0.5, () => fxNow().eq.midDb, (f, v) => (f.eq.midDb = v), db, true),
+    fxFreq("中域の周波数", 100, 10000, () => fxNow().eq.midHz, (f, v) => (f.eq.midHz = v)),
+    fxRange("中域の幅(Q)", 0.3, 8, 0.1, () => fxNow().eq.midQ, (f, v) => (f.eq.midQ = v), (v) => v.toFixed(1), true),
+    fxRange("高域", -18, 18, 0.5, () => fxNow().eq.highDb, (f, v) => (f.eq.highDb = v), db, true),
+    fxFreq("高域の周波数", 1000, 18000, () => fxNow().eq.highHz, (f, v) => (f.eq.highHz = v)),
+    fxFreq("高域カット", 500, 20000, () => fxNow().eq.highCutHz, (f, v) => (f.eq.highCutHz = v), { at: 20000, text: "オフ" }),
+  ]),
+  fxGroup("saturation", "サチュレーション(真空管風の歪み)", "音を太く前に出します。かけすぎると歪みが目立ちます。", [
+    fxRange("ドライブ", 0, 1, 0.01, () => fxNow().saturation.drive, (f, v) => (f.saturation.drive = v), pct, true),
+    fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().saturation.mix, (f, v) => (f.saturation.mix = v), pct, true),
+  ]),
+  fxGroup("air", "エア(高域の抜け)", "高い音を持ち上げ、少し倍音を足して抜けをよくします。上げすぎると耳に痛くなります。", [
+    fxRange("量", 0, 1, 0.01, () => fxNow().air.amount, (f, v) => (f.air.amount = v), pct, true),
+  ]),
+  fxHead("飛び道具"),
+  fxGroup("filter", "フィルター(LFO)", "カットオフを拍に合わせて揺らします。揺れの幅を 0 にすれば、ふつうのフィルターです。", [
+    fxSelect("種類", [["lowpass", "ローパス"], ["highpass", "ハイパス"], ["bandpass", "バンドパス"]], () => fxNow().filter.type, (f, v) => (f.filter.type = v), true),
+    fxFreq("カットオフ", 40, 18000, () => fxNow().filter.cutoffHz, (f, v) => (f.filter.cutoffHz = v)),
+    fxRange("レゾナンス", 0, 1, 0.01, () => fxNow().filter.resonance, (f, v) => (f.filter.resonance = v), pct, true),
+    fxRange("揺れの幅", 0, 6, 0.1, () => fxNow().filter.lfoOctaves, (f, v) => (f.filter.lfoOctaves = v), (v) => `±${v.toFixed(1)} オクターブ`, true),
+    fxSelect("揺れの周期", BEATS, () => String(fxNow().filter.lfoBeats), (f, v) => (f.filter.lfoBeats = Number(v) as FxBeats), true),
+  ]),
+  fxGroup("crush", "ビットクラッシャー", "ビット数とサンプリングレートを落として、ゲーム機のようなざらついた音にします。", [
+    fxRange("ビット数", 1, 16, 1, () => fxNow().crush.bits, (f, v) => (f.crush.bits = v), (v) => `${v} bit`, true),
+    fxRange("間引き", 1, 32, 1, () => fxNow().crush.downsample, (f, v) => (f.crush.downsample = v), (v) => (v === 1 ? "なし" : `1/${v}`), true),
+    fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().crush.mix, (f, v) => (f.crush.mix = v), pct, true),
+  ]),
+  fxHead("広がり"),
+  fxGroup("chorus", "コーラス", "少しずらした音を左右に重ねて、厚みと広がりを出します。モノラルの素材もステレオになります。", [
+    fxRange("速さ", 0.1, 5, 0.05, () => fxNow().chorus.rateHz, (f, v) => (f.chorus.rateHz = v), (v) => `${v.toFixed(2)} Hz`, true),
+    fxRange("深さ", 0, 12, 0.1, () => fxNow().chorus.depthMs, (f, v) => (f.chorus.depthMs = v), (v) => `${v.toFixed(1)} ms`, true),
+    fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().chorus.mix, (f, v) => (f.chorus.mix = v), pct, true),
+  ]),
+  fxGroup("width", "ステレオ幅(ミッド/サイド)", "左右の広がり(サイド)と中央(ミッド)を別々に調整します。モノラルの素材は広がらないので、コーラスと組み合わせます。", [
+    fxRange("広がり(サイド)", 0, 3, 0.01, () => fxNow().width.side, (f, v) => (f.width.side = v), (v) => (v === 0 ? "モノラル" : pct(v)), true),
+    fxRange("中央(ミッド)", -12, 6, 0.5, () => fxNow().width.midDb, (f, v) => (f.width.midDb = v), db, true),
+  ]),
+  fxGroup("pan", "オートパン", "音を拍に合わせて左右に振ります。アルペジオなどに。", [
+    fxRange("深さ", 0, 1, 0.01, () => fxNow().pan.depth, (f, v) => (f.pan.depth = v), pct, true),
+    fxSelect("周期", BEATS, () => String(fxNow().pan.beats), (f, v) => (f.pan.beats = Number(v) as FxBeats), true),
+  ]),
+  fxHead("仕上げ"),
+  fxGroup("limiter", "リミッター", "最後に音量を上げつつ、天井を超えないように抑えます。", [
+    fxRange("入力ゲイン", 0, 18, 0.5, () => fxNow().limiter.gainDb, (f, v) => (f.limiter.gainDb = v), db, true),
+    fxRange("天井", -12, 0, 0.1, () => fxNow().limiter.ceilingDb, (f, v) => (f.limiter.ceilingDb = v), (v) => `${v.toFixed(1)} dBFS`, true),
+    fxRange("リリース", 5, 500, 1, () => fxNow().limiter.releaseMs, (f, v) => (f.limiter.releaseMs = v), (v) => `${Math.round(v)} ms`, true),
+  ]),
+]);
 
 // フェード: the voice's own attack and a fade before the material runs out — not in the rack, but where it reads best.
 const fadeSummary = el("summary");
@@ -820,84 +917,22 @@ const fadeGroup = el("details", { className: "sub fx" }, [
   range("入りのフェード", 0, 2, 0.005, () => params.amp.attack, (p, v) => (p.amp.attack = Math.max(0.001, v)), ms, true),
   range("終わりのフェード", 0, 3, 0.01, () => params.amp.fadeOut, (p, v) => (p.amp.fadeOut = v), ms, true),
 ]);
-fadeGroup.addEventListener("change", refreshFxSummaries);
+function refreshFadeSummary(): void {
+  const fades: string[] = [];
+  if (params.amp.attack >= 0.02) fades.push(`入り ${ms(params.amp.attack)}`);
+  if (params.amp.fadeOut > 0) fades.push(`終わり ${ms(params.amp.fadeOut)}`);
+  fadeSummary.textContent = fades.length ? `フェード(${fades.join("・")})` : "フェード(入り・終わり)";
+  fadeSummary.classList.toggle("on", fades.length > 0);
+}
+fadeGroup.addEventListener("change", refreshFadeSummary);
+controlsRefreshers.push(refreshFadeSummary);
 fadeGroup.addEventListener("toggle", () => refreshFadeGrips());
+// (The fades shape the cut's own sound, so they sit with its settings, after the length.)
+lengthBlock.after(fadeGroup);
 function refreshFadeGrips(): void {
   editor.setFadeGrips(fadeGroup.open || params.amp.attack >= 0.02 || params.amp.fadeOut > 0);
 }
 controlsRefreshers.push(refreshFxSummaries);
-
-const fxResetButton = button("エフェクトとフェードをすべてオフに", "small", () => {
-  update((p) => {
-    p.fx = structuredClone(DEFAULT_FX);
-    p.amp = { ...p.amp, attack: DEFAULT_PARAMS.amp.attack, fadeOut: DEFAULT_PARAMS.amp.fadeOut };
-  }, true);
-  refreshControls();
-});
-
-const fxPanel = el("details", { className: "panel fx-panel" }, [
-  el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxActiveLine]),
-  el("div", { className: "row" }, [fxResetButton]),
-  el("p", { className: "fine", textContent: "上から順にかかります。試し弾き・「曲で試す」・書き出す WAV のすべてに入ります(Vital 用ウェーブテーブルを除く)。区間ごとの設定です。" }),
-  fxHead("音量と立ち上がり"),
-  fadeGroup,
-  fxGroup("transient", "トランジェント(立ち上がり)", "音の頭(アタック)と、そのあとの伸び(サステイン)を別々に上げ下げします。", [
-    range("アタック", -12, 12, 0.5, () => params.fx.transient.attackDb, (p, v) => (p.fx.transient.attackDb = v), db, true),
-    range("サステイン", -12, 12, 0.5, () => params.fx.transient.sustainDb, (p, v) => (p.fx.transient.sustainDb = v), db, true),
-  ]),
-  fxHead("音色"),
-  fxGroup("eq", "EQ", "低域カット・低域・中域(ベル)・高域・高域カット。", [
-    fxFreq("低域カット", 20, 2000, () => params.fx.eq.lowCutHz, (p, v) => (p.fx.eq.lowCutHz = v <= 20 ? 0 : v), { at: 20, text: "オフ" }),
-    range("低域", -18, 18, 0.5, () => params.fx.eq.lowDb, (p, v) => (p.fx.eq.lowDb = v), db, true),
-    fxFreq("低域の周波数", 20, 1000, () => params.fx.eq.lowHz, (p, v) => (p.fx.eq.lowHz = v)),
-    range("中域", -18, 18, 0.5, () => params.fx.eq.midDb, (p, v) => (p.fx.eq.midDb = v), db, true),
-    fxFreq("中域の周波数", 100, 10000, () => params.fx.eq.midHz, (p, v) => (p.fx.eq.midHz = v)),
-    range("中域の幅(Q)", 0.3, 8, 0.1, () => params.fx.eq.midQ, (p, v) => (p.fx.eq.midQ = v), (v) => v.toFixed(1), true),
-    range("高域", -18, 18, 0.5, () => params.fx.eq.highDb, (p, v) => (p.fx.eq.highDb = v), db, true),
-    fxFreq("高域の周波数", 1000, 18000, () => params.fx.eq.highHz, (p, v) => (p.fx.eq.highHz = v)),
-    fxFreq("高域カット", 500, 20000, () => params.fx.eq.highCutHz, (p, v) => (p.fx.eq.highCutHz = v), { at: 20000, text: "オフ" }),
-  ]),
-  fxGroup("saturation", "サチュレーション(真空管風の歪み)", "音を太く前に出します。かけすぎると歪みが目立ちます。", [
-    range("ドライブ", 0, 1, 0.01, () => params.fx.saturation.drive, (p, v) => (p.fx.saturation.drive = v), pct, true),
-    range("かかり具合(ミックス)", 0, 1, 0.01, () => params.fx.saturation.mix, (p, v) => (p.fx.saturation.mix = v), pct, true),
-  ]),
-  fxGroup("air", "エア(高域の抜け)", "高い音を持ち上げ、少し倍音を足して抜けをよくします。上げすぎると耳に痛くなります。", [
-    range("量", 0, 1, 0.01, () => params.fx.air.amount, (p, v) => (p.fx.air.amount = v), pct, true),
-  ]),
-  fxHead("飛び道具"),
-  fxGroup("filter", "フィルター(LFO)", "カットオフを拍に合わせて揺らします。揺れの幅を 0 にすれば、ふつうのフィルターです。", [
-    select("種類", [["lowpass", "ローパス"], ["highpass", "ハイパス"], ["bandpass", "バンドパス"]], () => params.fx.filter.type, (p, v) => (p.fx.filter.type = v), true),
-    fxFreq("カットオフ", 40, 18000, () => params.fx.filter.cutoffHz, (p, v) => (p.fx.filter.cutoffHz = v)),
-    range("レゾナンス", 0, 1, 0.01, () => params.fx.filter.resonance, (p, v) => (p.fx.filter.resonance = v), pct, true),
-    range("揺れの幅", 0, 6, 0.1, () => params.fx.filter.lfoOctaves, (p, v) => (p.fx.filter.lfoOctaves = v), (v) => `±${v.toFixed(1)} オクターブ`, true),
-    select("揺れの周期", BEATS, () => String(params.fx.filter.lfoBeats), (p, v) => (p.fx.filter.lfoBeats = Number(v) as FxBeats), true),
-  ]),
-  fxGroup("crush", "ビットクラッシャー", "ビット数とサンプリングレートを落として、ゲーム機のようなざらついた音にします。", [
-    range("ビット数", 1, 16, 1, () => params.fx.crush.bits, (p, v) => (p.fx.crush.bits = v), (v) => `${v} bit`, true),
-    range("間引き", 1, 32, 1, () => params.fx.crush.downsample, (p, v) => (p.fx.crush.downsample = v), (v) => (v === 1 ? "なし" : `1/${v}`), true),
-    range("かかり具合(ミックス)", 0, 1, 0.01, () => params.fx.crush.mix, (p, v) => (p.fx.crush.mix = v), pct, true),
-  ]),
-  fxHead("広がり"),
-  fxGroup("chorus", "コーラス", "少しずらした音を左右に重ねて、厚みと広がりを出します。モノラルの素材もステレオになります。", [
-    range("速さ", 0.1, 5, 0.05, () => params.fx.chorus.rateHz, (p, v) => (p.fx.chorus.rateHz = v), (v) => `${v.toFixed(2)} Hz`, true),
-    range("深さ", 0, 12, 0.1, () => params.fx.chorus.depthMs, (p, v) => (p.fx.chorus.depthMs = v), (v) => `${v.toFixed(1)} ms`, true),
-    range("かかり具合(ミックス)", 0, 1, 0.01, () => params.fx.chorus.mix, (p, v) => (p.fx.chorus.mix = v), pct, true),
-  ]),
-  fxGroup("width", "ステレオ幅(ミッド/サイド)", "左右の広がり(サイド)と中央(ミッド)を別々に調整します。モノラルの素材は広がらないので、コーラスと組み合わせます。", [
-    range("広がり(サイド)", 0, 3, 0.01, () => params.fx.width.side, (p, v) => (p.fx.width.side = v), (v) => (v === 0 ? "モノラル" : pct(v)), true),
-    range("中央(ミッド)", -12, 6, 0.5, () => params.fx.width.midDb, (p, v) => (p.fx.width.midDb = v), db, true),
-  ]),
-  fxGroup("pan", "オートパン", "音を拍に合わせて左右に振ります。アルペジオなどに。", [
-    range("深さ", 0, 1, 0.01, () => params.fx.pan.depth, (p, v) => (p.fx.pan.depth = v), pct, true),
-    select("周期", BEATS, () => String(params.fx.pan.beats), (p, v) => (p.fx.pan.beats = Number(v) as FxBeats), true),
-  ]),
-  fxHead("仕上げ"),
-  fxGroup("limiter", "リミッター", "最後に音量を上げつつ、天井を超えないように抑えます。", [
-    range("入力ゲイン", 0, 18, 0.5, () => params.fx.limiter.gainDb, (p, v) => (p.fx.limiter.gainDb = v), db, true),
-    range("天井", -12, 0, 0.1, () => params.fx.limiter.ceilingDb, (p, v) => (p.fx.limiter.ceilingDb = v), (v) => `${v.toFixed(1)} dBFS`, true),
-    range("リリース", 5, 500, 1, () => params.fx.limiter.releaseMs, (p, v) => (p.fx.limiter.releaseMs = v), (v) => `${Math.round(v)} ms`, true),
-  ]),
-]);
 
 // ---------------------------------------------------------------- panel 4: export
 
@@ -1418,7 +1453,7 @@ function openFiles(files: readonly File[]): void {
 
 // ---------------------------------------------------------------- page
 
-const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, fxPanel, rollPanel.element, songPanel.element, exportPanel, detailsPanel]);
+const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, rollPanel.element, fxPanel, songPanel.element, exportPanel, detailsPanel]);
 
 document.getElementById("app")!.append(
   el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [rePickButton, openButton, demoButton])]),

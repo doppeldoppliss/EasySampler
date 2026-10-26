@@ -120,7 +120,7 @@ describe("renderNote with effects", () => {
     const fx = structuredClone(DEFAULT_FX);
     fx.chorus.on = true;
     fx.chorus.mix = 0.6;
-    const out = renderNote(source, analysis.markers, { ...params, fx }, 62, 1);
+    const out = renderNote(source, analysis.markers, params, 62, 1, 120, fx);
     expect(out.channels).toHaveLength(2);
     const [l, r] = out.channels;
     let diff = 0;
@@ -136,7 +136,7 @@ describe("renderNote with effects", () => {
     const fx = structuredClone(DEFAULT_FX);
     fx.limiter.on = true;
     fx.limiter.gainDb = 0;
-    const limited = renderNote(source, analysis.markers, { ...params, fx }, 62, 1);
+    const limited = renderNote(source, analysis.markers, params, 62, 1, 120, fx);
     expect(Math.abs(onset(limited.channels[0]) - onset(plain.channels[0]))).toBeLessThanOrEqual(2);
   });
 });

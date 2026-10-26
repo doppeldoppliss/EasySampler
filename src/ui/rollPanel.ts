@@ -3,7 +3,8 @@
 // and comes back on the next visit; a part of the MIDI file opened in 曲で試す
 // can be taken over as a start.
 
-import type { EngineClient } from "../audio/engineClient";
+import { CURRENT_INSTRUMENT, type EngineClient } from "../audio/engineClient";
+import type { FxSettings } from "../instrument/types";
 import { keep, kept } from "../audio/lastMaterial";
 import { beatsToSec, emptyProject, fromSongNotes, sanitizeProject, secToBeats, shifted, songEnd, toSeqNotes, type Note, type Project } from "../daw/model";
 import type { SongPart } from "../song/parts";
@@ -11,6 +12,7 @@ import { el } from "./dom";
 import { PianoRoll } from "./pianoRoll";
 
 const STORE_KEY = "project";
+const TRACK_ID = "track-0";
 const COARSE = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 /** How far past the last note playback runs before it stops on its own (beats). */
 const END_PAD_BEATS = 2;
@@ -35,6 +37,8 @@ export class RollPanel {
   readonly roll = new PianoRoll();
   /** Playback started or stopped (the page stops its other players). */
   onPlayingChange: (playing: boolean) => void = () => {};
+  /** The project was replaced (restored): the page shows the track's effects again. */
+  onProjectChange: () => void = () => {};
 
   private project: Project = emptyProject();
   private readonly client: EngineClient;
@@ -140,6 +144,28 @@ export class RollPanel {
     return this.startedAt !== null;
   }
 
+  // ------------------------------------------------------------- the track's effects
+
+  /** The effects of the track being edited. */
+  trackFx(): FxSettings {
+    return this.project.tracks[0].fx;
+  }
+
+  /** Changes the track's effects (heard at once, kept). */
+  updateTrackFx(change: (fx: FxSettings) => void): void {
+    const track = this.project.tracks[0];
+    const fx = structuredClone(track.fx);
+    change(fx);
+    track.fx = fx;
+    this.client.setTrackMix(TRACK_ID, { gain: track.gain, pan: track.pan, mute: track.mute, solo: track.solo, fx });
+    this.scheduleSave();
+  }
+
+  private trackSpecs() {
+    const t = this.project.tracks[0];
+    return [{ id: TRACK_ID, instrument: CURRENT_INSTRUMENT, notes: toSeqNotes(this.roll.notes, this.project.bpm), fx: t.fx, gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo }];
+  }
+
   /** The material's note (marked on the keys) — where an empty roll opens. */
   setRoot(pitch: number): void {
     this.roll.setRoot(pitch);
@@ -164,6 +190,7 @@ export class RollPanel {
     this.sendLoop();
     this.refreshButtons();
     this.showPosition(this.from);
+    this.onProjectChange();
   }
 
   private changed(notes: Note[]): void {
@@ -219,8 +246,7 @@ export class RollPanel {
   /** The notes to the engine again; a song playing goes on from where it is. */
   private reload(): void {
     const position = this.currentSec();
-    this.client.loadSong(toSeqNotes(this.roll.notes, this.project.bpm), []);
-    this.client.setSongGain(0.5, 1);
+    this.client.loadTracks(this.trackSpecs());
     this.sendLoop();
     if (this.startedAt !== null) {
       this.from = position;
@@ -259,7 +285,7 @@ export class RollPanel {
 
   private start(): void {
     this.client.setTempo(this.project.bpm);
-    this.client.loadSong(toSeqNotes(this.roll.notes, this.project.bpm), []);
+    this.client.loadTracks(this.trackSpecs());
     this.sendLoop();
     this.startedAt = this.client.playSong(this.from);
     this.playButton.textContent = "■ 停止";

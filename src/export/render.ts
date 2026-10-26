@@ -6,7 +6,7 @@
 import { Engine, type PreparedSource } from "../engine/engine";
 import { FxChain } from "../fx/chain";
 import { outputLayout } from "../instrument/layout";
-import type { ExportSettings, InstrumentParams, Markers } from "../instrument/types";
+import type { ExportSettings, FxSettings, InstrumentParams, Markers } from "../instrument/types";
 
 export interface Rendered {
   channels: Float32Array[];
@@ -37,7 +37,8 @@ const FX_TAIL_SEC = 0.15;
  * and plays the material out. `bpm` is what a tail limited to a beat or a
  * bar is measured in.
  */
-export function renderNote(source: PreparedSource, markers: Markers, params: InstrumentParams, note: number, holdSec: number, bpm = 120): Rendered {
+/** One note as the file has it. Effects (a track's, design.md 13.1) are optional: the sample itself is rendered dry. */
+export function renderNote(source: PreparedSource, markers: Markers, params: InstrumentParams, note: number, holdSec: number, bpm = 120, effects: FxSettings | null = null): Rendered {
   const rate = source.sampleRate;
   const engine = new Engine(rate);
   engine.setTempo(bpm);
@@ -51,10 +52,10 @@ export function renderNote(source: PreparedSource, markers: Markers, params: Ins
   const releaseAt = oneShot ? Infinity : Math.max(0, holdSec - (params.tail.enabled ? 0 : releaseSec)) * rate;
   const limit = Math.ceil((oneShot ? MAX_ONESHOT_SEC : holdSec + MAX_AFTER_SEC) * rate);
   const fx = new FxChain(rate);
-  fx.set(params.fx);
+  if (effects) fx.set(effects);
   fx.setTempo(bpm);
   // A mono material still comes out in stereo when the effects spread it.
-  const stereo = source.channels.length > 1 || (fx.active && FxChain.makesStereo(params.fx));
+  const stereo = source.channels.length > 1 || (effects !== null && fx.active && FxChain.makesStereo(effects));
 
   let left = new Float32Array(Math.ceil(Math.min(limit, (oneShot ? 2 : holdSec + 0.5) * rate)));
   let right = stereo ? new Float32Array(left.length) : left;
@@ -79,7 +80,7 @@ export function renderNote(source: PreparedSource, markers: Markers, params: Ins
   }
 
   // The effects, over the whole note (their LFOs start with it), shifted back by the limiter's look-ahead.
-  if (fx.active) {
+  if (effects && fx.active) {
     const pad = Math.round(FX_TAIL_SEC * rate) + fx.latency;
     if (at + pad > left.length) {
       left = grow(left, at + pad);

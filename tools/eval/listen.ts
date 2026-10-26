@@ -21,7 +21,7 @@ import { applyLoop } from "../../src/export/loop";
 import { renderNote } from "../../src/export/render";
 import { outputLayout } from "../../src/instrument/layout";
 import { suggestMarkersWithin } from "../../src/instrument/markers";
-import { DEFAULT_PARAMS, PRESETS, type InstrumentParams, type PresetId } from "../../src/instrument/types";
+import { DEFAULT_FX, DEFAULT_PARAMS, PRESETS, type FxSettings, type InstrumentParams, type PresetId } from "../../src/instrument/types";
 import { demoSyllable } from "../../src/testsignals/synthVoice";
 import { report, type Report } from "./metrics";
 import { picture } from "./png";
@@ -221,11 +221,18 @@ function main(): void {
     if (!preset) throw new Error(`unknown preset: ${args.preset} (${PRESETS.map((p) => p.id).join(", ")})`);
     params = preset.apply(params);
   }
-  for (const [k, v] of args.sets) setPath(params as unknown as Record<string, unknown>, k, v);
+  // (Effects belong to a track now: `--set fx.chorus.on=true` sets the rack the note is rendered through.)
+  let effects: FxSettings | null = null;
+  for (const [k, v] of args.sets) {
+    if (k.startsWith("fx.")) {
+      effects ??= structuredClone(DEFAULT_FX);
+      setPath(effects as unknown as Record<string, unknown>, k.slice(3), v);
+    } else setPath(params as unknown as Record<string, unknown>, k, v);
+  }
   const note = args.note ? (parseNoteName(args.note) ?? Number(args.note)) : Math.round(params.root);
   if (!Number.isFinite(note)) throw new Error(`bad note: ${args.note}`);
   // Render as the app does.
-  const rendered = renderNote(source, markers, params, note, args.hold, args.bpm);
+  const rendered = renderNote(source, markers, params, note, args.hold, args.bpm, effects);
   const loop = args.loop ? applyLoop(rendered, params) : null;
   const layout = outputLayout(markers, params, args.hold);
   const sustainFrom = rendered.headSec;

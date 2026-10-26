@@ -178,14 +178,14 @@ function sanitizeParams(raw: unknown): InstrumentParams {
       fadeOut: clamp(num(amp.fadeOut, d.amp.fadeOut), 0, 10),
     },
     maxVoices: d.maxVoices,
-    fx: sanitizeFx(raw.fx),
   };
 }
 
 const FX_BEATS: FxBeats[] = [0.25, 0.5, 1, 2, 4, 8];
 
 /** The effect rack; anything missing or out of range falls back to the default (off). */
-function sanitizeFx(raw: unknown): FxSettings {
+/** An effect rack read back (a track's or the master's): anything missing or odd is put right. */
+export function sanitizeFx(raw: unknown): FxSettings {
   const d = DEFAULT_FX;
   const r = isRecord(raw) ? raw : {};
   const part = (key: keyof FxSettings) => (isRecord(r[key]) ? (r[key] as Record<string, unknown>) : {});

@@ -2,6 +2,8 @@
 // grid, copying and a tempo change all stay exact. Seconds only appear when the
 // notes are handed to the player.
 
+import { sanitizeFx } from "../export/settings";
+import { DEFAULT_FX, type FxSettings } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
 import type { SongNote } from "../song/midi";
 
@@ -21,6 +23,18 @@ export interface Note {
 export interface Track {
   name: string;
   notes: Note[];
+  /** The track's effects (design.md 13.1: effects are the song side's, not the cut's). */
+  fx: FxSettings;
+  /** Linear volume (1 = as is). */
+  gain: number;
+  /** −1 (left) … 1 (right). */
+  pan: number;
+  mute: boolean;
+  solo: boolean;
+}
+
+export function newTrack(name: string): Track {
+  return { name, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false };
 }
 
 export interface Project {
@@ -32,13 +46,15 @@ export interface Project {
   tracks: Track[];
   /** The loop in beats, and whether playback follows it. */
   loop: { start: number; end: number; on: boolean };
+  /** Effects on the whole mix. */
+  masterFx: FxSettings;
 }
 
 export const MIN_LENGTH = 1 / 64;
 export const DEFAULT_VELOCITY = 0.8;
 
 export function emptyProject(): Project {
-  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [{ name: "素材", notes: [] }], loop: { start: 0, end: 16, on: false } };
+  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("素材")], loop: { start: 0, end: 16, on: false }, masterFx: structuredClone(DEFAULT_FX) };
 }
 
 let nextId = 1;
@@ -140,7 +156,15 @@ export function sanitizeProject(raw: unknown): Project {
                 velocity: num(n.velocity, DEFAULT_VELOCITY, 0.01, 1),
               }))
           : [];
-        return { name: typeof tr.name === "string" && tr.name ? tr.name : `トラック ${i + 1}`, notes: sortNotes(notes) };
+        return {
+          name: typeof tr.name === "string" && tr.name ? tr.name : `トラック ${i + 1}`,
+          notes: sortNotes(notes),
+          fx: sanitizeFx(tr.fx),
+          gain: num(tr.gain, 1, 0, 4),
+          pan: num(tr.pan, 0, -1, 1),
+          mute: tr.mute === true,
+          solo: tr.solo === true,
+        };
       })
     : d.tracks;
   const loop = (r.loop && typeof r.loop === "object" ? r.loop : {}) as Record<string, unknown>;
@@ -152,5 +176,6 @@ export function sanitizeProject(raw: unknown): Project {
     beatsPerBar: Math.round(num(r.beatsPerBar, 4, 1, 16)),
     tracks: tracks.length ? tracks : d.tracks,
     loop: end > start ? { start, end, on: loop.on === true } : d.loop,
+    masterFx: sanitizeFx(r.masterFx),
   };
 }

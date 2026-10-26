@@ -8,9 +8,9 @@
 
 import { FxChain } from "../fx/chain";
 import type { InstrumentParams, Markers } from "../instrument/types";
-import { BackingSynth } from "../song/backing";
 import { SongPlayer, type TrackSound } from "../song/player";
-import { Engine, type PreparedSource } from "./engine";
+import { BackingSound, EngineSound, SampleSound } from "../song/sounds";
+import type { PreparedSource } from "./engine";
 import type { FromEngine, ToEngine, TrackSpec } from "./messages";
 
 // The AudioWorklet globals (the project is typed against the DOM library).
@@ -31,91 +31,6 @@ interface Instrument {
   params: InstrumentParams;
 }
 
-/** An Engine as a track's sound, remembering which instrument and source it was set up with. */
-class EngineSound implements TrackSound {
-  readonly engine = new Engine(sampleRate);
-  instrument: string | null = null;
-  source: PreparedSource | null = null;
-  noteOn(note: number, velocity: number): void {
-    this.engine.noteOn(note, velocity);
-  }
-  noteOff(note: number): void {
-    this.engine.noteOff(note);
-  }
-  allOff(): void {
-    this.engine.allOff();
-  }
-  render(left: Float32Array, right: Float32Array, frames: number): void {
-    this.engine.render(left, right, frames);
-  }
-  idle(): boolean {
-    return this.engine.activeVoices() === 0;
-  }
-}
-
-/** A drum track: each row a rendered one-shot, played as it is (no pitch change, no note-off). */
-class SampleSound implements TrackSound {
-  /** Row → sample, as the track was loaded. */
-  rows: (Float32Array[] | null)[] = [];
-  private voices: { sample: Float32Array[]; at: number; gain: number }[] = [];
-  private static readonly MAX_VOICES = 16;
-  noteOn(row: number, velocity: number): void {
-    const sample = this.rows[row];
-    if (!sample) return;
-    if (this.voices.length >= SampleSound.MAX_VOICES) this.voices.shift();
-    this.voices.push({ sample, at: 0, gain: velocity });
-  }
-  noteOff(): void {
-    // a one-shot plays to its end
-  }
-  allOff(): void {
-    this.voices = [];
-  }
-  render(left: Float32Array, right: Float32Array, frames: number): void {
-    left.fill(0, 0, frames);
-    if (right !== left) right.fill(0, 0, frames);
-    for (const v of this.voices) {
-      const l = v.sample[0];
-      const r = v.sample[1] ?? l;
-      const n = Math.min(frames, l.length - v.at);
-      for (let i = 0; i < n; i++) {
-        left[i] += l[v.at + i] * v.gain;
-        if (right !== left) right[i] += r[v.at + i] * v.gain;
-      }
-      v.at += n;
-    }
-    this.voices = this.voices.filter((v) => v.at < v.sample[0].length);
-  }
-  idle(): boolean {
-    return this.voices.length === 0;
-  }
-
-  get sounding(): number {
-    return this.voices.length;
-  }
-}
-
-class BackingSound implements TrackSound {
-  private readonly synth = new BackingSynth(sampleRate);
-  noteOn(note: number, velocity: number, drum: boolean): void {
-    this.synth.noteOn(note, velocity, drum);
-  }
-  noteOff(note: number, drum: boolean): void {
-    this.synth.noteOff(note, drum);
-  }
-  allOff(): void {
-    this.synth.allOff();
-  }
-  render(left: Float32Array, right: Float32Array, frames: number): void {
-    left.fill(0, 0, frames);
-    if (right !== left) right.fill(0, 0, frames);
-    this.synth.renderAdd(left, right, frames, 1);
-  }
-  idle(): boolean {
-    return this.synth.idle();
-  }
-}
-
 class EngineProcessor extends AudioWorkletProcessor {
   private readonly sources = new Map<string, PreparedSource | null>();
   /** Rendered one-shots (drum rows), by id. */
@@ -126,9 +41,9 @@ class EngineProcessor extends AudioWorkletProcessor {
   /** The sounds of the song's tracks, by track id (kept across reloads, so a track keeps its engine). */
   private trackSounds = new Map<string, TrackSound>();
   private trackSpecs: TrackSpec[] = [];
-  private readonly live = new EngineSound();
+  private readonly live = new EngineSound(sampleRate);
   /** Placing a note on a track: its instrument, briefly, without effects. */
-  private readonly preview = new EngineSound();
+  private readonly preview = new EngineSound(sampleRate);
   private previewLeft = 0;
   private previewNote = -1;
   private readonly liveFx = new FxChain(sampleRate);
@@ -175,7 +90,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     for (const t of tracks) {
       const kind = t.instrument === "backing" ? BackingSound : t.instrument === "drum" ? SampleSound : EngineSound;
       let sound = this.trackSounds.get(t.id);
-      if (!(sound instanceof kind)) sound = new kind();
+      if (!(sound instanceof kind)) sound = kind === EngineSound ? new EngineSound(sampleRate) : kind === SampleSound ? new SampleSound() : new BackingSound(sampleRate);
       if (sound instanceof EngineSound && sound.instrument !== t.instrument) this.apply(sound, t.instrument);
       if (sound instanceof SampleSound) sound.rows = (t.samples ?? []).map((id) => (id ? (this.samples.get(id) ?? null) : null));
       next.set(t.id, sound);

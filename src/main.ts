@@ -46,6 +46,11 @@ import { clock, RangePicker } from "./ui/rangePicker";
 import { KEY_NAMES, quantizeToScale, SCALE_LABELS, type ScaleId } from "./instrument/scale";
 import { isMidiFile, SongPanel } from "./ui/songPanel";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
+import { renderSong, type RenderTrack } from "./daw/songRender";
+import { writeMidi } from "./daw/midiWrite";
+import { toSeqNotes } from "./daw/model";
+import { zipStore, type ZipEntry } from "./export/zip";
+import { encodeWavBytes } from "./audio/wav";
 
 /** The most material one analysis takes; a longer clip goes through the range picker first. */
 const MAX_MATERIAL_SEC = 60;
@@ -2276,8 +2281,21 @@ function defineMaterialCuts(): void {
   refreshInstruments();
 }
 
-/** What each drum row's one-shot was last rendered from (so it is rendered again only when that changes). */
+/** What each drum row's one-shot was last rendered from (so it is rendered again only when that changes), and the one-shot. */
 const padSampleKeys = new Map<string, string>();
+const padSamples = new Map<string, Float32Array[]>();
+
+/** A cut by its instrument id: its material, its settings as they are now, and its material's export settings. */
+function findCut(id: string): { material: Material; cut: CutSettings; exportOf: ExportSettings } | null {
+  const [materialId, cutId] = id.split("/");
+  const entry = library.get(materialId);
+  if (!entry) return null;
+  const editing = material?.id === materialId;
+  if (editing) syncCut();
+  const cut = (editing ? cuts : (entry.settings?.cuts ?? [])).find((c) => c.id === cutId);
+  if (!cut) return null;
+  return { material: entry.material, cut, exportOf: editing ? exportSettings : (entry.settings?.export ?? DEFAULT_EXPORT) };
+}
 
 /**
  * Drum rows (design.md 13.1): each plays a cut's one-shot, rendered here once
@@ -2286,24 +2304,130 @@ const padSampleKeys = new Map<string, string>();
  */
 function ensurePadSamples(instruments: string[]): void {
   for (const id of instruments) {
-    const [materialId, cutId] = id.split("/");
-    const entry = library.get(materialId);
-    if (!entry) continue;
-    const editing = material?.id === materialId;
-    if (editing) syncCut();
-    const cut = (editing ? cuts : (entry.settings?.cuts ?? [])).find((c) => c.id === cutId);
-    if (!cut) continue;
-    const exportOf = editing ? exportSettings : (entry.settings?.export ?? DEFAULT_EXPORT);
+    const found = findCut(id);
+    if (!found) continue;
+    const { cut, exportOf } = found;
     const hold = exportLengthSec(exportOf);
-    const source = entry.material.source;
+    const source = found.material.source;
     const key = JSON.stringify([cut.markers, cut.params, cut.note, hold, source.sampleRate]);
     if (padSampleKeys.get(id) === key) continue;
     const rendered = renderNote(source, cut.markers, { ...cut.params, maxVoices: DEFAULT_PARAMS.maxVoices }, cut.note, hold, exportOf.bpm);
     client.setSample(id, rendered.channels);
+    padSamples.set(id, rendered.channels);
     padSampleKeys.set(id, key);
   }
 }
 rollPanel.ensureSamples = ensurePadSamples;
+
+// ---------------------------------------------------------------- the song as a file (design.md 13, phase 3)
+
+/** The song's tracks as the offline render takes them (only one track, for a stem). */
+function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string | null): RenderTrack[] {
+  ensurePadSamples(rollPanel.padInstruments());
+  const out: RenderTrack[] = [];
+  for (const t of project.tracks) {
+    if (only !== null && t.id !== only) continue;
+    const mix = { fx: t.fx, gain: t.gain, pan: t.pan, mute: only === null ? t.mute : false, solo: only === null ? t.solo : false };
+    const notes = toSeqNotes(t.notes, project.bpm);
+    if (t.kind === "drum") {
+      if (!t.pads.length) continue;
+      out.push({ id: t.id, instrument: null, samples: t.pads.map((p) => (p.instrument ? (padSamples.get(p.instrument) ?? null) : null)), notes, ...mix });
+      continue;
+    }
+    const found = t.instrument ? findCut(t.instrument) : null;
+    if (!found) continue;
+    out.push({
+      id: t.id,
+      instrument: { source: found.material.source, markers: found.cut.markers, params: { ...found.cut.params, maxVoices: DEFAULT_PARAMS.maxVoices }, hold: exportLengthSec(found.exportOf) },
+      notes,
+      ...mix,
+    });
+  }
+  return out;
+}
+
+function songFileStamp(): string {
+  const d = new Date();
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
+
+/** The last file made, kept so a second tap can share it at once (iPhone: the share sheet needs a fresh tap). */
+let songBuilt: { key: string; blob: Blob; fileName: string; summary: string } | null = null;
+let songBuilding = false;
+
+async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
+  if (songBuilding) return;
+  const say = (text: string) => (rollPanel.exportStatus.textContent = text);
+  const project = rollPanel.snapshot();
+  if (!project.tracks.some((t) => t.notes.length)) {
+    say("書き出す音符がありません。");
+    return;
+  }
+  const stamp = songFileStamp();
+  const key = JSON.stringify([kind, project, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
+  let built = songBuilt?.key === key ? songBuilt : null;
+  if (!built) {
+    songBuilding = true;
+    rollPanel.stop();
+    try {
+      const rate = client.sampleRate;
+      const progress = async (share: number) => {
+        say(`作成中… ${Math.round(share * 100)}%`);
+        await yieldToScreen();
+      };
+      if (kind === "mid") {
+        const bytes = writeMidi(project);
+        built = { key, blob: new Blob([bytes], { type: "audio/midi" }), fileName: `曲_${stamp}.mid`, summary: `トラック ${project.tracks.length} 本、${project.bpm} BPM` };
+      } else if (kind === "wav") {
+        say("作成中…");
+        await yieldToScreen();
+        const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null), masterFx: project.masterFx }, progress);
+        const fileName = `曲_${stamp}.wav`;
+        const lowered = song.gain < 1 ? `。音割れしないよう全体を ${(20 * Math.log10(song.gain)).toFixed(1)} dB 下げました` : "";
+        built = { key, blob: new Blob([encodeWavBytes(song.channels, song.sampleRate, { ISFT: "EasySampler" })], { type: "audio/wav" }), fileName, summary: `${(song.channels[0].length / song.sampleRate).toFixed(1)} 秒、${song.sampleRate / 1000} kHz${lowered}` };
+      } else {
+        const entries: ZipEntry[] = [];
+        const used = new Set<string>();
+        const withNotes = project.tracks.filter((t) => t.notes.length);
+        for (let i = 0; i < withNotes.length; i++) {
+          const t = withNotes[i];
+          const tracks = songTracks(project, t.id);
+          if (!tracks.length) continue;
+          say(`作成中… ${i + 1} / ${withNotes.length}(${t.name})`);
+          await yieldToScreen();
+          const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null });
+          let name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}.wav`;
+          for (let k = 2; used.has(name); k++) name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}_${k}.wav`;
+          used.add(name);
+          entries.push({ name: `曲_${stamp}/${name}`, data: new Uint8Array(encodeWavBytes(song.channels, song.sampleRate, { ISFT: "EasySampler" })) });
+        }
+        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `曲_${stamp}_トラック別.zip`, summary: `WAV ${entries.length} 本(各トラックのエフェクト込み、マスターなし)` };
+      }
+      songBuilt = built;
+    } catch (error) {
+      say(`書き出せませんでした: ${error instanceof Error ? error.message : error}`);
+      return;
+    } finally {
+      songBuilding = false;
+    }
+  }
+  if (canShareFiles()) {
+    try {
+      const outcome = await shareFile(built.blob, built.fileName, built.fileName);
+      say(outcome === "shared" ? `共有しました: ${built.fileName}(${built.summary})` : "");
+      return;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotAllowedError") {
+        say(`できました(${built.summary})。もう一度押すと共有シートが開きます。`);
+        return;
+      }
+    }
+  }
+  downloadFile(built.blob, built.fileName);
+  say(`保存しました: ${built.fileName}(${built.summary})`);
+}
+rollPanel.onExport = (kind) => void exportSong(kind);
 
 /** The cut being edited changed: a drum row on it gets its one-shot again, once the changes settle. */
 let padRefreshTimer = 0;

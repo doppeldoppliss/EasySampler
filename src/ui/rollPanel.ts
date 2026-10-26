@@ -65,6 +65,9 @@ export class RollPanel {
   onTrackChange: () => void = () => {};
   /** Drum rows: the page renders these cuts' one-shots (once per change of their settings) and hands them to the engine. */
   ensureSamples: (instruments: string[]) => void = () => {};
+  /** 書き出し: the whole song as a WAV, each track as its own WAV (zip), or the notes as MIDI. */
+  onExport: (kind: "wav" | "stems" | "mid") => void = () => {};
+  readonly exportStatus = el("p", { className: "fine", role: "status" });
 
   private project: Project = emptyProject();
   private selected = 0;
@@ -172,12 +175,24 @@ export class RollPanel {
       }),
       el("div", { className: "row" }, [this.clearButton]),
       this.info,
+      el("div", { className: "row song-export" }, [
+        el("span", { className: "control-label", textContent: "曲の書き出し" }),
+        button("曲を WAV で", "small primary", () => this.onExport("wav"), "全トラックをミックスし、マスターのエフェクトをかけた 1 本の WAV"),
+        button("トラック別の WAV(zip)", "small", () => this.onExport("stems"), "トラックごとに 1 本ずつ(各トラックのエフェクト込み、マスターなし)"),
+        button("MIDI(.mid)", "small", () => this.onExport("mid"), "音符だけを MIDI ファイルに(別の DAW へ持っていく用)"),
+      ]),
+      this.exportStatus,
     ]);
     this.applyProject();
   }
 
   get playing(): boolean {
     return this.startedAt !== null;
+  }
+
+  /** The song as it is now (a copy), for the export. */
+  snapshot(): Project {
+    return structuredClone(this.project);
   }
 
   private get track(): Track {

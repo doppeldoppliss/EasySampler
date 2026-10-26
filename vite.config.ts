@@ -1,7 +1,7 @@
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, type Plugin } from "vitest/config";
 
 /** Gives the service worker's cache a name of this build's own (public/sw.js carries a placeholder). */
 function stampServiceWorker(): Plugin {
@@ -27,5 +27,7 @@ export default defineConfig(({ mode }) => {
     server: { host: lan ? true : undefined },
     preview: { host: lan ? true : undefined },
     worker: { format: "es" as const },
+    // (the signal tests render real audio; a shared CI runner is slower than a PC)
+    test: { testTimeout: 30_000 },
   };
 });

@@ -1,4 +1,4 @@
-// MADDAW service worker: the app shell works offline once visited. Hashed
+// EasySampler service worker: the app shell works offline once visited. Hashed
 // assets are cached as they are fetched (cache first); the page itself is
 // fetched network first so a new release shows up on the next load.
 // (the build stamps the name, so each release starts a cache of its own and the old one is dropped)

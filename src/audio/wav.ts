@@ -70,7 +70,7 @@ export function encodeWavBytes(channels: readonly Float32Array[], sampleRate: nu
  *  walker does not pad, so an odd chunk would throw every chunk after it off. */
 function encodeClm(frameSize?: number): ArrayBuffer {
   if (!frameSize) return new ArrayBuffer(0);
-  let tag = `<!>${frameSize} 00000000 wavetable (MADDAW)`;
+  let tag = `<!>${frameSize} 00000000 wavetable (EasySampler)`;
   if (tag.length & 1) tag += " ";
   const buffer = new ArrayBuffer(8 + tag.length);
   const view = new DataView(buffer);

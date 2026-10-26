@@ -1,6 +1,6 @@
 {
-  "name": "MADDAW — 音MADのシンセ化",
-  "short_name": "MADDAW",
+  "name": "EasySampler — 音MADのシンセ化",
+  "short_name": "EasySampler",
   "description": "素材の音程を判定して平らにし、母音を伸ばした単音 WAV を書き出す。iPhone / iPad でも。",
   "lang": "ja",
   "start_url": "./",

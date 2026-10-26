@@ -1,4 +1,4 @@
-// MADDAW — Phase 2: cuts, loops, multisamples, settings (design.md 3, 5, 7).
+// EasySampler (formerly MADDAW) — Phase 2: cuts, loops, multisamples, settings (design.md 3, 5, 7).
 //
 // Load a material (or the demo): it is analysed (pitch curve, pitch marks,
 // root pitch to the cent, suggested synthesis markers) and playable at once.
@@ -989,7 +989,7 @@ const saveSettingsButton = button("設定を保存(JSON)", "small", () => {
   if (!material) return;
   const json = serializeSettings(settingsBody());
   const blob = new Blob([json], { type: "application/json" });
-  const name = `${safeBaseName(stripExtension(material.name))}.maddaw.json`;
+  const name = `${safeBaseName(stripExtension(material.name))}.easysampler.json`;
   if (IOS && canShareFiles()) shareFile(blob, name, name).catch(() => downloadFile(blob, name));
   else downloadFile(blob, name);
 });
@@ -1407,7 +1407,7 @@ function openFiles(files: readonly File[]): void {
 const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, fxPanel, songPanel.element, exportPanel, detailsPanel]);
 
 document.getElementById("app")!.append(
-  el("header", { className: "top" }, [el("h1", { textContent: "MADDAW" }), el("div", { className: "row" }, [rePickButton, openButton, demoButton])]),
+  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [rePickButton, openButton, demoButton])]),
   fileInput,
   status,
   emptyState,
@@ -2184,7 +2184,7 @@ async function load(name: string, channels: Float32Array[], sampleRate: number):
 }
 
 function loadDemo(): void {
-  Object.assign(credit, { title: "MADDAW デモ素材(合成音声「さー」)", url: "", timecode: "", memo: "" });
+  Object.assign(credit, { title: "EasySampler デモ素材(合成音声「さー」)", url: "", timecode: "", memo: "" });
   setCreditInputs();
   longClip = null;
   pickerClip = null;

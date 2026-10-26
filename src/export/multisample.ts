@@ -52,7 +52,7 @@ export interface MultisampleMeta {
 /** The SFZ text. Paths are relative to the .sfz file. */
 export function sfzText(zones: readonly Zone[], meta: MultisampleMeta): string {
   const lines = [
-    `// ${meta.name} — made with MADDAW (a material synth-ified in the browser)`,
+    `// ${meta.name} — made with EasySampler (a material synth-ified in the browser)`,
     meta.credit ? `// source: ${meta.credit.replace(/\r?\n/g, " ")}` : "",
     "",
     "<control>",
@@ -82,12 +82,12 @@ export function dspresetText(zones: readonly Zone[], meta: MultisampleMeta): str
     .join("\n");
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
-    `<!-- ${esc(meta.name)} — made with MADDAW${meta.credit ? ` / source: ${esc(meta.credit.replace(/\r?\n/g, " ").replace(/--/g, "-"))}` : ""} -->`,
+    `<!-- ${esc(meta.name)} — made with EasySampler${meta.credit ? ` / source: ${esc(meta.credit.replace(/\r?\n/g, " ").replace(/--/g, "-"))}` : ""} -->`,
     `<DecentSampler minVersion="1.0.0">`,
     `  <ui width="812" height="375" bgColor="FF1D1B26">`,
     `    <tab name="main">`,
     `      <label x="20" y="20" width="772" height="40" text="${esc(meta.name)}" textSize="24" textColor="FFEBE8F4" />`,
-    `      <label x="20" y="60" width="772" height="24" text="MADDAW" textSize="14" textColor="FF9A96AE" />`,
+    `      <label x="20" y="60" width="772" height="24" text="EasySampler" textSize="14" textColor="FF9A96AE" />`,
     `    </tab>`,
     `  </ui>`,
     `  <groups attack="0.005" release="${meta.releaseSec.toFixed(3)}">`,
@@ -104,7 +104,7 @@ export function dspresetText(zones: readonly Zone[], meta: MultisampleMeta): str
 export function readmeText(meta: MultisampleMeta, zones: readonly Zone[], kind: "multisample" | "kit" = "multisample"): string {
   const keyName = (n: number) => `${["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"][n % 12]}${Math.floor(n / 12) - 1}`;
   return [
-    `${meta.name} — MADDAW で作った${kind === "kit" ? "キット音源(1 鍵に 1 つの素材)" : "マルチサンプル音源"}`,
+    `${meta.name} — EasySampler で作った${kind === "kit" ? "キット音源(1 鍵に 1 つの素材)" : "マルチサンプル音源"}`,
     "",
     kind === "kit"
       ? `鍵盤の割り当て: ${zones.map((z) => `${keyName(z.note)} = ${z.fileName}`).join(", ")}`
@@ -112,7 +112,7 @@ export function readmeText(meta: MultisampleMeta, zones: readonly Zone[], kind: 
     `${meta.name}.sfz(REAPER の ReaSamplOmatic5000 の代わりに sforzando など SFZ 対応サンプラーで)、`,
     `${meta.name}.dspreset(Decent Sampler。Windows / Mac / iPhone / iPad、無料)が入っています。`,
     "",
-    "iPhone / iPad: この zip を .dslibrary に名前を変えて(MADDAW の読み込む先で Decent Sampler を選ぶと最初からその名前です)「ファイル」App からタップすると、Decent Sampler に取り込まれます。",
+    "iPhone / iPad: この zip を .dslibrary に名前を変えて(EasySampler の読み込む先で Decent Sampler を選ぶと最初からその名前です)「ファイル」App からタップすると、Decent Sampler に取り込まれます。",
     "PC: Decent Sampler の File → Install DecentSampler Library で .dslibrary(zip)を選ぶか、展開して File → Load Preset で .dspreset を選びます。sforzando には .sfz をドラッグします。",
     "",
     meta.credit ? `出典: ${meta.credit}` : "",

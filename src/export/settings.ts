@@ -18,7 +18,7 @@ export interface CutSettings {
 }
 
 export interface SettingsFile {
-  app: "MADDAW";
+  app: "EasySampler" | "MADDAW";
   version: 1;
   savedAt: string;
   material: { name: string; durationSec: number; sampleRate: number; channels: number };
@@ -33,21 +33,21 @@ export interface SettingsFile {
 }
 
 export function serializeSettings(file: Omit<SettingsFile, "app" | "version" | "savedAt">): string {
-  const full: SettingsFile = { app: "MADDAW", version: 1, savedAt: new Date().toISOString(), ...file };
+  const full: SettingsFile = { app: "EasySampler", version: 1, savedAt: new Date().toISOString(), ...file };
   return JSON.stringify(full, null, 2);
 }
 
 /** Parses and sanitises a settings file; throws when it isn't one. Unknown fields are dropped, missing ones filled from the defaults. */
 export function parseSettings(text: string): SettingsFile {
   const raw: unknown = JSON.parse(text);
-  if (!isRecord(raw) || raw.app !== "MADDAW" || raw.version !== 1) throw new Error("MADDAW の設定ファイルではありません");
+  if (!isRecord(raw) || (raw.app !== "EasySampler" && raw.app !== "MADDAW") || raw.version !== 1) throw new Error("EasySampler の設定ファイルではありません");
   const material = isRecord(raw.material) ? raw.material : {};
   const cutsRaw = Array.isArray(raw.cuts) ? raw.cuts : [];
   const cuts = cutsRaw.map((c, i) => sanitizeCut(c, i)).filter((c): c is CutSettings => c !== null);
   if (cuts.length === 0) throw new Error("区間がありません");
   const exp = sanitizeExport(raw.export);
   return {
-    app: "MADDAW",
+    app: "EasySampler",
     version: 1,
     savedAt: typeof raw.savedAt === "string" ? raw.savedAt : "",
     material: {

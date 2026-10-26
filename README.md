@@ -1,4 +1,6 @@
-# MADDAW
+# EasySampler
+
+(旧名 MADDAW。公開先: https://doppeldoppliss.github.io/EasySampler/)
 
 素材を入れたら、DAW に渡せる音源になる。音MADの「シンセ化」(素材を切り出し、音程を平らにして1音に伸ばし、サンプラー用の WAV にする)を、ブラウザの1画面で行うツール(開発中)。
 Windows・Mac・iPhone・iPad の Safari / Chrome で動く。生成AIは使わず、素材は端末の外に出ない。

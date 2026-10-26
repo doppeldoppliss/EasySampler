@@ -1,4 +1,4 @@
-# MADDAW 設計 v2.0(シンセ化ツール方式)
+# EasySampler(旧 MADDAW)設計 v2.0(シンセ化ツール方式)
 
 > 状態: **確定(2026-10-23)。Phase 1・2 と、Phase 3 のうち Signalsmith モード以外は実装済み(同日)。同日、VocalShifter の TIME / VIB に寄せた編集(削除・速度・書き出し後レーン・ビブラート)を 4 章に追加。** v1.2([design-v1.2.md](design-v1.2.md))からの方向転換。前回「微妙」だったのは DAW という構想が大きすぎた点だと確認し、論点 A〜G は「11. 決定事項」のとおり推奨案で決めた。
 > 2026-10-23。参考: [note: 音MAD シンセ化(REAPER + VocalShifter LE)](https://note.com/madcreator/n/n402147958bda)、[note: Vital を音MADで使う方法](https://note.com/darekachan/n/ne7635b60d8b1)、[動画: フリーシンセ VITAL を使った音MADでの音作りの一例(にす)](https://www.nicovideo.jp/watch/sm41508561)(動画の説明欄は note 記事を参考記事として指している)。

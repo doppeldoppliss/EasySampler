@@ -39,7 +39,7 @@ export function wavInfo(credit: Credit): WavInfo {
     INAM: credit.title,
     IART: credit.url,
     ICMT: [credit.timecode, credit.memo].filter(Boolean).join(" / "),
-    ISFT: "MADDAW",
+    ISFT: "EasySampler",
   };
 }
 

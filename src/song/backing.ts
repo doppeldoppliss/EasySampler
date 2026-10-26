@@ -104,6 +104,11 @@ export class BackingSynth {
     for (const v of this.voices) v.active = false;
   }
 
+  /** Nothing sounding. */
+  idle(): boolean {
+    return !this.voices.some((v) => v.active);
+  }
+
   /** Adds `frames` samples into the outputs at `gain` (once, when both are the same array). */
   renderAdd(outL: Float32Array, outR: Float32Array, frames: number, gain: number): void {
     const stereo = outR !== outL;

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Engine } from "../engine/engine";
 import { MidiParseError, parseMidi } from "./midi";
-import { backingNotes, materialNotes, songParts } from "./parts";
-import { SongPlayer } from "./player";
+import { BackingSynth } from "./backing";
+import { backingNotes, materialNotes, songParts, type SeqNote } from "./parts";
+import { SongPlayer, type PlayerTrack, type TrackSound } from "./player";
 
 // ------------------------------------------------------------ a tiny SMF writer
 
@@ -138,103 +138,152 @@ describe("materialNotes", () => {
 describe("SongPlayer", () => {
   const SR = 1000;
 
-  /** Records what the engine was told, and at which output sample. */
-  function fakeEngine() {
-    const log: string[] = [];
+  /** A track sound that records what it was told, and at which output sample; it renders `level` while a note is on. */
+  function fakeSound(log: string[], tag = "", level = 0) {
     let rendered = 0;
-    const engine = {
-      noteOn: (note: number) => log.push(`on ${note} @${rendered}`),
-      noteOff: (note: number) => log.push(`off ${note} @${rendered}`),
-      allOff: () => log.push("allOff"),
-      render: (l: Float32Array, r: Float32Array, frames: number) => {
-        l.fill(0, 0, frames);
-        r.fill(0, 0, frames);
+    let on = 0;
+    const sound: TrackSound = {
+      noteOn: (note) => {
+        on++;
+        log.push(`${tag}on ${note} @${rendered}`);
+      },
+      noteOff: (note) => {
+        on = Math.max(0, on - 1);
+        log.push(`${tag}off ${note} @${rendered}`);
+      },
+      allOff: () => {
+        on = 0;
+        log.push(`${tag}allOff`);
+      },
+      render: (l, r, frames) => {
+        l.fill(on ? level : 0, 0, frames);
+        r.fill(on ? level : 0, 0, frames);
         rendered += frames;
       },
+      idle: () => on === 0,
     };
-    return { engine: engine as unknown as Engine, log };
+    return sound;
   }
 
-  function run(player: SongPlayer, engine: Engine, fromFrame: number, blocks: number): void {
+  const mix = { gain: 1, pan: 0, mute: false, solo: false, fx: null };
+  const track = (id: string, sound: TrackSound, notes: SeqNote[], extra = {}): PlayerTrack => ({ id, sound, notes, ...mix, ...extra });
+  const n = (start: number, end: number, note: number): SeqNote => ({ start, end, note, velocity: 1, drum: false });
+
+  function run(player: SongPlayer, fromFrame: number, blocks: number): { l: Float32Array; r: Float32Array } {
     const l = new Float32Array(128);
     const r = new Float32Array(128);
-    for (let b = 0; b < blocks; b++) player.render(fromFrame + b * 128, l, r, 128, engine);
+    for (let b = 0; b < blocks; b++) player.render(fromFrame + b * 128, l, r, 128);
+    return { l, r };
   }
 
   it("fires every note on its exact sample, splitting blocks", () => {
     const player = new SongPlayer(SR);
-    const { engine, log } = fakeEngine();
-    player.load(
-      [
-        { start: 0.1, end: 0.2, note: 60, velocity: 1, drum: false },
-        { start: 0.2, end: 0.3, note: 60, velocity: 1, drum: false },
-      ],
-      [],
-    );
+    const log: string[] = [];
+    player.setTracks([track("a", fakeSound(log), [n(0.1, 0.2, 60), n(0.2, 0.3, 60)])]);
     player.play(500, 0);
-    run(player, engine, 0, 8);
+    run(player, 0, 8);
     // Context frame 500 = song 0; output sample = context frame here.
-    expect(log).toEqual(["on 60 @600", "off 60 @700", "on 60 @700", "off 60 @800"]);
+    expect(log.filter((x) => x !== "allOff")).toEqual(["on 60 @600", "off 60 @700", "on 60 @700", "off 60 @800"]);
+  });
+
+  it("keeps each track's events on its own sound", () => {
+    const player = new SongPlayer(SR);
+    const log: string[] = [];
+    player.setTracks([track("a", fakeSound(log, "a:"), [n(0.05, 0.1, 60)]), track("b", fakeSound(log, "b:"), [n(0.07, 0.2, 48)])]);
+    log.length = 0;
+    player.play(0, 0);
+    run(player, 0, 2);
+    expect(log.filter((x) => x.startsWith("a:"))).toEqual(["a:on 60 @50", "a:off 60 @100"]);
+    expect(log.filter((x) => x.startsWith("b:"))).toEqual(["b:on 48 @70", "b:off 48 @200"]);
   });
 
   it("starts mid-song from the given position, and late starts catch up", () => {
     const player = new SongPlayer(SR);
-    const { engine, log } = fakeEngine();
-    player.load(
-      [
-        { start: 0.1, end: 0.15, note: 60, velocity: 1, drum: false },
-        { start: 1.0, end: 1.1, note: 62, velocity: 1, drum: false },
-      ],
-      [],
-    );
+    const log: string[] = [];
+    player.setTracks([track("a", fakeSound(log), [n(0.1, 0.15, 60), n(1.0, 1.1, 62)])]);
+    log.length = 0;
     // Asked to start at context frame 0 from song 0.5 s, but the first block rendered is frame 256.
     player.play(0, 0.5);
-    run(player, engine, 256, 4);
-    // Song 1.0 s = context frame 500 → output sample 500 − 256 = 244.
+    run(player, 256, 4);
+    // Song 1.0 s = context frame 500 → the sound has rendered 500 − 256 = 244 frames by then.
     expect(log).toEqual(["on 62 @244", "off 62 @344"]);
   });
 
   it("loops: at the loop's end everything is released and the loop's start plays again, on the exact sample", () => {
     const player = new SongPlayer(SR);
-    const { engine, log } = fakeEngine();
-    player.load(
-      [
-        { start: 0.1, end: 0.15, note: 60, velocity: 1, drum: false },
-        { start: 0.3, end: 0.45, note: 62, velocity: 1, drum: false }, // still sounding at the loop's end
-      ],
-      [],
-    );
+    const log: string[] = [];
+    player.setTracks([track("a", fakeSound(log), [n(0.1, 0.15, 60), n(0.3, 0.45, 62)])]);
+    log.length = 0;
     player.setLoop({ startSec: 0.1, endSec: 0.4 });
     player.play(0, 0);
-    run(player, engine, 0, 8); // 1024 frames: song 0.1–0.4 is frames 100–400, then 400 → 100 again
+    run(player, 0, 8);
     expect(log).toEqual(["on 60 @100", "off 60 @150", "on 62 @300", "allOff", "on 60 @400", "off 60 @450", "on 62 @600", "allOff", "on 60 @700", "off 60 @750", "on 62 @900", "allOff", "on 60 @1000"]);
+  });
+
+  it("loops when the loop's end falls exactly on a block's end", () => {
+    const player = new SongPlayer(SR);
+    const log: string[] = [];
+    player.setTracks([track("a", fakeSound(log), [n(0, 0.05, 60)])]);
+    log.length = 0;
+    player.setLoop({ startSec: 0, endSec: 0.256 }); // 256 frames = two blocks
+    player.play(0, 0);
+    run(player, 0, 5);
+    expect(log).toEqual(["on 60 @0", "off 60 @50", "allOff", "on 60 @256", "off 60 @306", "allOff", "on 60 @512", "off 60 @562"]);
   });
 
   it("stops everything on stop", () => {
     const player = new SongPlayer(SR);
-    const { engine, log } = fakeEngine();
-    player.load([{ start: 0, end: 5, note: 60, velocity: 1, drum: false }], []);
+    const log: string[] = [];
+    player.setTracks([track("a", fakeSound(log), [n(0, 5, 60)])]);
+    log.length = 0;
     player.play(0, 0);
-    run(player, engine, 0, 1);
-    player.stop(engine);
-    run(player, engine, 128, 2);
+    run(player, 0, 1);
+    player.stop();
+    run(player, 128, 2);
     expect(log).toEqual(["on 60 @0", "allOff"]);
     expect(player.playing).toBe(false);
   });
 
+  it("mixes: volume, balance pan, mute and solo", () => {
+    const player = new SongPlayer(SR);
+    const a = fakeSound([], "", 1);
+    const b = fakeSound([], "", 1);
+    player.setTracks([track("a", a, [n(0, 1, 60)], { gain: 0.5 }), track("b", b, [n(0, 1, 60)], { pan: -1 })]);
+    player.play(0, 0);
+    let out = run(player, 0, 1);
+    // a: 0.5 both sides; b panned hard left: 1 left, 0 right.
+    expect(out.l[10]).toBeCloseTo(1.5);
+    expect(out.r[10]).toBeCloseTo(0.5);
+    player.setMix("b", { ...mix, pan: -1, mute: true });
+    out = run(player, 128, 1);
+    expect(out.l[10]).toBeCloseTo(0.5);
+    player.setMix("b", { ...mix, solo: true });
+    out = run(player, 256, 1);
+    expect(out.l[10]).toBeCloseTo(1);
+    expect(out.r[10]).toBeCloseTo(1);
+  });
+
   it("makes sound for the backing", () => {
     const player = new SongPlayer(48000);
-    const { engine } = fakeEngine();
-    player.load([], [
-      { start: 0, end: 0.05, note: 69, velocity: 1, drum: false },
-      { start: 0, end: 0.05, note: 36, velocity: 1, drum: true },
-    ]);
+    const synth = new BackingSynth(48000);
+    const sound: TrackSound = {
+      noteOn: (note, velocity, drum) => synth.noteOn(note, velocity, drum),
+      noteOff: (note, drum) => synth.noteOff(note, drum),
+      allOff: () => synth.allOff(),
+      render: (l, r, frames) => {
+        l.fill(0, 0, frames);
+        r.fill(0, 0, frames);
+        synth.renderAdd(l, r, frames, 1);
+      },
+      idle: () => synth.idle(),
+    };
+    player.setTracks([track("backing", sound, [{ start: 0, end: 0.05, note: 69, velocity: 1, drum: false }, { start: 0, end: 0.05, note: 36, velocity: 1, drum: true }])]);
     player.play(0, 0);
     const l = new Float32Array(128);
     const r = new Float32Array(128);
     let energy = 0;
     for (let b = 0; b < 20; b++) {
-      player.render(b * 128, l, r, 128, engine);
+      player.render(b * 128, l, r, 128);
       for (const v of l) energy += v * v;
     }
     expect(energy).toBeGreaterThan(0.01);

@@ -8,12 +8,16 @@
 
 import type { PitchTrack, PyinOptions } from "../analysis/pyin";
 import type { PreparedSource } from "../engine/engine";
-import type { FromEngine, ToEngine } from "../engine/messages";
+import type { FromEngine, ToEngine, TrackSpec } from "../engine/messages";
 import type { MaterialAnalysis } from "../engine/prepare";
-import type { InstrumentParams, Markers } from "../instrument/types";
+import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
 import type { AnalysisRequest, AnalysisResponse } from "../workers/analysis.worker";
 import workletUrl from "../engine/worklet.ts?worker&url";
+
+/** The material the one-material screens open, and the instrument their cut being edited is. */
+export const MAIN_MATERIAL = "main";
+export const CURRENT_INSTRUMENT = "current";
 
 type AudioSessionNavigator = Navigator & { audioSession?: { type: string } };
 
@@ -22,8 +26,14 @@ export class EngineClient {
   private node: AudioWorkletNode | null = null;
   /** Messages sent before the worklet was up, replayed once it is. */
   private pending: ToEngine[] = [];
-  private lastSource: PreparedSource | null = null;
-  private lastInstrument: ToEngine | null = null;
+  /** The sources sent, by material id (for re-preparing at the real rate). */
+  private sources = new Map<string, PreparedSource | null>();
+  /** The instruments defined, by id (sent again after a source changes). */
+  private instruments = new Map<string, Extract<ToEngine, { type: "instrument" }>>();
+  /** The song's tracks as last loaded (for mix changes on top). */
+  private songTracks: TrackSpec[] = [];
+  /** The one-material screens' cut: its effects follow its settings until tracks own effects. */
+  private currentFx: FxSettings | null = null;
   private worker = new Worker(new URL("../workers/analysis.worker.ts", import.meta.url), { type: "module" });
   private nextId = 1;
   private waiting = new Map<number, (response: AnalysisResponse) => void>();
@@ -109,18 +119,44 @@ export class EngineClient {
     });
   }
 
-  setSource(source: PreparedSource | null): void {
-    this.lastSource = source;
-    // Replace any queued source rather than sending two.
-    this.pending = this.pending.filter((m) => m.type !== "source");
-    this.post({ type: "source", source });
+  /** A material's prepared samples (null drops them). */
+  setSource(source: PreparedSource | null, material = MAIN_MATERIAL): void {
+    this.sources.set(material, source);
+    // Replace any queued source of that material rather than sending two.
+    this.pending = this.pending.filter((m) => !(m.type === "source" && m.material === material));
+    this.post({ type: "source", material, source });
   }
 
-  setInstrument(markers: Markers, params: InstrumentParams, hold = 1): void {
-    const message: ToEngine = { type: "instrument", markers, params, hold };
-    this.lastInstrument = message;
-    this.pending = this.pending.filter((m) => m.type !== "instrument");
+  /** An instrument: a cut (markers and voice settings) of a material. Engines on it follow at once. */
+  defineInstrument(id: string, material: string, markers: Markers, params: InstrumentParams): void {
+    const message = { type: "instrument" as const, id, material, markers, params };
+    this.instruments.set(id, message);
+    this.pending = this.pending.filter((m) => !(m.type === "instrument" && m.id === id));
     this.post(message);
+  }
+
+  dropInstrument(id: string): void {
+    this.instruments.delete(id);
+    this.post({ type: "dropInstrument", id });
+  }
+
+  /** What the keyboard plays, and through which effects. */
+  setLive(instrument: string | null, fx: FxSettings | null): void {
+    this.pending = this.pending.filter((m) => m.type !== "live");
+    this.post({ type: "live", instrument, fx });
+  }
+
+  /**
+   * The one-material screens' call: the cut being edited is instrument
+   * "current" of the material, the keyboard plays it through its effects, and
+   * so does a song track on it.
+   */
+  setInstrument(markers: Markers, params: InstrumentParams, hold = 1): void {
+    this.defineInstrument(CURRENT_INSTRUMENT, MAIN_MATERIAL, markers, params);
+    this.setHold(hold);
+    this.currentFx = params.fx;
+    this.setLive(CURRENT_INSTRUMENT, params.fx);
+    for (const t of this.songTracks) if (t.instrument === CURRENT_INSTRUMENT) this.setTrackMix(t.id, { ...t, fx: params.fx });
   }
 
   // Notes played before the worklet is up (the very first tap starts the
@@ -152,11 +188,35 @@ export class EngineClient {
 
   // ------------------------------------------------------------ 曲で試す
 
-  /** Hands the song's notes to the engine (stops any song playing). */
-  loadSong(material: SeqNote[], backing: SeqNote[]): void {
-    this.pending = this.pending.filter((m) => m.type !== "song" && m.type !== "songPlay");
-    this.post({ type: "song", material, backing });
+  /** The song's tracks (replacing any; stops a song playing). */
+  loadTracks(tracks: TrackSpec[]): void {
+    this.songTracks = tracks;
+    this.pending = this.pending.filter((m) => m.type !== "song" && m.type !== "songPlay" && m.type !== "songMix");
+    this.post({ type: "song", tracks });
   }
+
+  /** Volume, pan, mute, solo and effects of one track, while it plays. */
+  setTrackMix(id: string, mix: { gain: number; pan: number; mute: boolean; solo: boolean; fx: FxSettings | null }): void {
+    this.songTracks = this.songTracks.map((t) => (t.id === id ? { ...t, ...mix } : t));
+    this.pending = this.pending.filter((m) => !(m.type === "songMix" && m.id === id));
+    this.post({ type: "songMix", id, mix: { gain: mix.gain, pan: mix.pan, mute: mix.mute, solo: mix.solo, fx: mix.fx } });
+  }
+
+  setMasterFx(fx: FxSettings | null): void {
+    this.pending = this.pending.filter((m) => m.type !== "master");
+    this.post({ type: "master", fx });
+  }
+
+  /** The one-material screens' song: the material's notes on the cut being edited (through its effects), the rest on the backing. */
+  loadSong(material: SeqNote[], backing: SeqNote[]): void {
+    const plain = { pan: 0, mute: false, solo: false };
+    this.loadTracks([
+      { id: "material", instrument: CURRENT_INSTRUMENT, notes: material, gain: 1, fx: this.currentFx, ...plain },
+      { id: "backing", instrument: "backing", notes: backing, gain: this.backingGain, fx: null, ...plain },
+    ]);
+  }
+
+  private backingGain = 0.5;
 
   /**
    * Plays the loaded song from `fromSec`, a moment from now (so every note
@@ -184,8 +244,11 @@ export class EngineClient {
   }
 
   setSongGain(backing: number, material: number): void {
-    this.pending = this.pending.filter((m) => m.type !== "songGain");
-    this.post({ type: "songGain", backing, material });
+    this.backingGain = backing;
+    for (const t of this.songTracks) {
+      if (t.id === "backing") this.setTrackMix(t.id, { ...t, gain: backing });
+      else if (t.id === "material") this.setTrackMix(t.id, { ...t, gain: material });
+    }
   }
 
   /** The audio clock (seconds), or null before the audio started. */
@@ -261,13 +324,14 @@ export class EngineClient {
     if (was) this.onPreviewEnd();
   }
 
-  /** The source last sent, and whether it was made for the engine's actual rate. */
-  sourceMatchesRate(): boolean {
-    return !this.lastSource || this.lastSource.sampleRate === this.sampleRate;
+  /** Whether a material's source was made for the engine's actual rate. */
+  sourceMatchesRate(material = MAIN_MATERIAL): boolean {
+    const source = this.sources.get(material);
+    return !source || source.sampleRate === this.sampleRate;
   }
 
-  /** Re-sends the current instrument (e.g. after a source was re-prepared). */
+  /** Re-sends the instruments (after a source was re-prepared, engines are set up again). */
   resendInstrument(): void {
-    if (this.lastInstrument) this.post(this.lastInstrument);
+    for (const message of this.instruments.values()) this.post(message);
   }
 }

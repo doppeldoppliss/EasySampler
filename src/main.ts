@@ -61,6 +61,10 @@ const IOS = /iP(hone|ad|od)/.test(navigator.platform) || (navigator.platform ===
 const STANDALONE = window.matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
 /** A file is decoded whole, in memory, so a very long one is refused up front (an iPhone would run out and reload the page). */
 const DECODE_REFUSE_SEC = IOS ? 300 : 1800;
+/** iPhone / iPad: the samples of every material are held at once, so a project keeps to this much in all (seconds). */
+const PROJECT_AUDIO_LIMIT_SEC = IOS ? 240 : Infinity;
+/** iPhone / iPad: voices one track may sound at once (every track has its own engine). */
+const TRACK_VOICES_IOS = 8;
 
 // ---------------------------------------------------------------- state
 
@@ -115,6 +119,7 @@ let built: { key: string; result: Built } | null = null;
 let building = false;
 
 const client = new EngineClient();
+if (IOS) client.voiceCap = TRACK_VOICES_IOS;
 const editor = new MaterialEditor();
 const sink = {
   noteOn: (n: number, velocity: number) => {
@@ -136,10 +141,22 @@ songPanel.onPlayingChange = (playing) => {
 };
 // (Development only: a handle for checking playback where the page's animation frames do not run.)
 if (import.meta.env.DEV) Object.assign(window, { __easysampler: { client, rollPanel, songPanel } });
-rollPanel.onTrackChange = () => {
-  fxTrackLabel.textContent = `「${rollPanel.trackName}」`;
+rollPanel.onTrackChange = () => showFxTarget();
+function showFxTarget(): void {
+  fxTrackLabel.textContent = fxTarget === "master" ? "(マスター)" : `「${rollPanel.trackName}」`;
+  fxTrackButton.textContent = `トラック「${rollPanel.trackName}」`;
+  fxTrackButton.classList.toggle("on", fxTarget === "track");
+  fxMasterButton.classList.toggle("on", fxTarget === "master");
   refreshControls();
-};
+}
+const fxTrackButton = button("トラック", "small toggle", () => {
+  fxTarget = "track";
+  showFxTarget();
+});
+const fxMasterButton = button("マスター(曲全体)", "small toggle", () => {
+  fxTarget = "master";
+  showFxTarget();
+});
 rollPanel.onPlayingChange = (playing) => {
   if (!playing) return;
   client.stopPreview();
@@ -781,8 +798,14 @@ const BEATS: [string, string][] = [
 ];
 
 /** The track's effect rack (design.md 13.1: effects are the song side's). */
+/** Which rack the effects panel edits: the selected track's, or the master's (the whole mix). */
+let fxTarget: "track" | "master" = "track";
 function fxNow(): FxSettings {
-  return rollPanel.trackFx();
+  return fxTarget === "master" ? rollPanel.masterFx() : rollPanel.trackFx();
+}
+function updateFx(change: (f: FxSettings) => void): void {
+  if (fxTarget === "master") rollPanel.updateMasterFx(change);
+  else rollPanel.updateTrackFx(change);
 }
 
 function fxRange(label: string, min: number, max: number, step: number, get: () => number, set: (f: FxSettings, v: number) => void, format: (v: number) => string, _keep?: boolean): HTMLElement {
@@ -793,7 +816,7 @@ function fxRange(label: string, min: number, max: number, step: number, get: () 
     value.textContent = format(get());
   };
   input.addEventListener("input", () => {
-    rollPanel.updateTrackFx((f) => set(f, Number(input.value)));
+    updateFx((f) => set(f, Number(input.value)));
     value.textContent = format(Number(input.value));
   });
   controlsRefreshers.push(refresh);
@@ -803,14 +826,14 @@ function fxRange(label: string, min: number, max: number, step: number, get: () 
 function fxSelect<T extends string>(label: string, options: [T, string][], get: () => T, set: (f: FxSettings, v: T) => void, _keep?: boolean): HTMLElement {
   const input = el("select", {}, options.map(([value, text]) => el("option", { value, textContent: text })));
   controlsRefreshers.push(() => (input.value = get()));
-  input.addEventListener("change", () => rollPanel.updateTrackFx((f) => set(f, input.value as T)));
+  input.addEventListener("change", () => updateFx((f) => set(f, input.value as T)));
   return el("label", { className: "control" }, [el("span", { className: "control-label", textContent: label }), input]);
 }
 
 function fxCheck(label: string, get: () => boolean, set: (f: FxSettings, v: boolean) => void): HTMLElement {
   const input = el("input", { type: "checkbox" });
   controlsRefreshers.push(() => (input.checked = get()));
-  input.addEventListener("change", () => rollPanel.updateTrackFx((f) => set(f, input.checked)));
+  input.addEventListener("change", () => updateFx((f) => set(f, input.checked)));
   return el("label", { className: "control check" }, [input, el("span", { textContent: label })]);
 }
 
@@ -866,14 +889,14 @@ function fxHead(text: string): HTMLElement {
 }
 
 const fxResetButton = button("エフェクトをすべてオフに", "small", () => {
-  rollPanel.updateTrackFx((f) => Object.assign(f, structuredClone(DEFAULT_FX)));
+  updateFx((f) => Object.assign(f, structuredClone(DEFAULT_FX)));
   refreshControls();
 });
 
 const fxPanel = el("details", { className: "panel fx-panel" }, [
   el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxTrackLabel, fxActiveLine]),
-  el("div", { className: "row" }, [fxResetButton]),
-  el("p", { className: "fine", textContent: "打ち込みで選んでいるトラックにかかります(上から順に)。試し弾きと、書き出す単音の WAV には入りません。" }),
+  el("div", { className: "row" }, [el("span", { className: "fine", textContent: "かける先:" }), fxTrackButton, fxMasterButton, fxResetButton]),
+  el("p", { className: "fine", textContent: "打ち込みで選んでいるトラック、またはマスター(曲全体)にかかります(上から順に)。試し弾きと、書き出す単音の WAV には入りません。" }),
   fxHead("立ち上がり"),
   fxGroup("transient", "トランジェント(立ち上がり)", "音の頭(アタック)と、そのあとの伸び(サステイン)を別々に上げ下げします。", [
     fxRange("アタック", -12, 12, 0.5, () => fxNow().transient.attackDb, (f, v) => (f.transient.attackDb = v), db, true),
@@ -2359,6 +2382,14 @@ function refreshMaterialSelect(): void {
  * are kept) or, with `kept`, one coming back from the store with its settings.
  */
 async function load(name: string, channels: Float32Array[], sampleRate: number, kept?: { id: string; settings: SettingsFile | null }): Promise<void> {
+  if (!kept) {
+    let total = channels[0].length / sampleRate;
+    for (const { material: m } of library.values()) total += m.channels[0].length / m.sampleRate;
+    if (total > PROJECT_AUDIO_LIMIT_SEC) {
+      status.textContent = `「${name}」を追加すると素材の合計が ${Math.round(total)} 秒になり、iPhone / iPad で扱える ${PROJECT_AUDIO_LIMIT_SEC} 秒を超えます。使っていない素材を「この素材を外す」で外してください。`;
+      return;
+    }
+  }
   status.textContent = `「${name}」を解析しています…`;
   stashMaterial();
   resetHistory();

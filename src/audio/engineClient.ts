@@ -126,9 +126,13 @@ export class EngineClient {
     this.post({ type: "source", material, source });
   }
 
+  /** The most voices one instrument (one track) may sound at once (set lower on a phone, design.md 13.1). */
+  voiceCap = Infinity;
+
   /** An instrument: a cut (markers and voice settings) of a material. Engines on it follow at once. */
   defineInstrument(id: string, material: string, markers: Markers, params: InstrumentParams): void {
-    const message = { type: "instrument" as const, id, material, markers, params };
+    const capped = params.maxVoices > this.voiceCap ? { ...params, maxVoices: this.voiceCap } : params;
+    const message = { type: "instrument" as const, id, material, markers, params: capped };
     this.instruments.set(id, message);
     this.pending = this.pending.filter((m) => !(m.type === "instrument" && m.id === id));
     this.post(message);

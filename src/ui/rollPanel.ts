@@ -250,7 +250,7 @@ export class RollPanel {
     this.roll.setNotes(this.track.notes);
     this.roll.frame(60);
     this.sendLoop();
-    this.client.setMasterFx(null);
+    this.client.setMasterFx(this.project.masterFx);
     this.renderTracks();
     this.refreshButtons();
     this.showPosition(this.from);
@@ -417,6 +417,19 @@ export class RollPanel {
     change(fx);
     t.fx = fx;
     this.client.setTrackMix(t.id, { gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, fx });
+    this.scheduleSave();
+  }
+
+  /** The effects on the whole mix. */
+  masterFx(): FxSettings {
+    return this.project.masterFx;
+  }
+
+  updateMasterFx(change: (fx: FxSettings) => void): void {
+    const fx = structuredClone(this.project.masterFx);
+    change(fx);
+    this.project.masterFx = fx;
+    this.client.setMasterFx(fx);
     this.scheduleSave();
   }
 

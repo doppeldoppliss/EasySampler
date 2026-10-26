@@ -15,6 +15,8 @@ export interface CutSettings {
   params: InstrumentParams;
   note: number;
   noteMode: "auto" | "manual";
+  /** The preset last chosen ("" = changed since, カスタム). Absent in older files. */
+  presetId?: string;
 }
 
 export interface SettingsFile {
@@ -119,6 +121,7 @@ function sanitizeCut(raw: unknown, index: number): CutSettings | null {
     params: sanitizeParams(raw.params),
     note: Math.max(0, Math.min(127, Math.round(num(raw.note, 60)))),
     noteMode: raw.noteMode === "manual" ? "manual" : "auto",
+    ...(typeof raw.presetId === "string" ? { presetId: raw.presetId } : {}),
   };
 }
 

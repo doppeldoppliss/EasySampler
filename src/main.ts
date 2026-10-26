@@ -11,6 +11,7 @@
 import { applyCorrections, CORRECTION_LABELS, correctionLabel, type CorrectionKind, type PitchCorrection } from "./analysis/corrections";
 import { midiToHz, pitchLabel } from "./analysis/pitch";
 import { EngineClient } from "./audio/engineClient";
+import { loadLastMaterial, saveLastMaterial } from "./audio/lastMaterial";
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
 import type { PitchTrack } from "./analysis/pyin";
@@ -50,6 +51,7 @@ const MAX_MATERIAL_SEC = 60;
 /** Longer files are cut here when decoded (memory: 10 minutes of stereo 48 kHz is about 230 MB). */
 const MAX_DECODE_SEC = 600;
 const DEMO_RATE = 44100;
+const DEMO_NAME = "デモ素材";
 const GUIDE_KEY = "maddaw.guide.v2";
 const SMALL_SCREEN = window.matchMedia("(max-width: 600px)").matches || (window.matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) <= 600);
 /** iPhone / iPad (an iPad calls itself a Mac, with touch). */
@@ -1931,7 +1933,7 @@ function settingsBody(): Omit<SettingsFile, "app" | "version" | "savedAt"> {
     material: { name: material!.name, durationSec: material!.analysis.durationSec, sampleRate: material!.sampleRate, channels: material!.channels.length },
     export: exportSettings,
     credit: { ...credit },
-    cuts: cuts.map(({ name, markers: m, params: p, note: n, noteMode: mode }) => ({ name, markers: m, params: p, note: n, noteMode: mode })),
+    cuts: cuts.map(({ name, markers: m, params: p, note: n, noteMode: mode, presetId: preset }) => ({ name, markers: m, params: p, note: n, noteMode: mode, presetId: preset })),
     currentCut: current,
     corrections: material!.corrections,
     pitchRange: material!.pitchRange ?? undefined,
@@ -2076,7 +2078,9 @@ function applySettings(file: SettingsFile): void {
   cuts = file.cuts.map((c) => {
     const m = clampMarkers({ ...c.markers, rangeEnd: Math.min(c.markers.rangeEnd, duration) });
     const detected = rootForMarkers(material!.analysis.track, m);
-    const preset = PRESETS.find((p) => JSON.stringify(p.apply(structuredClone(c.params))) === JSON.stringify(c.params))?.id ?? "";
+    // The preset as saved; an older file without one gets the first preset its settings still match.
+    const saved = c.presetId === "" || PRESETS.some((p) => p.id === c.presetId) ? (c.presetId as PresetId | "") : undefined;
+    const preset = saved ?? PRESETS.find((p) => JSON.stringify(p.apply(structuredClone(c.params))) === JSON.stringify(c.params))?.id ?? "";
     return { ...c, markers: m, params: { ...c.params, maxVoices: DEFAULT_PARAMS.maxVoices }, presetId: preset, detectedRoot: detected?.midi ?? null };
   });
   current = file.currentCut;
@@ -2178,6 +2182,8 @@ async function load(name: string, channels: Float32Array[], sampleRate: number):
     const shortNote = !restored && presetId === "short" ? " 伸ばせる部分が短いので「短い素材(長さ保持)」にしました。伸ばして使うならプリセットを「シンセ化」などに。" : "";
     status.replaceChildren(text + (restored ? " 前回の設定を復元しました。" : "") + shortNote);
     if (restored) status.append(" ", button("最初から", "small", () => resetSettingsButton.click()));
+    // Kept for next time: closing the browser and opening it again comes back here, edits and all.
+    void saveLastMaterial(name === DEMO_NAME && channels.length === 1 && sampleRate === DEMO_RATE ? { kind: "demo" } : { kind: "clip", name, sampleRate, channels });
   } catch (error) {
     status.textContent = `読み込めませんでした: ${error instanceof Error ? error.message : error}`;
   }
@@ -2190,7 +2196,7 @@ function loadDemo(): void {
   pickerClip = null;
   rePickButton.hidden = true;
   pickerPanel.hidden = true;
-  void load("デモ素材", [demoSyllable(DEMO_RATE)], DEMO_RATE);
+  void load(DEMO_NAME, [demoSyllable(DEMO_RATE)], DEMO_RATE);
 }
 
 async function openFile(file: File): Promise<void> {
@@ -2345,3 +2351,15 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
 
 refreshControls();
 refreshExport();
+
+// The material open when the page was last closed comes back (its edits are restored by load()).
+void (async () => {
+  const last = await loadLastMaterial();
+  if (!last || material || !pickerPanel.hidden) return; // nothing kept, or something was opened meanwhile
+  if (last.kind === "demo") loadDemo();
+  else {
+    longClip = null;
+    rePickButton.hidden = true;
+    await load(last.name, last.channels, last.sampleRate);
+  }
+})();

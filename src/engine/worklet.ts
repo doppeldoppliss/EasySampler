@@ -65,6 +65,9 @@ class EngineProcessor extends AudioWorkletProcessor {
       case "songStop":
         this.song.stop(this.engine);
         break;
+      case "songLoop":
+        this.song.setLoop(message.loop);
+        break;
       case "songGain":
         this.song.backingGain = message.backing;
         this.song.materialGain = message.material;

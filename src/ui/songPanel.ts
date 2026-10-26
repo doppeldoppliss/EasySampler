@@ -174,6 +174,12 @@ export class SongPanel {
     this.reload();
   }
 
+  /** The part chosen to play the material, with the song's tempo and the transpose set here (for 打ち込み to take over). */
+  selectedPart(): { part: SongPart; bpm: number; transpose: number } | null {
+    const part = this.part();
+    return part && this.song ? { part, bpm: this.song.bpm, transpose: part.drum ? 0 : this.transpose } : null;
+  }
+
   private part(): SongPart | null {
     return this.parts.find((p) => p.id === this.partId) ?? null;
   }

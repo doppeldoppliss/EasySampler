@@ -172,6 +172,12 @@ export class EngineClient {
     return at;
   }
 
+  /** Loops [startSec, endSec) of the song while it plays; null stops looping. */
+  setSongLoop(loop: { startSec: number; endSec: number } | null): void {
+    this.pending = this.pending.filter((m) => m.type !== "songLoop");
+    this.post({ type: "songLoop", loop });
+  }
+
   stopSong(): void {
     this.pending = this.pending.filter((m) => m.type !== "songPlay");
     if (this.node) this.post({ type: "songStop" });

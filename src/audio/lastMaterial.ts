@@ -56,3 +56,21 @@ export async function loadLastMaterial(): Promise<LastMaterial | null> {
     return null;
   }
 }
+
+/** Keeps any other value under its own key in the same store (the song being written, design.md 13). */
+export async function keep(key: string, value: unknown): Promise<void> {
+  try {
+    await run("readwrite", (store) => store.put(value, key));
+  } catch {
+    // not kept this time
+  }
+}
+
+/** A value kept with keep(), or undefined. */
+export async function kept(key: string): Promise<unknown> {
+  try {
+    return await run("readonly", (store) => store.get(key));
+  } catch {
+    return undefined;
+  }
+}

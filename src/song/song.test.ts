@@ -194,6 +194,22 @@ describe("SongPlayer", () => {
     expect(log).toEqual(["on 62 @244", "off 62 @344"]);
   });
 
+  it("loops: at the loop's end everything is released and the loop's start plays again, on the exact sample", () => {
+    const player = new SongPlayer(SR);
+    const { engine, log } = fakeEngine();
+    player.load(
+      [
+        { start: 0.1, end: 0.15, note: 60, velocity: 1, drum: false },
+        { start: 0.3, end: 0.45, note: 62, velocity: 1, drum: false }, // still sounding at the loop's end
+      ],
+      [],
+    );
+    player.setLoop({ startSec: 0.1, endSec: 0.4 });
+    player.play(0, 0);
+    run(player, engine, 0, 8); // 1024 frames: song 0.1–0.4 is frames 100–400, then 400 → 100 again
+    expect(log).toEqual(["on 60 @100", "off 60 @150", "on 62 @300", "allOff", "on 60 @400", "off 60 @450", "on 62 @600", "allOff", "on 60 @700", "off 60 @750", "on 62 @900", "allOff", "on 60 @1000"]);
+  });
+
   it("stops everything on stop", () => {
     const player = new SongPlayer(SR);
     const { engine, log } = fakeEngine();

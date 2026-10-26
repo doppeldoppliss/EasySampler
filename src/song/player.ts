@@ -31,6 +31,8 @@ export class SongPlayer {
   private positioned = false;
   backingGain = 0.5;
   materialGain = 1;
+  /** A loop in song frames: playing across its end jumps back to its start. */
+  private loop: { start: number; end: number } | null = null;
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
@@ -57,6 +59,12 @@ export class SongPlayer {
     events.sort((a, b) => a.frame - b.frame || Number(a.on) - Number(b.on));
     this.events = events;
     this.positioned = false;
+  }
+
+  /** Loops [startSec, endSec) of the song, or stops looping (null). */
+  setLoop(loop: { startSec: number; endSec: number } | null): void {
+    const sr = this.sampleRate;
+    this.loop = loop && loop.endSec > loop.startSec ? { start: Math.round(loop.startSec * sr), end: Math.round(loop.endSec * sr) } : null;
   }
 
   /** Starts at context frame `atFrame`, from `fromSec` into the song. */
@@ -109,16 +117,33 @@ export class SongPlayer {
         this.positioned = true;
       }
       if (this.positioned) {
-        while (this.cursor < this.events.length) {
-          const e = this.events[this.cursor];
-          const offset = e.frame - songAt(blockFrame);
-          if (offset >= frames) break;
-          if (offset > done) {
-            this.renderSpan(outL, outR, done, offset, engine);
-            done = offset;
+        for (;;) {
+          // Where this stretch ends: the block's end, or the loop's end if it comes first.
+          const now = songAt(blockFrame + done);
+          const loop = this.loop;
+          const limit = loop && now < loop.end ? Math.min(frames, done + (loop.end - now)) : frames;
+          while (this.cursor < this.events.length) {
+            const e = this.events[this.cursor];
+            const offset = e.frame - songAt(blockFrame);
+            if (offset >= limit) break;
+            if (offset > done) {
+              this.renderSpan(outL, outR, done, offset, engine);
+              done = offset;
+            }
+            this.fire(e, engine);
+            this.cursor++;
           }
-          this.fire(e, engine);
-          this.cursor++;
+          if (!loop || limit >= frames) break;
+          // The loop's end: what sounds is released, and the song goes on from the loop's start.
+          if (limit > done) {
+            this.renderSpan(outL, outR, done, limit, engine);
+            done = limit;
+          }
+          engine.allOff();
+          this.backing.allOff();
+          this.fromFrame = loop.start;
+          this.startFrame = blockFrame + done;
+          this.cursor = this.seek(loop.start);
         }
       }
     }

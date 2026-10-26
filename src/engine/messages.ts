@@ -17,6 +17,7 @@ export type ToEngine =
   | { type: "song"; material: SeqNote[]; backing: SeqNote[] }
   | { type: "songPlay"; atFrame: number; fromSec: number }
   | { type: "songStop" }
+  | { type: "songLoop"; loop: { startSec: number; endSec: number } | null }
   | { type: "songGain"; backing: number; material: number };
 
 export type FromEngine = { type: "status"; voices: number };

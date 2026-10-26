@@ -13,6 +13,9 @@ export interface SongNote {
   velocity: number;
   /** 0–15 (the GM drum channel, "channel 10", is 9). */
   channel: number;
+  /** The same start and end in beats (quarter notes) from the start, whatever the tempo. */
+  startBeat: number;
+  endBeat: number;
 }
 
 export interface SongTrack {
@@ -174,7 +177,7 @@ export function parseMidi(data: ArrayBuffer | Uint8Array): Song {
     name: r.name,
     program: r.program,
     notes: r.notes
-      .map((n) => ({ start: toSec(n.startTick), end: toSec(Math.max(n.endTick, n.startTick)), pitch: n.pitch, velocity: n.velocity, channel: n.channel }))
+      .map((n) => ({ start: toSec(n.startTick), end: toSec(Math.max(n.endTick, n.startTick)), pitch: n.pitch, velocity: n.velocity, channel: n.channel, startBeat: n.startTick / ppq, endBeat: Math.max(n.endTick, n.startTick) / ppq }))
       .sort((x, y) => x.start - y.start || x.pitch - y.pitch),
   }));
 

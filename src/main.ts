@@ -45,6 +45,7 @@ import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 import { clock, RangePicker } from "./ui/rangePicker";
 import { KEY_NAMES, quantizeToScale, SCALE_LABELS, type ScaleId } from "./instrument/scale";
 import { isMidiFile, SongPanel } from "./ui/songPanel";
+import { RollPanel } from "./ui/rollPanel";
 
 /** The most material one analysis takes; a longer clip goes through the range picker first. */
 const MAX_MATERIAL_SEC = 60;
@@ -116,8 +117,19 @@ const piano = new OnScreenKeyboard(sink, 48, SMALL_SCREEN ? 72 : 84);
 const pcKeys = new PcKeyboard(sink);
 // 曲で試す: the material on a part of a MIDI song (one sound at a time with the previews).
 const songPanel = new SongPanel(client, () => note, () => exportSettings.bpm);
+// 打ち込み: a song written on the piano roll, played by the material (one player at a time with 曲で試す).
+const rollPanel = new RollPanel(client, () => exportSettings.bpm, () => songPanel.selectedPart());
 songPanel.onPlayingChange = (playing) => {
-  if (playing) client.stopPreview();
+  if (!playing) return;
+  client.stopPreview();
+  rollPanel.stop();
+};
+// (Development only: a handle for checking playback where the page's animation frames do not run.)
+if (import.meta.env.DEV) Object.assign(window, { __easysampler: { client, rollPanel, songPanel } });
+rollPanel.onPlayingChange = (playing) => {
+  if (!playing) return;
+  client.stopPreview();
+  songPanel.stop();
 };
 songPanel.onUseBpm = (bpm) => updateExport((s) => (s.bpm = Math.max(20, Math.min(400, Math.round(bpm * 10) / 10))));
 
@@ -1406,7 +1418,7 @@ function openFiles(files: readonly File[]): void {
 
 // ---------------------------------------------------------------- page
 
-const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, fxPanel, songPanel.element, exportPanel, detailsPanel]);
+const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, fxPanel, rollPanel.element, songPanel.element, exportPanel, detailsPanel]);
 
 document.getElementById("app")!.append(
   el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [rePickButton, openButton, demoButton])]),
@@ -1551,8 +1563,9 @@ function sendInstrument(): void {
 /** The note and export settings → the note row, the length row, the file name, the help, the editor's target line. */
 function refreshExport(): void {
   // The tail limit counts in the export BPM (the song's own while one plays); a "stretch" sustain fills the export length.
-  if (!songPanel.playing) client.setTempo(exportSettings.bpm);
+  if (!songPanel.playing && !rollPanel.playing) client.setTempo(exportSettings.bpm);
   client.setHold(exportLengthSec(exportSettings));
+  rollPanel.setRoot(note);
   tuneScaleRow.hidden = params.tune.mode !== "scale";
   refreshSustainHelp();
   if (noteMode === "auto") note = Math.max(24, Math.min(96, Math.round(params.root)));
@@ -1698,7 +1711,7 @@ function schedulePrebuild(): void {
   if (!canShareFiles()) return;
   clearTimeout(prebuildTimer);
   prebuildTimer = window.setTimeout(() => {
-    if (material && !building && !playing && !songPanel.playing) void buildCurrent(true).catch(() => {});
+    if (material && !building && !playing && !songPanel.playing && !rollPanel.playing) void buildCurrent(true).catch(() => {});
   }, 1500);
 }
 
@@ -1765,6 +1778,7 @@ async function listen(): Promise<void> {
     return;
   }
   songPanel.stop();
+  rollPanel.stop();
   const result = await buildCurrent();
   if (!result) return;
   exportStatus.textContent = exportSettings.format === "multisample" ? `試聴: 中央の音(${pitchLabel(note)})` : "";
@@ -1824,6 +1838,7 @@ async function playOriginal(): Promise<void> {
   }
   if (!material || !markers) return;
   songPanel.stop();
+  rollPanel.stop();
   const rate = material.sampleRate;
   const pieces = originalPieces();
   const fade = Math.round(0.005 * rate);
@@ -1882,8 +1897,9 @@ window.addEventListener("keydown", (event) => {
   }
   if (!material) return;
   event.preventDefault();
-  if (songPanel.playing) {
+  if (songPanel.playing || rollPanel.playing) {
     songPanel.stop();
+    rollPanel.stop();
     return;
   }
   if (playing) {

@@ -1,0 +1,156 @@
+// The song as it is edited (design.md 13): notes in beats, not seconds, so the
+// grid, copying and a tempo change all stay exact. Seconds only appear when the
+// notes are handed to the player.
+
+import type { SeqNote } from "../song/parts";
+import type { SongNote } from "../song/midi";
+
+export interface Note {
+  /** Unique within its track (for selection; not saved meaningfully across sessions). */
+  id: number;
+  /** Beats (quarter notes) from the start of the song. */
+  start: number;
+  /** Beats; always > 0. */
+  length: number;
+  /** MIDI note, 0–127. */
+  pitch: number;
+  /** 0–1. */
+  velocity: number;
+}
+
+export interface Track {
+  name: string;
+  notes: Note[];
+}
+
+export interface Project {
+  version: 1;
+  bpm: number;
+  /** Beats in a bar (4/4 for now: no time-signature changes, design.md 13). */
+  beatsPerBar: number;
+  /** Phase 1 edits one track; it plays on the material open now. */
+  tracks: Track[];
+  /** The loop in beats, and whether playback follows it. */
+  loop: { start: number; end: number; on: boolean };
+}
+
+export const MIN_LENGTH = 1 / 64;
+export const DEFAULT_VELOCITY = 0.8;
+
+export function emptyProject(): Project {
+  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [{ name: "素材", notes: [] }], loop: { start: 0, end: 16, on: false } };
+}
+
+let nextId = 1;
+export function newId(): number {
+  return nextId++;
+}
+
+/** Notes sorted by start then pitch (the order they are kept and drawn in). */
+export function sortNotes(notes: Note[]): Note[] {
+  return notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+}
+
+/** The nearest grid line (beats); a grid of 0 leaves the value as it is. */
+export function snap(beat: number, grid: number): number {
+  return grid > 0 ? Math.round(beat / grid) * grid : beat;
+}
+
+/** The grid line at or before a value. */
+export function snapDown(beat: number, grid: number): number {
+  return grid > 0 ? Math.floor(beat / grid + 1e-9) * grid : beat;
+}
+
+export function clampPitch(pitch: number): number {
+  return Math.max(0, Math.min(127, Math.round(pitch)));
+}
+
+/** Where the last note ends (beats). */
+export function songEnd(notes: readonly Note[]): number {
+  let end = 0;
+  for (const n of notes) end = Math.max(end, n.start + n.length);
+  return end;
+}
+
+export function beatsToSec(beats: number, bpm: number): number {
+  return (beats * 60) / bpm;
+}
+
+export function secToBeats(sec: number, bpm: number): number {
+  return (sec * bpm) / 60;
+}
+
+/**
+ * The notes as the player takes them (seconds). A note that overlaps the next
+ * one of the same pitch is cut short where that one starts, so the re-strike is
+ * heard (the engine has one voice per key).
+ */
+export function toSeqNotes(notes: readonly Note[], bpm: number): SeqNote[] {
+  const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+  const out: SeqNote[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const n = sorted[i];
+    let end = n.start + n.length;
+    for (let j = i + 1; j < sorted.length && sorted[j].start < end; j++) {
+      if (sorted[j].pitch === n.pitch && sorted[j].start > n.start) {
+        end = sorted[j].start;
+        break;
+      }
+    }
+    out.push({ start: beatsToSec(n.start, bpm), end: beatsToSec(Math.max(n.start + MIN_LENGTH, end), bpm), note: n.pitch, velocity: n.velocity, drum: false });
+  }
+  return out;
+}
+
+/** A MIDI file's part as editable notes (beats as written, whatever the file's tempo). */
+export function fromSongNotes(notes: readonly SongNote[]): Note[] {
+  return sortNotes(
+    notes.map((n) => ({
+      id: newId(),
+      start: n.startBeat,
+      length: Math.max(MIN_LENGTH, n.endBeat - n.startBeat),
+      pitch: n.pitch,
+      velocity: Math.max(0.05, Math.min(1, n.velocity / 127)),
+    })),
+  );
+}
+
+/** Copies of notes, moved by `dBeats` and `dPitch`, with fresh ids. */
+export function shifted(notes: readonly Note[], dBeats: number, dPitch: number): Note[] {
+  return notes.map((n) => ({ ...n, id: newId(), start: Math.max(0, n.start + dBeats), pitch: clampPitch(n.pitch + dPitch) }));
+}
+
+/** A project read back from storage or a file: anything missing or odd is put right. */
+export function sanitizeProject(raw: unknown): Project {
+  const d = emptyProject();
+  if (!raw || typeof raw !== "object") return d;
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown, fallback: number, lo: number, hi: number) => (typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback);
+  const tracks = Array.isArray(r.tracks)
+    ? r.tracks.map((t, i) => {
+        const tr = (t && typeof t === "object" ? t : {}) as Record<string, unknown>;
+        const notes = Array.isArray(tr.notes)
+          ? tr.notes
+              .filter((n): n is Record<string, unknown> => !!n && typeof n === "object")
+              .map((n) => ({
+                id: newId(),
+                start: num(n.start, 0, 0, 100_000),
+                length: num(n.length, 1, MIN_LENGTH, 10_000),
+                pitch: clampPitch(num(n.pitch, 60, 0, 127)),
+                velocity: num(n.velocity, DEFAULT_VELOCITY, 0.01, 1),
+              }))
+          : [];
+        return { name: typeof tr.name === "string" && tr.name ? tr.name : `トラック ${i + 1}`, notes: sortNotes(notes) };
+      })
+    : d.tracks;
+  const loop = (r.loop && typeof r.loop === "object" ? r.loop : {}) as Record<string, unknown>;
+  const start = num(loop.start, d.loop.start, 0, 100_000);
+  const end = num(loop.end, d.loop.end, 0, 100_000);
+  return {
+    version: 1,
+    bpm: num(r.bpm, d.bpm, 20, 400),
+    beatsPerBar: Math.round(num(r.beatsPerBar, 4, 1, 16)),
+    tracks: tracks.length ? tracks : d.tracks,
+    loop: end > start ? { start, end, on: loop.on === true } : d.loop,
+  };
+}

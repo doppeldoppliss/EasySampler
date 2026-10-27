@@ -2520,9 +2520,8 @@ function removeMaterial(id: string): void {
     const next = [...library.keys()].at(-1);
     if (next) switchMaterialFrom(next);
     else {
-      workspace.hidden = true;
-      emptyState.hidden = false;
-      status.textContent = "素材を外しました。";
+      // (Not reached from the button, which needs another material to remain: a project always has one.)
+      void loadPiano();
     }
   }
   refreshInstruments();
@@ -2550,6 +2549,9 @@ function switchMaterialFrom(id: string): void {
 function refreshMaterialSelect(): void {
   materialSelect.replaceChildren(...[...library.values()].map(({ material: m }) => el("option", { value: m.id, textContent: m.name })));
   if (material) materialSelect.value = material.id;
+  // The last material stays: the page always has something to play (add another first, then take this one out).
+  removeMaterialButton.disabled = library.size < 2;
+  removeMaterialButton.title = library.size < 2 ? "素材が 1 つだけのときは外せません。別の素材(＋ 素材を追加・＋ 内蔵ピアノ)を加えてから外してください" : "";
 }
 
 /**

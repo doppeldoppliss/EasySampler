@@ -39,6 +39,7 @@ import {
   type PresetId,
 } from "./instrument/types";
 import { demoSyllable } from "./testsignals/synthVoice";
+import { PIANO_NAME, synthPiano } from "./testsignals/piano";
 import { el, isTypingTarget } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
@@ -284,13 +285,14 @@ function safeStorage(key: string, value?: string | null): string | null {
 
 const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json,.mid,.midi", multiple: true, className: "visually-hidden", id: "file" });
 const openButton = el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" });
-const demoButton = button("デモ素材", "", () => loadDemo());
+const demoButton = button("デモ素材(声)", "", () => loadDemo());
 const status = el("p", { className: "status", role: "status" });
 
-const emptyState = el("section", { className: "empty" }, [
+// (Shown only once every material has been taken out: a new project starts on the built-in piano.)
+const emptyState = el("section", { className: "empty", hidden: true }, [
   el("p", { className: "empty-title", textContent: "素材を入れたら、DAW に渡せる音源になる。" }),
   el("p", { textContent: "声や効果音のファイルを開くと、音程を判定して平らにし、母音を伸ばした単音の WAV を書き出せます。REAPER・GarageBand・Vital などのサンプラーにそのまま読み込めます。音域ぶんを揃えたマルチサンプル音源(SFZ / Decent Sampler)も作れます。" }),
-  el("div", { className: "row" }, [el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" }), button("デモ素材で試す", "", () => loadDemo())]),
+  el("div", { className: "row" }, [el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" }), button("ピアノで始める", "", () => void loadPiano()), button("デモ素材(声)で試す", "", () => loadDemo())]),
   el("p", { className: "fine", textContent: "生成AIは使っていません。素材は端末の中だけで処理され、外部には送られません。BGM の入った素材は、先に除去してから開いてください。" }),
 ]);
 
@@ -1563,9 +1565,13 @@ function isShortMaterial(m: Markers): boolean {
 }
 
 /** One cut from the analysis, as on a fresh load. */
+/** The preset the next new material's first cut starts from (the built-in piano asks for "decay"). */
+let nextPresetHint: PresetId | "" = "";
+
 function freshCuts(): void {
   if (!material) return;
-  presetId = "synth";
+  presetId = nextPresetHint || "synth";
+  nextPresetHint = "";
   cuts = [cutFromAnalysis(material.analysis.markers, "区間 1", DEFAULT_PARAMS)];
   current = 0;
 }
@@ -2621,6 +2627,19 @@ function loadDemo(): void {
   void load(DEMO_NAME, [demoSyllable(DEMO_RATE)], DEMO_RATE);
 }
 
+/** The sound a new project starts with: a synthesized piano note (C4), played as a decaying instrument. */
+async function loadPiano(): Promise<void> {
+  Object.assign(credit, { title: "EasySampler 内蔵ピアノ(合成音)", url: "", timecode: "", memo: "" });
+  setCreditInputs();
+  longClip = null;
+  pickerClip = null;
+  rePickButton.hidden = true;
+  pickerPanel.hidden = true;
+  nextPresetHint = "decay";
+  await load(PIANO_NAME, [synthPiano({ sampleRate: DEMO_RATE })], DEMO_RATE);
+  nextPresetHint = "";
+}
+
 async function openFile(file: File): Promise<void> {
   if (file.name.toLowerCase().endsWith(".json") || file.type === "application/json") {
     try {
@@ -2793,6 +2812,12 @@ void (async () => {
     }
     if (m.id === project.editing || m === order.at(-1)) await load(audio.name, audio.channels, audio.sampleRate, { id: m.id, settings });
     else await loadInBackground(m.id, audio.name, audio.channels, audio.sampleRate, settings);
+  }
+  // A new project (or one whose materials are all gone): it starts on the built-in piano, ready to play.
+  if (library.size === 0) {
+    await loadPiano();
+    if (material) status.textContent = "内蔵のピアノ音で始めています。鍵盤で弾いたり、打ち込みで曲を作ったりできます。自分の声や効果音は「素材を開く」から追加できます。";
+    else emptyState.hidden = false;
   }
   refreshInstruments();
   refreshMaterialSelect();

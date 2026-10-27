@@ -11,7 +11,7 @@ import type { ScaleId } from "./scale";
 export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
 export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
-export type PresetId = "synth" | "synth-lead" | "stretch" | "kerokero" | "wavetable" | "bass" | "jinriki" | "original" | "transpose" | "short" | "short-resample" | "drum";
+export type PresetId = "synth" | "synth-lead" | "stretch" | "kerokero" | "wavetable" | "bass" | "jinriki" | "original" | "transpose" | "short" | "short-resample" | "drum" | "decay";
 
 /** Seconds within the material, [start, end). */
 export interface TimeRange {
@@ -212,6 +212,8 @@ export const PRESETS: Preset[] = [
   // Short material (a shout, a word): played through once at the note, nothing stretched — the 音MAD staple.
   { id: "short", label: "短い素材(長さ保持・そのまま音程だけ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: true }, unvoicedFollow: true, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, retuneSec: 0 } }) },
   { id: "short-resample", label: "短い素材(速度連動・早回し質感)", apply: (p) => ({ ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: true }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false } }) },
+  // A struck or plucked sound (a piano, a pluck, a bell): it rings down on its own and stops soon after the key is let go, like a damper.
+  { id: "decay", label: "減衰する楽器(ピアノ・撥弦など)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: false }, unvoicedFollow: true, levelEven: 0, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false, smoothSec: 0 }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 }, amp: { ...p.amp, attack: 0.001, decay: 0.1, sustain: 1, release: 0.15 } }) },
   { id: "drum", label: "ドラム・効果音(ワンショット)", apply: (p) => ({ ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, amp: { ...p.amp, attack: 0.001, sustain: 1, release: 0.03 } }) },
 ];
 

@@ -41,6 +41,8 @@ export interface Track {
   solo: boolean;
   /** Portamento (seconds; 0 = off): notes that touch or overlap slide from one to the next, one at a time. */
   glide: number;
+  /** 語尾を収める: the tail is started early so it ends where the note does (otherwise it rings on after it). */
+  tailFit: boolean;
 }
 
 export interface Pad {
@@ -49,7 +51,7 @@ export interface Pad {
 }
 
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, kind: "melodic", instrument, pads: [], notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0 };
+  return { id: newTrackId(), name, kind: "melodic", instrument, pads: [], notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, tailFit: false };
 }
 
 /** A drum track: its first row plays the given cut (if any). */
@@ -218,6 +220,7 @@ export function sanitizeProject(raw: unknown): Project {
           mute: tr.mute === true,
           solo: tr.solo === true,
           glide: num(tr.glide, 0, 0, 2),
+          tailFit: tr.tailFit === true,
         };
       })
     : d.tracks;

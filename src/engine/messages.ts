@@ -18,6 +18,8 @@ export interface TrackSpec extends MixSettings {
   samples?: (string | null)[];
   /** Portamento (seconds; 0 or absent = off). */
   glide?: number;
+  /** 語尾を収める: the tail ends where the note does. */
+  tailFit?: boolean;
 }
 
 export type ToEngine =

@@ -529,3 +529,63 @@ describe("Engine portamento (a song track's glide)", () => {
     expect(Math.abs(pitchOf(out, 1.0, 1.3) - 67)).toBeLessThan(0.3);
   });
 });
+
+describe("Engine 語尾を収める (the tail fitted into a song note)", () => {
+  const vowel = synthVoice({ sampleRate: SR, durationSec: 0.8, pitch: demoPhrasePitch(57, 0.8) });
+
+  /** A note written `lengthSec` long (note-off at its end, as the song plays it): the output, and where the sound ends. */
+  function songNote(engine: Engine, lengthSec: number, fit: boolean): { out: Float32Array; endSec: number } {
+    const out = new Float32Array(Math.ceil((lengthSec + 2) * SR));
+    const l = new Float32Array(128);
+    const r = new Float32Array(128);
+    engine.noteOn(60, 1, fit ? lengthSec : undefined);
+    let off = false;
+    for (let at = 0; at < out.length; at += 128) {
+      if (!off && at >= lengthSec * SR) {
+        engine.noteOff(60);
+        off = true;
+      }
+      engine.render(l, r);
+      out.set(l.subarray(0, Math.min(128, out.length - at)), at);
+    }
+    let end = 0;
+    for (let i = 0; i < out.length; i++) if (Math.abs(out[i]) > 1e-4) end = i;
+    return { out, endSec: end / SR };
+  }
+
+  it("without it, the tail rings on after the note; with it, the sound is over by the note's end", () => {
+    const { engine } = setup(vowel);
+    const plain = songNote(engine, 1.2, false);
+    expect(plain.endSec).toBeGreaterThan(1.3);
+    const fitted = songNote(setup(vowel).engine, 1.2, true);
+    expect(fitted.endSec).toBeLessThan(1.2 + 0.01);
+    expect(fitted.endSec).toBeGreaterThan(1.1);
+    // The tail is what is heard at the end: sound right up to it, not a fade from the middle.
+    expect(rms(fitted.out, Math.round(1.0 * SR), Math.round(1.1 * SR))).toBeGreaterThan(0.01);
+  });
+
+  it("a note shorter than the tail keeps its first half, and still ends with the note", () => {
+    const fitted = songNote(setup(vowel).engine, 0.3, true);
+    expect(fitted.endSec).toBeLessThan(0.31);
+    expect(rms(fitted.out, Math.round(0.02 * SR), Math.round(0.14 * SR))).toBeGreaterThan(0.01);
+  });
+
+  it("the keyboard (no length) is unchanged", () => {
+    const a = songNote(setup(vowel).engine, 1.2, false).out;
+    const { engine } = setup(vowel);
+    const b = new Float32Array(a.length);
+    const l = new Float32Array(128);
+    const r = new Float32Array(128);
+    engine.noteOn(60, 1);
+    let off = false;
+    for (let at = 0; at < b.length; at += 128) {
+      if (!off && at >= 1.2 * SR) {
+        engine.noteOff(60);
+        off = true;
+      }
+      engine.render(l, r);
+      b.set(l.subarray(0, Math.min(128, b.length - at)), at);
+    }
+    expect(rms(a, 0, a.length)).toBeCloseTo(rms(b, 0, b.length), 6);
+  });
+});

@@ -26,6 +26,8 @@ export interface RenderTrack {
   notes: SeqNote[];
   /** Portamento (seconds; 0 or absent = off). */
   glide?: number;
+  /** 語尾を収める: the tail ends where the note does. */
+  tailFit?: boolean;
   fx: FxSettings | null;
   gain: number;
   pan: number;
@@ -72,6 +74,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
       s.engine.setHold(t.instrument.hold);
       s.engine.setTempo(input.bpm);
       s.setGlide(t.glide ?? 0);
+      s.fitTail = t.tailFit === true;
       sound = s;
     }
     if (!sound) continue;

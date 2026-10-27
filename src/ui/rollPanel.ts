@@ -129,9 +129,16 @@ export class RollPanel {
     this.refreshButtons();
   }, "ピアノロールの下に強弱(ベロシティ)の欄を出します。棒を上下にドラッグして変えます");
   private readonly glideSelect = el("select", { ariaLabel: "ポルタメント" }, GLIDES.map(([v, label]) => el("option", { value: String(v), textContent: label })));
-  private readonly glideRow = el("div", { className: "row" }, [
-    el("label", { className: "inline" }, ["ポルタメント ", this.glideSelect]),
-    el("span", { className: "fine", textContent: "つながった(重なった)音符を、前の高さから滑らせてつなぎます。このトラックは単音になります。" }),
+  private readonly tailFitBox = el("input", { type: "checkbox", ariaLabel: "語尾をノートの終わりに収める" });
+  private readonly glideRow = el("div", { className: "track-options" }, [
+    el("div", { className: "row" }, [
+      el("label", { className: "inline" }, ["ポルタメント ", this.glideSelect]),
+      el("span", { className: "fine", textContent: "つながった(重なった)音符を、前の高さから滑らせてつなぎます。このトラックは単音になります。" }),
+    ]),
+    el("div", { className: "row" }, [
+      el("label", { className: "inline" }, [this.tailFitBox, " 語尾をノートの終わりに収める"]),
+      el("span", { className: "fine", textContent: "オンにすると、語尾の長さぶん早めに語尾へ入り、ノートの終わりで鳴り終わります(語尾が使えるのはノートの後半まで)。オフでは、ノートを離してから語尾が鳴ります。鍵盤での試し弾きは常にオフの動きです。" }),
+    ]),
   ]);
   // Step input: notes played on the keyboard go in at the position, which then moves on by one grid step.
   private stepMode = false;
@@ -182,6 +189,11 @@ export class RollPanel {
       this.roll.draw();
     });
     this.selectToggle.hidden = !COARSE;
+    this.tailFitBox.addEventListener("change", () => {
+      this.track.tailFit = this.tailFitBox.checked;
+      this.reload();
+      this.scheduleSave();
+    });
     this.glideSelect.addEventListener("change", () => {
       const t = this.track;
       t.glide = Number(this.glideSelect.value) || 0;
@@ -360,6 +372,7 @@ export class RollPanel {
     const t = this.track;
     this.glideRow.hidden = t.kind === "drum";
     this.glideSelect.value = String(GLIDES.some(([v]) => v === t.glide) ? t.glide : 0);
+    this.tailFitBox.checked = t.tailFit;
     this.stepHeld.clear();
     this.stepHistory.length = 0;
     this.roll.setRows(t.kind === "drum" ? t.pads.map((p, i) => this.padLabel(p.instrument, i)) : null);
@@ -655,6 +668,7 @@ export class RollPanel {
         samples: t.kind === "drum" ? t.pads.map((p) => p.instrument) : undefined,
         notes: toSeqNotes(t.notes, this.project.bpm, t.kind !== "drum" && t.glide > 0),
         glide: t.kind === "drum" ? 0 : t.glide,
+        tailFit: t.kind !== "drum" && t.tailFit,
         fx: t.fx,
         gain: t.gain,
         pan: t.pan,

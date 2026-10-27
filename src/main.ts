@@ -2353,6 +2353,7 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
       instrument: { source: found.material.source, markers: found.cut.markers, params: { ...found.cut.params, maxVoices: DEFAULT_PARAMS.maxVoices }, hold: exportLengthSec(found.exportOf) },
       notes,
       glide: t.glide,
+      tailFit: t.tailFit,
       ...mix,
     });
   }

@@ -133,6 +133,9 @@ class Voice {
   /** Portamento: semitones still to slide (added to the note, moving to 0), and how much it moves per output sample. */
   bend = 0;
   bendPerSample = 0;
+  /** 語尾を収める: the voice clock (samples) at which the note lets go by itself so its tail ends with it, and where it must be over. */
+  fitReleaseAt = Infinity;
+  fitEndAt = Infinity;
 
   driftValue = 0;
   driftTarget = 0;
@@ -344,7 +347,13 @@ export class Engine {
     return 1 / Math.max(0.05, factor);
   }
 
-  noteOn(note: number, velocity = 0.8): void {
+  /**
+   * A note on. `lengthSec` (a song's note, when its track fits the tail in)
+   * is how long the note is written: the voice then lets go early by the
+   * tail's length, so the tail ends where the note does. Without it (the
+   * keyboard, a preview) the tail starts when the key is let go.
+   */
+  noteOn(note: number, velocity = 0.8, lengthSec?: number): void {
     if (!this.source || !this.params) return;
     const params = this.params;
     if (this.glideSec > 0) {
@@ -357,12 +366,14 @@ export class Engine {
         if (holds) {
           held.note = note;
           this.glide(held, from - note);
+          this.fitTail(held, lengthSec);
           return;
         }
         this.fadeOut(held, STEAL_FADE_SEC);
         const voice = this.voices.find((v) => !v.active) ?? this.voices.reduce((a, b) => (b.startOrder < a.startOrder ? b : a));
         this.start(voice, note, velocity);
         this.glide(voice, from - note);
+        this.fitTail(voice, lengthSec);
         return;
       }
     }
@@ -374,6 +385,31 @@ export class Engine {
     }
     const voice = this.voices.find((v) => !v.active) ?? this.voices.reduce((a, b) => (b.startOrder < a.startOrder ? b : a));
     this.start(voice, note, velocity);
+    this.fitTail(voice, lengthSec);
+  }
+
+  /**
+   * 語尾を収める: when the note's length is known, the voice lets go early by
+   * the tail's length (but keeps at least the first half of the note for the
+   * head and the sustain), and whatever is left of the tail at the note's end
+   * fades out there. Only a cut that holds and then plays a tail is affected.
+   */
+  private fitTail(v: Voice, lengthSec: number | undefined): void {
+    v.fitReleaseAt = Infinity;
+    v.fitEndAt = Infinity;
+    const params = this.params!;
+    if (lengthSec === undefined || !(lengthSec > 0) || !params.sustainEnabled || params.sustainMode === "none" || !this.tailOn()) return;
+    const length = lengthSec * this.sampleRate;
+    v.fitEndAt = v.clock + length;
+    v.fitReleaseAt = v.clock + Math.max(length / 2, length - this.tailOutputSamples(v.note));
+  }
+
+  /** How long the tail plays (output samples) for a note: its material at the tail's speed, within its length limit. */
+  private tailOutputSamples(note: number): number {
+    const params = this.params!;
+    let out = this.playedBetween(Math.max(this.tailStart, this.sustainStart), this.rangeEnd) * Math.max(0.05, params.stretch.tail);
+    if (params.pitchMode === "resample") out /= 2 ** ((note - params.root) / 12);
+    return Math.min(out, this.tailLimitSamples());
   }
 
   private glide(v: Voice, semitones: number): void {
@@ -408,6 +444,12 @@ export class Engine {
     if (!this.source || !this.params) return;
     for (const v of this.voices) {
       if (!v.active) continue;
+      // 語尾を収める: the note lets go by itself, straight into the tail, which must be over by the note's end.
+      if (!v.released && v.clock + frames > v.fitReleaseAt) {
+        this.release(v);
+        if (v.phase === Phase.Head || v.phase === Phase.Sustain) this.jumpToTail(v);
+        v.tailRemaining = Math.min(v.tailRemaining, Math.max(1, v.fitEndAt - v.clock - TAIL_CUT_FADE_SEC * this.sampleRate));
+      }
       this.renderVoice(v, frames);
       if (v.tailRemaining !== Infinity) {
         v.tailRemaining -= frames;
@@ -466,6 +508,8 @@ export class Engine {
     v.lastStep = 0;
     v.bend = 0;
     v.bendPerSample = 0;
+    v.fitReleaseAt = Infinity;
+    v.fitEndAt = Infinity;
     v.startOrder = this.order++;
     v.phase = Phase.Head;
     v.cycleIndex = 0;

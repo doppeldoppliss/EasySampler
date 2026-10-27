@@ -38,7 +38,6 @@ import {
   type Markers,
   type PresetId,
 } from "./instrument/types";
-import { demoSyllable } from "./testsignals/synthVoice";
 import { PIANO_NAME, synthPiano } from "./testsignals/piano";
 import { el, isTypingTarget } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
@@ -58,7 +57,8 @@ const MAX_MATERIAL_SEC = 60;
 /** Longer files are cut here when decoded (memory: 10 minutes of stereo 48 kHz is about 230 MB). */
 const MAX_DECODE_SEC = 600;
 const DEMO_RATE = 44100;
-const DEMO_NAME = "デモ素材";
+/** The synthesized voice demo (「さー」) that earlier versions opened with: no longer offered, and taken out of saved projects. */
+const OLD_VOICE_DEMO_NAME = "デモ素材";
 const GUIDE_KEY = "maddaw.guide.v2";
 const SMALL_SCREEN = window.matchMedia("(max-width: 600px)").matches || (window.matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) <= 600);
 /** iPhone / iPad (an iPad calls itself a Mac, with touch). */
@@ -285,7 +285,6 @@ function safeStorage(key: string, value?: string | null): string | null {
 
 const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json,.mid,.midi", multiple: true, className: "visually-hidden", id: "file" });
 const openButton = el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" });
-const demoButton = button("デモ素材(声)", "", () => loadDemo());
 const pianoButton = button("ピアノ", "", () => void addPiano());
 const status = el("p", { className: "status", role: "status" });
 
@@ -293,7 +292,7 @@ const status = el("p", { className: "status", role: "status" });
 const emptyState = el("section", { className: "empty", hidden: true }, [
   el("p", { className: "empty-title", textContent: "素材を入れたら、DAW に渡せる音源になる。" }),
   el("p", { textContent: "声や効果音のファイルを開くと、音程を判定して平らにし、母音を伸ばした単音の WAV を書き出せます。REAPER・GarageBand・Vital などのサンプラーにそのまま読み込めます。音域ぶんを揃えたマルチサンプル音源(SFZ / Decent Sampler)も作れます。" }),
-  el("div", { className: "row" }, [el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" }), button("ピアノで始める", "", () => void loadPiano()), button("デモ素材(声)で試す", "", () => loadDemo())]),
+  el("div", { className: "row" }, [el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" }), button("ピアノで始める", "", () => void loadPiano())]),
   el("p", { className: "fine", textContent: "生成AIは使っていません。素材は端末の中だけで処理され、外部には送られません。BGM の入った素材は、先に除去してから開いてください。" }),
 ]);
 
@@ -1518,7 +1517,7 @@ function openFiles(files: readonly File[]): void {
 const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, rollPanel.element, fxPanel, songPanel.element, exportPanel, detailsPanel]);
 
 document.getElementById("app")!.append(
-  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [rePickButton, openButton, pianoButton, demoButton])]),
+  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [rePickButton, openButton, pianoButton])]),
   fileInput,
   status,
   emptyState,
@@ -2619,16 +2618,6 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
   }
 }
 
-function loadDemo(): void {
-  Object.assign(credit, { title: "EasySampler デモ素材(合成音声「さー」)", url: "", timecode: "", memo: "" });
-  setCreditInputs();
-  longClip = null;
-  pickerClip = null;
-  rePickButton.hidden = true;
-  pickerPanel.hidden = true;
-  void load(DEMO_NAME, [demoSyllable(DEMO_RATE)], DEMO_RATE);
-}
-
 /** The sound a new project starts with: a synthesized piano note (C4), played as a decaying instrument. */
 async function loadPiano(): Promise<void> {
   Object.assign(credit, { title: "EasySampler 内蔵ピアノ(合成音)", url: "", timecode: "", memo: "" });
@@ -2812,6 +2801,13 @@ refreshExport();
 // The project comes back: its tracks, then its materials (the one being edited last, so it is the one shown).
 void (async () => {
   const project = await rollPanel.restore();
+  // The old voice demo is gone from the app: a saved project drops it (its tracks then play nothing until another cut is chosen).
+  for (const m of [...project.materials]) {
+    if (m.name !== OLD_VOICE_DEMO_NAME) continue;
+    rollPanel.removeMaterial(m.id);
+    void forget(`audio:${m.id}`);
+    void forget(`settings:${m.id}`);
+  }
   const order = [...project.materials].sort((a, b) => Number(a.id === project.editing) - Number(b.id === project.editing));
   for (const m of order) {
     const audio = (await kept(`audio:${m.id}`)) as { name: string; sampleRate: number; channels: Float32Array[] } | undefined;

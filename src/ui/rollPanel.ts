@@ -9,6 +9,7 @@ import { keep, kept } from "../audio/store";
 import type { TrackSpec } from "../engine/messages";
 import {
   beatsToSec,
+  DEFAULT_VELOCITY,
   emptyProject,
   fromSongNotes,
   newDrumTrack,
@@ -47,6 +48,16 @@ const GRIDS: [number, string][] = [
   [1 / 3, "1/3 拍(3 連)"],
   [0.125, "1/8 拍(32 分)"],
   [0, "吸着なし"],
+];
+
+/** Portamento times offered (seconds; 0 = off). */
+const GLIDES: [number, string][] = [
+  [0, "オフ"],
+  [0.03, "とても速く(0.03 秒)"],
+  [0.08, "速く(0.08 秒)"],
+  [0.15, "ふつう(0.15 秒)"],
+  [0.3, "ゆっくり(0.3 秒)"],
+  [0.6, "とてもゆっくり(0.6 秒)"],
 ];
 
 /** A cut a track can play: its instrument id, how it reads in the list, and the note it is made for (marked on the keys). */
@@ -112,6 +123,25 @@ export class RollPanel {
     this.changed(this.roll.notes);
     this.info.textContent = "すべて消しました。取り消しで戻せます。";
   });
+  private readonly quantizeButton = button("クオンタイズ", "small", () => this.quantize(), "選んだ音符(選んでいなければ全部)の始まりと終わりを吸着の線に合わせます");
+  private readonly velocityToggle = button("強弱", "small toggle", () => {
+    this.roll.showVelocity = !this.roll.showVelocity;
+    this.refreshButtons();
+  }, "ピアノロールの下に強弱(ベロシティ)の欄を出します。棒を上下にドラッグして変えます");
+  private readonly glideSelect = el("select", { ariaLabel: "ポルタメント" }, GLIDES.map(([v, label]) => el("option", { value: String(v), textContent: label })));
+  private readonly glideRow = el("div", { className: "row" }, [
+    el("label", { className: "inline" }, ["ポルタメント ", this.glideSelect]),
+    el("span", { className: "fine", textContent: "つながった(重なった)音符を、前の高さから滑らせてつなぎます。このトラックは単音になります。" }),
+  ]);
+  // Step input: notes played on the keyboard go in at the position, which then moves on by one grid step.
+  private stepMode = false;
+  private readonly stepHeld = new Set<number>();
+  private stepChordStart = 0;
+  private readonly stepHistory: { start: number; pitch: number }[] = [];
+  private readonly stepToggle = button("", "small toggle", () => this.setStepMode(!this.stepMode), "鍵盤で弾いた音が、再生位置に音符として入ります");
+  private readonly stepRestButton = button("休符", "small", () => this.stepRest(), "音符を入れずに 1 つ進めます");
+  private readonly stepBackButton = button("1 つ戻す", "small", () => this.stepBack(), "最後に入れた音符を消して、位置を戻します");
+  private readonly stepHelp = el("span", { className: "fine", textContent: "画面の鍵盤か PC キーボードで弾くと、再生位置に音符が入り、吸着の幅だけ進みます。和音は同時に押します。" });
   private readonly position = el("span", { className: "fine num" });
   private readonly info = el("p", { className: "fine", role: "status" });
 
@@ -152,6 +182,12 @@ export class RollPanel {
       this.roll.draw();
     });
     this.selectToggle.hidden = !COARSE;
+    this.glideSelect.addEventListener("change", () => {
+      const t = this.track;
+      t.glide = Number(this.glideSelect.value) || 0;
+      this.reload();
+      this.scheduleSave();
+    });
 
     this.element = el("section", { className: "panel roll-panel" }, [
       el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "打ち込み" }), this.importButton]),
@@ -165,7 +201,9 @@ export class RollPanel {
       this.trackList,
       el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack()), button("＋ ドラムトラックを追加", "small", () => this.addTrack(true))]),
       this.padList,
-      el("div", { className: "row roll-tools" }, [this.undoButton, this.redoButton, this.deleteButton, this.duplicateButton, ...this.transposeButtons, this.selectToggle, button("−", "small", () => this.roll.zoom(1 / 1.5), "縮小"), button("+", "small", () => this.roll.zoom(1.5), "拡大")]),
+      this.glideRow,
+      el("div", { className: "row roll-tools" }, [this.undoButton, this.redoButton, this.deleteButton, this.duplicateButton, ...this.transposeButtons, this.quantizeButton, this.velocityToggle, this.selectToggle, button("−", "small", () => this.roll.zoom(1 / 1.5), "縮小"), button("+", "small", () => this.roll.zoom(1.5), "拡大")]),
+      el("div", { className: "row step-input" }, [this.stepToggle, this.stepRestButton, this.stepBackButton, this.stepHelp]),
       this.roll.element,
       el("p", {
         className: "fine help",
@@ -320,6 +358,10 @@ export class RollPanel {
   /** The roll shows the selected track: keys for a melodic one, its rows for a drum track. */
   private showTrackInRoll(): void {
     const t = this.track;
+    this.glideRow.hidden = t.kind === "drum";
+    this.glideSelect.value = String(GLIDES.some(([v]) => v === t.glide) ? t.glide : 0);
+    this.stepHeld.clear();
+    this.stepHistory.length = 0;
     this.roll.setRows(t.kind === "drum" ? t.pads.map((p, i) => this.padLabel(p.instrument, i)) : null);
     this.roll.setNotes(t.notes);
     if (t.kind === "drum") this.roll.frame(0);
@@ -502,6 +544,73 @@ export class RollPanel {
     this.roll.setRoot(option ? option.note : null);
   }
 
+  // ------------------------------------------------------------- quantize, step input
+
+  private quantize(): void {
+    if (!(this.roll.grid > 0)) {
+      this.info.textContent = "吸着が「吸着なし」のときはクオンタイズできません。吸着の幅を選んでください。";
+      return;
+    }
+    const all = this.roll.selectionSize === 0;
+    const changed = this.roll.quantize();
+    this.info.textContent = changed ? `${all ? "すべての" : "選んだ"}音符のうち ${changed} 個を吸着の線に合わせました。取り消しで戻せます。` : "どの音符もすでに吸着の線の上にあります。";
+  }
+
+  /** One step of step input (beats): the grid, or the last note length with no grid. */
+  private get stepBeats(): number {
+    return this.roll.grid > 0 ? this.roll.grid : this.roll.lastLength;
+  }
+
+  private setStepMode(on: boolean): void {
+    this.stepMode = on;
+    this.stepHeld.clear();
+    if (on && this.playing) {
+      this.from = this.currentSec();
+      this.stop();
+    }
+    this.refreshButtons();
+  }
+
+  /** Moves the step position (beats) and shows it. */
+  private stepTo(beat: number): void {
+    this.from = beatsToSec(Math.max(0, beat), this.project.bpm);
+    this.showPosition(this.from);
+    this.roll.setPlayhead(Math.max(0, beat), true);
+  }
+
+  /**
+   * A key of the keyboard, while step input is on: down puts a note in at the
+   * position (keys held together make a chord) and moves on one step. Returns
+   * whether the key was taken (then it is not played on the keyboard's sound).
+   */
+  stepNote(pitch: number, down: boolean): boolean {
+    if (!down) return this.stepHeld.delete(pitch);
+    if (!this.stepMode || this.playing || this.track.kind === "drum") return false;
+    const chord = this.stepHeld.size > 0;
+    if (!chord) this.stepChordStart = secToBeats(this.from, this.project.bpm);
+    this.stepHeld.add(pitch);
+    const step = this.stepBeats;
+    this.roll.insertNote(this.stepChordStart, step, pitch, DEFAULT_VELOCITY, chord);
+    this.stepHistory.push({ start: this.stepChordStart, pitch });
+    this.preview(pitch);
+    this.stepTo(this.stepChordStart + step);
+    return true;
+  }
+
+  private stepRest(): void {
+    this.stepTo(secToBeats(this.from, this.project.bpm) + this.stepBeats);
+  }
+
+  private stepBack(): void {
+    const last = this.stepHistory.pop();
+    if (!last) {
+      this.stepTo(secToBeats(this.from, this.project.bpm) - this.stepBeats);
+      return;
+    }
+    this.roll.removeNoteAt(last.start, last.pitch);
+    this.stepTo(last.start);
+  }
+
   // ------------------------------------------------------------- the selected track's effects
 
   /** The effects of the selected track. */
@@ -544,7 +653,8 @@ export class RollPanel {
         id: t.id,
         instrument: t.kind === "drum" ? "drum" : t.instrument!,
         samples: t.kind === "drum" ? t.pads.map((p) => p.instrument) : undefined,
-        notes: toSeqNotes(t.notes, this.project.bpm),
+        notes: toSeqNotes(t.notes, this.project.bpm, t.kind !== "drum" && t.glide > 0),
+        glide: t.kind === "drum" ? 0 : t.glide,
         fx: t.fx,
         gain: t.gain,
         pan: t.pan,
@@ -682,5 +792,13 @@ export class RollPanel {
     this.loopButton.classList.toggle("on", loop.on);
     this.selectToggle.textContent = `範囲選択: ${this.roll.selectMode ? "オン" : "オフ"}`;
     this.clearButton.disabled = this.roll.notes.length === 0;
+    this.quantizeButton.disabled = this.roll.notes.length === 0;
+    this.velocityToggle.classList.toggle("on", this.roll.showVelocity);
+    const drum = this.track.kind === "drum";
+    this.stepToggle.textContent = `ステップ入力: ${this.stepMode && !drum ? "オン" : "オフ"}`;
+    this.stepToggle.classList.toggle("on", this.stepMode && !drum);
+    this.stepToggle.disabled = drum;
+    this.stepToggle.title = drum ? "ドラムトラックでは使えません(行をタップして入れてください)" : "鍵盤で弾いた音が、再生位置に音符として入ります";
+    this.stepRestButton.hidden = this.stepBackButton.hidden = this.stepHelp.hidden = !this.stepMode || drum;
   }
 }

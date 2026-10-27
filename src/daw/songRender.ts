@@ -24,6 +24,8 @@ export interface RenderTrack {
   /** A drum track's rows: the one-shot each plays. */
   samples?: (Float32Array[] | null)[];
   notes: SeqNote[];
+  /** Portamento (seconds; 0 or absent = off). */
+  glide?: number;
   fx: FxSettings | null;
   gain: number;
   pan: number;
@@ -69,6 +71,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
       s.engine.setInstrument(t.instrument.markers, t.instrument.params);
       s.engine.setHold(t.instrument.hold);
       s.engine.setTempo(input.bpm);
+      s.setGlide(t.glide ?? 0);
       sound = s;
     }
     if (!sound) continue;

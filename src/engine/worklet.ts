@@ -92,6 +92,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       let sound = this.trackSounds.get(t.id);
       if (!(sound instanceof kind)) sound = kind === EngineSound ? new EngineSound(sampleRate) : kind === SampleSound ? new SampleSound() : new BackingSound(sampleRate);
       if (sound instanceof EngineSound && sound.instrument !== t.instrument) this.apply(sound, t.instrument);
+      if (sound instanceof EngineSound) sound.setGlide(t.glide ?? 0);
       if (sound instanceof SampleSound) sound.rows = (t.samples ?? []).map((id) => (id ? (this.samples.get(id) ?? null) : null));
       next.set(t.id, sound);
     }

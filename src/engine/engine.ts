@@ -130,6 +130,9 @@ class Voice {
   retuneCorr = 0;
   /** The last grain's spacing (samples): the time step the glide advances by. */
   lastStep = 0;
+  /** Portamento: semitones still to slide (added to the note, moving to 0), and how much it moves per output sample. */
+  bend = 0;
+  bendPerSample = 0;
 
   driftValue = 0;
   driftTarget = 0;
@@ -172,6 +175,8 @@ export class Engine {
   private hold = 1;
   /** Read speed through the sustain in "stretch" mode (1 / the stretch factor). */
   private stretchSpeed = 1;
+  /** Portamento (a song track's setting, seconds; 0 = off): a note that starts while another is held slides from it. */
+  private glideSec = 0;
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
@@ -286,6 +291,17 @@ export class Engine {
     this.stretchSpeed = 1 / factor;
   }
 
+  /**
+   * Portamento: with a time set, the engine plays one note at a time, and a note
+   * that starts while the last one is still held slides to its pitch over this
+   * long. A cut that holds (a sustain) carries the same voice on, without a new
+   * attack (legato); one that plays through once starts again from its top,
+   * sliding from where the last note was.
+   */
+  setGlide(sec: number): void {
+    this.glideSec = Number.isFinite(sec) && sec > 0 ? Math.min(2, sec) : 0;
+  }
+
   /** The tempo the tail's length limit is counted in. */
   setTempo(bpm: number): void {
     if (Number.isFinite(bpm) && bpm > 0) this.bpm = bpm;
@@ -331,6 +347,25 @@ export class Engine {
   noteOn(note: number, velocity = 0.8): void {
     if (!this.source || !this.params) return;
     const params = this.params;
+    if (this.glideSec > 0) {
+      // The note still held, if any: the new one slides from its pitch (as it is just now, mid-slide or not).
+      let held: Voice | null = null;
+      for (const v of this.voices) if (v.active && !v.released && v.fadeStep === 0 && v.phase !== Phase.Done && (!held || v.startOrder > held.startOrder)) held = v;
+      if (held) {
+        const from = held.note + held.bend;
+        const holds = params.sustainEnabled && params.sustainMode !== "none" && (held.phase === Phase.Head || held.phase === Phase.Sustain);
+        if (holds) {
+          held.note = note;
+          this.glide(held, from - note);
+          return;
+        }
+        this.fadeOut(held, STEAL_FADE_SEC);
+        const voice = this.voices.find((v) => !v.active) ?? this.voices.reduce((a, b) => (b.startOrder < a.startOrder ? b : a));
+        this.start(voice, note, velocity);
+        this.glide(voice, from - note);
+        return;
+      }
+    }
     // Over the polyphony limit: the oldest sounding voice fades out quickly.
     const sounding = this.voices.filter((v) => v.active && v.fadeStep === 0);
     if (sounding.length >= params.maxVoices) {
@@ -339,6 +374,11 @@ export class Engine {
     }
     const voice = this.voices.find((v) => !v.active) ?? this.voices.reduce((a, b) => (b.startOrder < a.startOrder ? b : a));
     this.start(voice, note, velocity);
+  }
+
+  private glide(v: Voice, semitones: number): void {
+    v.bend = semitones;
+    v.bendPerSample = Math.abs(semitones) / Math.max(1, this.glideSec * this.sampleRate);
   }
 
   noteOff(note: number): void {
@@ -424,6 +464,8 @@ export class Engine {
     v.releasedAt = Infinity;
     v.retuneCorr = 0;
     v.lastStep = 0;
+    v.bend = 0;
+    v.bendPerSample = 0;
     v.startOrder = this.order++;
     v.phase = Phase.Head;
     v.cycleIndex = 0;
@@ -599,7 +641,7 @@ export class Engine {
     }
 
     const seconds = v.nextCenter / this.sampleRate;
-    const shift = v.note - params.root;
+    const shift = v.note + v.bend - params.root;
     const wobble = this.wobbleAt(v, seconds);
     const period = this.period[k];
     const voiced = source.voiced[k] === 1;
@@ -681,6 +723,10 @@ export class Engine {
     const step = Math.max(1, spacing);
     v.nextCenter += step;
     v.lastStep = step;
+    if (v.bend !== 0) {
+      const left = Math.abs(v.bend) - step * v.bendPerSample;
+      v.bend = left > 0 ? Math.sign(v.bend) * left : 0;
+    }
     v.lastLeft = grain.left;
     v.driftCountdown -= step / this.sampleRate;
     // The read position moves with real time (or faster/slower when resampling), at the part's own speed, past anything cut out.
@@ -727,7 +773,7 @@ export class Engine {
     } else {
       return Infinity;
     }
-    if (params.pitchMode === "resample") out /= 2 ** ((v.note - params.root) / 12);
+    if (params.pitchMode === "resample") out /= 2 ** ((v.note + v.bend - params.root) / 12);
     // The tail's length limit ends it sooner.
     return Math.min(out, v.tailRemaining);
   }

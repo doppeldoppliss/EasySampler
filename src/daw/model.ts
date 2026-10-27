@@ -39,6 +39,8 @@ export interface Track {
   pan: number;
   mute: boolean;
   solo: boolean;
+  /** Portamento (seconds; 0 = off): notes that touch or overlap slide from one to the next, one at a time. */
+  glide: number;
 }
 
 export interface Pad {
@@ -47,7 +49,7 @@ export interface Pad {
 }
 
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, kind: "melodic", instrument, pads: [], notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false };
+  return { id: newTrackId(), name, kind: "melodic", instrument, pads: [], notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0 };
 }
 
 /** A drum track: its first row plays the given cut (if any). */
@@ -89,6 +91,8 @@ export interface Project {
 
 export const MIN_LENGTH = 1 / 64;
 export const DEFAULT_VELOCITY = 0.8;
+/** Portamento: a note that ends where the next (of another pitch) starts is held this much longer, so the next one starts while it is still held and slides from it. */
+const LEGATO_OVERLAP_SEC = 0.002;
 
 export function emptyProject(): Project {
   return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, masterFx: structuredClone(DEFAULT_FX) };
@@ -136,9 +140,10 @@ export function secToBeats(sec: number, bpm: number): number {
 /**
  * The notes as the player takes them (seconds). A note that overlaps the next
  * one of the same pitch is cut short where that one starts, so the re-strike is
- * heard (the engine has one voice per key).
+ * heard (the engine has one voice per key). With `legato` (a track with portamento), a
+ * note that ends right where one of another pitch starts overlaps it a little.
  */
-export function toSeqNotes(notes: readonly Note[], bpm: number): SeqNote[] {
+export function toSeqNotes(notes: readonly Note[], bpm: number, legato = false): SeqNote[] {
   const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   const out: SeqNote[] = [];
   for (let i = 0; i < sorted.length; i++) {
@@ -150,7 +155,9 @@ export function toSeqNotes(notes: readonly Note[], bpm: number): SeqNote[] {
         break;
       }
     }
-    out.push({ start: beatsToSec(n.start, bpm), end: beatsToSec(Math.max(n.start + MIN_LENGTH, end), bpm), note: n.pitch, velocity: n.velocity, drum: false });
+    let endSec = beatsToSec(Math.max(n.start + MIN_LENGTH, end), bpm);
+    if (legato && sorted.some((m) => m.pitch !== n.pitch && m.start > n.start && Math.abs(m.start - end) < 1e-6)) endSec += LEGATO_OVERLAP_SEC;
+    out.push({ start: beatsToSec(n.start, bpm), end: endSec, note: n.pitch, velocity: n.velocity, drum: false });
   }
   return out;
 }
@@ -210,6 +217,7 @@ export function sanitizeProject(raw: unknown): Project {
           pan: num(tr.pan, 0, -1, 1),
           mute: tr.mute === true,
           solo: tr.solo === true,
+          glide: num(tr.glide, 0, 0, 2),
         };
       })
     : d.tracks;

@@ -16,6 +16,8 @@ export interface TrackSpec extends MixSettings {
   notes: SeqNote[];
   /** A drum track: the one-shot (by sample id) each row plays; a note's pitch is its row. */
   samples?: (string | null)[];
+  /** Portamento (seconds; 0 or absent = off). */
+  glide?: number;
 }
 
 export type ToEngine =

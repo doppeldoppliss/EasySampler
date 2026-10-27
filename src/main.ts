@@ -129,9 +129,14 @@ const editor = new MaterialEditor();
 const sink = {
   noteOn: (n: number, velocity: number) => {
     client.unlock();
+    // ステップ入力: the key goes into the song as a note (and sounds on its track) instead.
+    if (rollPanel.stepNote(n, true)) return;
     client.noteOn(n, velocity);
   },
-  noteOff: (n: number) => client.noteOff(n),
+  noteOff: (n: number) => {
+    if (rollPanel.stepNote(n, false)) return;
+    client.noteOff(n);
+  },
 };
 const piano = new OnScreenKeyboard(sink, 48, SMALL_SCREEN ? 72 : 84);
 const pcKeys = new PcKeyboard(sink);
@@ -2328,7 +2333,7 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
   for (const t of project.tracks) {
     if (only !== null && t.id !== only) continue;
     const mix = { fx: t.fx, gain: t.gain, pan: t.pan, mute: only === null ? t.mute : false, solo: only === null ? t.solo : false };
-    const notes = toSeqNotes(t.notes, project.bpm);
+    const notes = toSeqNotes(t.notes, project.bpm, t.kind !== "drum" && t.glide > 0);
     if (t.kind === "drum") {
       if (!t.pads.length) continue;
       out.push({ id: t.id, instrument: null, samples: t.pads.map((p) => (p.instrument ? (padSamples.get(p.instrument) ?? null) : null)), notes, ...mix });
@@ -2340,6 +2345,7 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
       id: t.id,
       instrument: { source: found.material.source, markers: found.cut.markers, params: { ...found.cut.params, maxVoices: DEFAULT_PARAMS.maxVoices }, hold: exportLengthSec(found.exportOf) },
       notes,
+      glide: t.glide,
       ...mix,
     });
   }

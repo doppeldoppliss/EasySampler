@@ -477,3 +477,55 @@ describe("Melodyne-style controls", () => {
     expect(full).toBeGreaterThan(half * 1.05);
   });
 });
+
+describe("Engine portamento (a song track's glide)", () => {
+  const vowel = synthVoice({ sampleRate: SR, durationSec: 0.8, pitch: demoPhrasePitch(57, 0.8) });
+
+  /** 60 for 0.6 s, then 67 starting while 60 is still held (as a legato pair is played), then 67 for 0.9 s. */
+  function legatoPair(engine: Engine): { out: Float32Array; voicesAfter: number } {
+    const out = new Float32Array(Math.ceil(1.5 * SR));
+    const l = new Float32Array(128);
+    const r = new Float32Array(128);
+    engine.noteOn(60, 1);
+    let voicesAfter = -1;
+    for (let at = 0; at < out.length; at += 128) {
+      if (voicesAfter < 0 && at >= 0.6 * SR) {
+        engine.noteOn(67, 1);
+        engine.noteOff(60);
+        voicesAfter = engine.activeVoices();
+      }
+      engine.render(l, r);
+      out.set(l.subarray(0, Math.min(128, out.length - at)), at);
+    }
+    return { out, voicesAfter };
+  }
+  const pitchOf = (x: Float32Array, a: number, b: number) => rootPitch(analyzePitch(x.slice(Math.round(a * SR), Math.round(b * SR)), SR))!.midi;
+
+  it("carries a holding cut's voice on to the next note and slides to it", () => {
+    const { engine } = setup(vowel);
+    engine.setGlide(0.3);
+    const { out, voicesAfter } = legatoPair(engine);
+    expect(voicesAfter).toBe(1); // no second attack: the same voice goes on
+    const mid = pitchOf(out, 0.68, 0.78);
+    expect(mid).toBeGreaterThan(61);
+    expect(mid).toBeLessThan(66);
+    expect(Math.abs(pitchOf(out, 1.0, 1.45) - 67)).toBeLessThan(0.3);
+  });
+
+  it("without a glide time, the next note is a voice of its own at its pitch at once", () => {
+    const { engine } = setup(vowel);
+    const { out, voicesAfter } = legatoPair(engine);
+    expect(voicesAfter).toBe(2);
+    expect(Math.abs(pitchOf(out, 1.0, 1.45) - 67)).toBeLessThan(0.3);
+  });
+
+  it("a cut that plays through once starts again, sliding from the last note's pitch", () => {
+    const { engine } = setup(vowel, { sustainMode: "none" });
+    engine.setGlide(0.3);
+    const { out } = legatoPair(engine);
+    const mid = pitchOf(out, 0.66, 0.76);
+    expect(mid).toBeGreaterThan(61);
+    expect(mid).toBeLessThan(66);
+    expect(Math.abs(pitchOf(out, 1.0, 1.3) - 67)).toBeLessThan(0.3);
+  });
+});

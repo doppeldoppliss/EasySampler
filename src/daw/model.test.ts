@@ -21,6 +21,23 @@ describe("daw model", () => {
     ]);
   });
 
+  it("portamento: a note that ends where one of another pitch starts is held a little past it (not one of the same pitch)", () => {
+    const notes = [note(0, 1, 60), note(1, 1, 67), note(2, 1, 67), note(4, 1, 60)];
+    const plain = toSeqNotes(notes, 120);
+    const legato = toSeqNotes(notes, 120, true);
+    expect(plain[0].end).toBe(0.5);
+    expect(legato[0].end).toBeCloseTo(0.502, 6); // 60 → 67 touch: overlap
+    expect(legato[1].end).toBe(1); // 67 → 67: a re-strike, as without portamento
+    expect(legato[2].end).toBe(1.5); // a gap after it: nothing to slide to
+    expect(legato[3].end).toBe(2.5);
+  });
+
+  it("keeps a track's portamento time (and puts a missing or odd one right)", () => {
+    expect(sanitizeProject({ tracks: [{ glide: 0.15 }] }).tracks[0].glide).toBe(0.15);
+    expect(sanitizeProject({ tracks: [{ glide: 99 }] }).tracks[0].glide).toBe(2);
+    expect(sanitizeProject({ tracks: [{}] }).tracks[0].glide).toBe(0);
+  });
+
   it("takes a MIDI part in beats, and copies with fresh ids", () => {
     const notes = fromSongNotes([{ start: 9, end: 9.5, pitch: 62, velocity: 127, channel: 0, startBeat: 4, endBeat: 4.5 }]);
     expect(notes).toMatchObject([{ start: 4, length: 0.5, pitch: 62, velocity: 1 }]);

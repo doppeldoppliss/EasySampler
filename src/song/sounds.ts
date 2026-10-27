@@ -14,6 +14,9 @@ export class EngineSound implements TrackSound {
   }
   instrument: string | null = null;
   source: PreparedSource | null = null;
+  setGlide(sec: number): void {
+    this.engine.setGlide(sec);
+  }
   noteOn(note: number, velocity: number): void {
     this.engine.noteOn(note, velocity);
   }

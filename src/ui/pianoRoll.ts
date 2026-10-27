@@ -7,6 +7,8 @@
 // delete. Finger: tap = a note, drag on empty = scroll (or select, with
 // 範囲選択 on), drag a note or its right end as with a mouse.
 // The ruler: tap = play from there, double-tap = start playing, drag = loop range.
+// The velocity lane (強弱, when shown) under the notes: drag across it to set
+// each note's velocity (only the selected notes', when some are selected).
 // Keys (when the roll has the focus): Delete, Ctrl+A / C / X / V / D, arrows
 // (Shift = an octave), Ctrl+Z / Y, Space = play / stop, Esc.
 
@@ -31,7 +33,8 @@ type Drag =
   | { kind: "box"; x0: number; y0: number; x1: number; y1: number; add: Set<number> }
   | { kind: "move"; anchor: Note; x: number; y: number; orig: Map<number, Note>; moved: boolean; lastPitch: number }
   | { kind: "resize"; anchor: Note; orig: Map<number, Note> }
-  | { kind: "ruler"; x: number; moved: boolean };
+  | { kind: "ruler"; x: number; moved: boolean }
+  | { kind: "velocity"; x: number; value: number };
 
 export interface Loop {
   start: number;
@@ -59,6 +62,22 @@ export class PianoRoll {
   selectMode = false;
   /** Length of the next note placed (follows the last one resized). */
   lastLength = 1;
+  /** The velocity lane is shown under the notes. */
+  private velocityLane = false;
+
+  get showVelocity(): boolean {
+    return this.velocityLane;
+  }
+
+  set showVelocity(on: boolean) {
+    this.velocityLane = on;
+    this.draw();
+  }
+
+  /** The velocity lane's height (0 when hidden). */
+  private get laneH(): number {
+    return this.velocityLane ? (COARSE ? 76 : 60) : 0;
+  }
 
   private notesList: Note[] = [];
   private selected = new Set<number>();
@@ -265,6 +284,71 @@ export class PianoRoll {
     });
   }
 
+  /**
+   * Puts the selected notes (all of them when none is selected) on the grid:
+   * each start to the nearest line, each end too (at least one step long).
+   * Returns how many notes moved or changed length; nothing happens with no grid.
+   */
+  quantize(): number {
+    const g = this.grid;
+    if (!(g > 0)) return 0;
+    const targets = this.selected.size ? this.selection() : this.notesList;
+    let changed = 0;
+    this.edit(() => {
+      for (const n of targets) {
+        const start = Math.max(0, snap(n.start, g));
+        const length = Math.max(g, snap(n.start + n.length, g) - start);
+        if (Math.abs(start - n.start) > 1e-9 || Math.abs(length - n.length) > 1e-9) changed++;
+        n.start = start;
+        n.length = length;
+      }
+    });
+    return changed;
+  }
+
+  /** Sets the velocity of the selected notes (all of them when none is selected). */
+  setVelocity(velocity: number): void {
+    const v = Math.max(0.05, Math.min(1, velocity));
+    const targets = this.selected.size ? this.selection() : this.notesList;
+    this.edit(() => {
+      for (const n of targets) n.velocity = v;
+    });
+  }
+
+  /** The velocity shared by the selected notes, or null (none selected, or they differ). */
+  get selectedVelocity(): number | null {
+    const sel = this.selection();
+    if (!sel.length) return null;
+    const v = sel[0].velocity;
+    return sel.every((n) => Math.abs(n.velocity - v) < 1e-6) ? v : null;
+  }
+
+  /** A note added from outside (step input): one undoable step; `chord` keeps the notes just added selected with it. */
+  insertNote(start: number, length: number, pitch: number, velocity: number, chord = false): void {
+    const note: Note = { id: newId(), start: Math.max(0, start), length: Math.max(MIN_LENGTH, length), pitch: this.clampP(pitch), velocity };
+    this.edit(() => {
+      this.notesList.push(note);
+      if (!chord) this.selected.clear();
+      this.selected.add(note.id);
+    });
+    // Keep it in view.
+    if (!this.rowNames) {
+      const rows = this.visibleRows();
+      if (note.pitch > this.topPitch - 1 || note.pitch < this.topPitch - rows + 1) {
+        this.topPitch = Math.min(127, note.pitch + Math.round(rows / 2));
+        this.draw();
+      }
+    }
+  }
+
+  /** Removes the given note if it is still there (step input's 戻る). */
+  removeNoteAt(start: number, pitch: number): boolean {
+    const hit = this.notesList.find((n) => Math.abs(n.start - start) < 1e-9 && n.pitch === pitch);
+    if (!hit) return false;
+    this.edit(() => this.removeIds(new Set([hit.id])));
+    return true;
+  }
+
   copy(cut = false): void {
     const sel = this.selection();
     if (!sel.length) return;
@@ -353,7 +437,7 @@ export class PianoRoll {
   }
 
   private visibleRows(): number {
-    return Math.max(1, (this.canvas.clientHeight - RULER_H) / this.rowH);
+    return Math.max(1, (this.canvas.clientHeight - RULER_H - this.laneH) / this.rowH);
   }
 
   private visibleBeats(): number {
@@ -379,7 +463,7 @@ export class PianoRoll {
   }
 
   private noteAt(x: number, y: number, edgeReach = EDGE_MOUSE): { note: Note; edge: boolean } | null {
-    if (x < this.keysW || y < RULER_H) return null;
+    if (x < this.keysW || y < RULER_H || this.inLane(y)) return null;
     const pitch = this.pitchAt(y);
     for (let i = this.notesList.length - 1; i >= 0; i--) {
       const n = this.notesList[i];
@@ -389,6 +473,30 @@ export class PianoRoll {
       if (x >= x0 && x <= x1 + 2) return { note: n, edge: x1 - x0 > edgeReach * 2 && x >= x1 - edgeReach };
     }
     return null;
+  }
+
+  private inLane(y: number): boolean {
+    return this.laneH > 0 && y >= this.canvas.clientHeight - this.laneH;
+  }
+
+  /** The velocity a height in the lane stands for. */
+  private velocityAt(y: number): number {
+    const ch = this.canvas.clientHeight;
+    const top = ch - this.laneH + 6;
+    const bottom = ch - 4;
+    return Math.max(0.05, Math.min(1, (bottom - y) / Math.max(1, bottom - top)));
+  }
+
+  /** Sets the velocity of the notes that start between two x positions (the selected ones only, when some are). */
+  private paintVelocity(xa: number, xb: number, value: number): void {
+    const lo = Math.min(xa, xb) - 4;
+    const hi = Math.max(xa, xb) + 4;
+    const only = this.selected.size > 0;
+    for (const n of this.notesList) {
+      if (only && !this.selected.has(n.id)) continue;
+      const x = this.xOf(n.start);
+      if (x >= lo && x <= hi) n.velocity = value;
+    }
   }
 
   private clampView(): void {
@@ -417,6 +525,18 @@ export class PianoRoll {
     this.gestureStart = this.snapshot();
     if (y < RULER_H && x >= this.keysW) {
       this.drag = { kind: "ruler", x, moved: false };
+      return;
+    }
+    if (this.inLane(y)) {
+      // (a little into the keys too: the bar of a note at the left edge starts right on it)
+      if (x < this.keysW - 8) {
+        this.drag = null;
+        return;
+      }
+      const value = this.velocityAt(y);
+      this.drag = { kind: "velocity", x, value };
+      this.paintVelocity(x, x, value);
+      this.draw();
       return;
     }
     if (x < this.keysW) {
@@ -534,6 +654,13 @@ export class PianoRoll {
         this.draw();
         return;
       }
+      case "velocity": {
+        d.value = this.velocityAt(y);
+        this.paintVelocity(d.x, x, d.value);
+        d.x = x;
+        this.draw();
+        return;
+      }
       case "ruler": {
         if (!d.moved && Math.abs(x - d.x) < TAP_PX) return;
         d.moved = true;
@@ -582,6 +709,7 @@ export class PianoRoll {
         return;
       case "move":
       case "resize":
+      case "velocity":
         this.finishGesture();
         return;
     }
@@ -678,6 +806,7 @@ export class PianoRoll {
     const rowsMode = this.rowNames !== null;
     const firstPitch = Math.min(this.pitchAt(ch - 1), this.pitchAt(RULER_H));
     const lastPitch = rowsMode ? Math.min(this.rowNames!.length - 1, Math.max(this.pitchAt(ch - 1), this.pitchAt(RULER_H))) : Math.max(this.pitchAt(ch - 1), this.pitchAt(RULER_H));
+    const laneTop = ch - this.laneH;
     // Rows: the black keys' rows shaded and a line under every C, or (drum rows) every other row shaded and a line under each.
     for (let p = firstPitch; p <= lastPitch; p++) {
       const y = this.yOf(p);
@@ -788,6 +917,33 @@ export class PianoRoll {
     }
     g.fillStyle = cssVar("--line");
     g.fillRect(this.keysW - 1, RULER_H, 1, ch - RULER_H);
+
+    // The velocity lane: a bar per note, as high as it is strong.
+    if (this.laneH > 0) {
+      g.fillStyle = cssVar("--panel");
+      g.fillRect(0, laneTop, cw, this.laneH);
+      g.fillStyle = cssVar("--line");
+      g.fillRect(0, laneTop, cw, 1);
+      g.fillStyle = cssVar("--muted");
+      g.font = `${COARSE ? 13 : 12}px system-ui, sans-serif`;
+      g.fillText("強弱", 5, laneTop + this.laneH / 2);
+      const top = laneTop + 6;
+      const bottom = ch - 4;
+      g.fillStyle = cssVar("--grid");
+      g.fillRect(this.keysW, top, cw - this.keysW, 1);
+      const barW = COARSE ? 6 : 4;
+      for (const n of this.notesList) {
+        const x = this.xOf(n.start);
+        if (x < this.keysW - barW || x > cw) continue;
+        const h = Math.max(2, n.velocity * (bottom - top));
+        g.fillStyle = this.selected.has(n.id) ? selectedColor : accent;
+        g.fillRect(Math.round(x), bottom - h, barW, h);
+      }
+      if (d?.kind === "velocity") {
+        g.fillStyle = text;
+        g.fillText(String(Math.round(d.value * 127)), Math.min(cw - 30, d.x + 8), top + 10);
+      }
+    }
 
     // The ruler: bar numbers and the loop.
     g.fillStyle = cssVar("--strip");

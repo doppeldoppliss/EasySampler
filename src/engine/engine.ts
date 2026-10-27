@@ -66,6 +66,11 @@ const FIT_MAX_TAIL_SPEED = 2;
 const FIT_FADE_SHARE = 0.4;
 const FIT_FADE_MIN_SEC = 0.04;
 const FIT_FADE_MAX_SEC = 0.25;
+/** The tail starts at the level the note had (within these bounds), then follows its own recorded decay. */
+const TAIL_MATCH_MIN = 0.25;
+const TAIL_MATCH_MAX = 4;
+/** How much of the tail's start is averaged for its level (seconds). */
+const TAIL_LEVEL_SEC = 0.04;
 /** Micro irregularity: period jitter (share) and level shimmer (share). */
 const JITTER = 0.004;
 const SHIMMER = 0.03;
@@ -147,6 +152,10 @@ class Voice {
   /** 語尾を収める: how much faster this voice reads its tail (1 = as recorded), and the fade at a tail's cut (seconds). */
   tailSpeed = 1;
   cutFadeSec = TAIL_CUT_FADE_SEC;
+  /** The level the note has been playing at (a running average over its last periods, before the tail). */
+  levelEma = 0;
+  /** The tail's gain: what brings its start to that level (1 until the tail is entered). */
+  tailGain = 1;
 
   driftValue = 0;
   driftTarget = 0;
@@ -560,6 +569,8 @@ export class Engine {
     v.tailSpeed = 1;
     v.cutFadeSec = TAIL_CUT_FADE_SEC;
     v.startOrder = this.order++;
+    v.levelEma = 0;
+    v.tailGain = 1;
     v.phase = Phase.Head;
     v.cycleIndex = 0;
     v.srcTime = this.skipRemoved(this.rangeStart);
@@ -609,6 +620,24 @@ export class Engine {
     v.phase = Phase.Run;
     v.srcTime = this.skipRemoved(Math.max(this.tailStart, this.sustainStart));
     v.tailRemaining = this.tailLimitSamples();
+    // The tail goes on from the level the note was at (a held, evened-out sustain is often louder or quieter
+    // than where the recording's tail begins): no step at the join, and the recorded decay from there.
+    const at = this.tailLevelAt(v.srcTime);
+    v.tailGain = v.levelEma > 1e-5 && at > 1e-5 ? Math.max(TAIL_MATCH_MIN, Math.min(TAIL_MATCH_MAX, v.levelEma / at)) : 1;
+  }
+
+  /** The material's level over the first moments from a position (the mean RMS of its marks there). */
+  private tailLevelAt(position: number): number {
+    const source = this.source!;
+    const end = position + TAIL_LEVEL_SEC * source.sampleRate;
+    let sum = 0;
+    let n = 0;
+    for (let k = this.nearestMark(position); k < source.marks.length && source.marks[k] < end; k++) {
+      if (source.marks[k] < position) continue;
+      sum += this.markRms[k];
+      n++;
+    }
+    return n ? sum / n : 0;
   }
 
   /** Moves the voice from head to sustain / run once its read position gets there. */
@@ -798,10 +827,17 @@ export class Engine {
     }
 
     // Evening out the sustain: a quiet period is brought up toward the sustain's median (capped), a loud one down.
+    let even = 1;
     if (v.phase === Phase.Sustain && params.levelEven > 0 && this.sustainLevel > 0) {
       const local = this.markRms[k];
-      if (local > 1e-5) gain *= Math.min(4, this.sustainLevel / local) ** params.levelEven;
+      if (local > 1e-5) even = Math.min(4, this.sustainLevel / local) ** params.levelEven;
     }
+    gain *= even;
+    // The level the note is at, for the tail to go on from; in the tail, its matching gain.
+    if (v.phase === Phase.Head || v.phase === Phase.Sustain) {
+      const level = this.markRms[k] * even;
+      v.levelEma = v.levelEma > 0 ? 0.8 * v.levelEma + 0.2 * level : level;
+    } else if (v.released && v.srcTime >= this.tailStart) gain *= v.tailGain;
 
     const grain = freeGrain(v.grains);
     grain.active = true;

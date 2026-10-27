@@ -38,7 +38,7 @@ import {
   type Markers,
   type PresetId,
 } from "./instrument/types";
-import { PIANO_NAME, synthPiano } from "./testsignals/piano";
+import { PIANO_NAME, PIANO_SECONDS, synthPiano } from "./testsignals/piano";
 import { el, isTypingTarget } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
@@ -2833,7 +2833,7 @@ void (async () => {
   }
   const order = [...project.materials].sort((a, b) => Number(a.id === project.editing) - Number(b.id === project.editing));
   for (const m of order) {
-    const audio = (await kept(`audio:${m.id}`)) as { name: string; sampleRate: number; channels: Float32Array[] } | undefined;
+    let audio = (await kept(`audio:${m.id}`)) as { name: string; sampleRate: number; channels: Float32Array[] } | undefined;
     if (!audio?.channels?.length) {
       rollPanel.removeMaterial(m.id);
       continue;
@@ -2844,6 +2844,18 @@ void (async () => {
       settings = typeof stored === "string" ? parseSettings(stored) : null;
     } catch {
       settings = null;
+    }
+    // The built-in piano as an earlier version made it (3 s, cut off while still ringing): made again, its cuts' ranges
+    // follow the new length (the cuts keep their ids, so the tracks keep playing them).
+    if (audio.name === PIANO_NAME && audio.channels[0].length !== Math.round(PIANO_SECONDS * audio.sampleRate)) {
+      audio = { ...audio, channels: [synthPiano({ sampleRate: audio.sampleRate })] };
+      void keep(`audio:${m.id}`, audio);
+      if (settings) {
+        const { analysis } = await client.analyze(audio.channels, audio.sampleRate);
+        const decay = PRESETS.find((p) => p.id === "decay")!;
+        settings = { ...settings, cuts: settings.cuts.map((c) => ({ ...c, markers: analysis.markers, params: c.presetId === "decay" ? decay.apply(c.params) : c.params })) };
+        void keep(`settings:${m.id}`, serializeSettings(settings));
+      }
     }
     if (m.id === project.editing || m === order.at(-1)) await load(audio.name, audio.channels, audio.sampleRate, { id: m.id, settings });
     else await loadInBackground(m.id, audio.name, audio.channels, audio.sampleRate, settings);

@@ -60,6 +60,12 @@ const STEAL_FADE_SEC = 0.006;
 const END_FADE_SEC = 0.01;
 /** A tail cut at its length limit fades out over this long. */
 const TAIL_CUT_FADE_SEC = 0.03;
+/** 語尾を収める: a tail too long for the time after the head is played up to this much faster (keeping its shape) before any of it is cut. */
+const FIT_MAX_TAIL_SPEED = 2;
+/** …and what still does not fit fades out over this share of the time it has (between the two bounds). */
+const FIT_FADE_SHARE = 0.4;
+const FIT_FADE_MIN_SEC = 0.04;
+const FIT_FADE_MAX_SEC = 0.25;
 /** Micro irregularity: period jitter (share) and level shimmer (share). */
 const JITTER = 0.004;
 const SHIMMER = 0.03;
@@ -136,6 +142,11 @@ class Voice {
   /** 語尾を収める: the voice clock (samples) at which the note lets go by itself so its tail ends with it, and where it must be over. */
   fitReleaseAt = Infinity;
   fitEndAt = Infinity;
+  /** 語尾を収める, a note the head alone fills: where it starts fading so it is silent at the note's end. */
+  fitFadeAt = Infinity;
+  /** 語尾を収める: how much faster this voice reads its tail (1 = as recorded), and the fade at a tail's cut (seconds). */
+  tailSpeed = 1;
+  cutFadeSec = TAIL_CUT_FADE_SEC;
 
   driftValue = 0;
   driftTarget = 0;
@@ -389,19 +400,53 @@ export class Engine {
   }
 
   /**
-   * 語尾を収める: when the note's length is known, the voice lets go early by
-   * the tail's length (but keeps at least the first half of the note for the
-   * head and the sustain), and whatever is left of the tail at the note's end
-   * fades out there. Only a cut that holds and then plays a tail is affected.
+   * 語尾を収める: when the note's length is known, the tail is brought
+   * forward so it ends with the note. The head is never cut short to make
+   * room (a jump from the middle of the head into the tail is what sounds
+   * forced): the tail starts once the head is over, its own length before the
+   * note's end. If the time left after the head is too short, the tail is
+   * read faster (up to FIT_MAX_TAIL_SPEED, keeping the shape of its decay) and
+   * whatever still does not fit fades out gently. A note the head alone fills
+   * plays no tail: the head fades out to silence at the note's end.
    */
   private fitTail(v: Voice, lengthSec: number | undefined): void {
     v.fitReleaseAt = Infinity;
     v.fitEndAt = Infinity;
+    v.fitFadeAt = Infinity;
+    v.tailSpeed = 1;
+    v.cutFadeSec = TAIL_CUT_FADE_SEC;
     const params = this.params!;
     if (lengthSec === undefined || !(lengthSec > 0) || !params.sustainEnabled || params.sustainMode === "none" || !this.tailOn()) return;
-    const length = lengthSec * this.sampleRate;
+    const sr = this.sampleRate;
+    const length = lengthSec * sr;
+    const tail = this.tailOutputSamples(v.note);
+    const headLeft = v.phase === Phase.Head ? this.headOutputSamples(v) : 0;
+    const gentle = (room: number) => Math.max(FIT_FADE_MIN_SEC, Math.min(FIT_FADE_MAX_SEC, (FIT_FADE_SHARE * room) / sr));
     v.fitEndAt = v.clock + length;
-    v.fitReleaseAt = v.clock + Math.max(length / 2, length - this.tailOutputSamples(v.note));
+    const room = length - headLeft;
+    if (room >= tail) {
+      // It fits as recorded: the tail starts its own length before the note's end.
+      v.fitReleaseAt = v.clock + length - tail;
+      return;
+    }
+    if (room < FIT_FADE_MIN_SEC * sr * 2) {
+      // The head fills the note: no tail, the head fades out by the note's end.
+      v.cutFadeSec = gentle(length);
+      v.fitFadeAt = v.clock + Math.max(0, length - v.cutFadeSec * sr);
+      return;
+    }
+    // Right after the head, read faster; only what still does not fit fades out.
+    v.fitReleaseAt = v.clock + headLeft;
+    v.tailSpeed = Math.min(FIT_MAX_TAIL_SPEED, tail / room);
+    if (tail / v.tailSpeed > room + 1) v.cutFadeSec = gentle(room);
+  }
+
+  /** Output samples the head still plays from where the voice is. */
+  private headOutputSamples(v: Voice): number {
+    const params = this.params!;
+    let out = this.playedBetween(v.srcTime, this.sustainStart) * Math.max(0.05, params.stretch.head);
+    if (params.pitchMode === "resample") out /= 2 ** ((v.note - params.root) / 12);
+    return out;
   }
 
   /** How long the tail plays (output samples) for a note: its material at the tail's speed, within its length limit. */
@@ -448,12 +493,13 @@ export class Engine {
       if (!v.released && v.clock + frames > v.fitReleaseAt) {
         this.release(v);
         if (v.phase === Phase.Head || v.phase === Phase.Sustain) this.jumpToTail(v);
-        v.tailRemaining = Math.min(v.tailRemaining, Math.max(1, v.fitEndAt - v.clock - TAIL_CUT_FADE_SEC * this.sampleRate));
+        v.tailRemaining = Math.min(v.tailRemaining, Math.max(1, v.fitEndAt - v.clock - v.cutFadeSec * this.sampleRate));
       }
+      if (v.fadeStep === 0 && v.clock + frames > v.fitFadeAt) this.fadeOut(v, v.cutFadeSec);
       this.renderVoice(v, frames);
       if (v.tailRemaining !== Infinity) {
         v.tailRemaining -= frames;
-        if (v.tailRemaining <= 0 && v.fadeStep === 0) this.fadeOut(v, TAIL_CUT_FADE_SEC);
+        if (v.tailRemaining <= 0 && v.fadeStep === 0) this.fadeOut(v, v.cutFadeSec);
       }
       for (let i = 0; i < frames; i++) {
         outL[i] += v.bufL[i];
@@ -510,6 +556,9 @@ export class Engine {
     v.bendPerSample = 0;
     v.fitReleaseAt = Infinity;
     v.fitEndAt = Infinity;
+    v.fitFadeAt = Infinity;
+    v.tailSpeed = 1;
+    v.cutFadeSec = TAIL_CUT_FADE_SEC;
     v.startOrder = this.order++;
     v.phase = Phase.Head;
     v.cycleIndex = 0;
@@ -775,7 +824,9 @@ export class Engine {
     v.driftCountdown -= step / this.sampleRate;
     // The read position moves with real time (or faster/slower when resampling), at the part's own speed, past anything cut out.
     if (!(v.phase === Phase.Sustain && this.fromPool(v))) {
-      v.srcTime = this.skipRemoved(v.srcTime + step * (resample ? alpha : 1) * this.speedAt(v.srcTime));
+      // (語尾を収める: a voice that lets go early may read its tail faster.)
+      const tailSpeed = v.phase === Phase.Run && v.released && v.srcTime >= this.tailStart ? v.tailSpeed : 1;
+      v.srcTime = this.skipRemoved(v.srcTime + step * (resample ? alpha : 1) * this.speedAt(v.srcTime) * tailSpeed);
     }
     return true;
   }

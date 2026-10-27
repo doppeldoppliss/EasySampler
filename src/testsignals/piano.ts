@@ -17,11 +17,13 @@ export interface SynthPianoOptions {
 
 /** Name the built-in piano goes by in the project. */
 export const PIANO_NAME = "ピアノ(内蔵)";
+/** Long enough to ring down to near silence on its own (a held note does not stop at an edge). */
+export const PIANO_SECONDS = 8;
 
 export function synthPiano(options: SynthPianoOptions): Float32Array {
   const sr = options.sampleRate;
   const f0 = midiToHz(options.midi ?? 60);
-  const duration = options.durationSec ?? 3;
+  const duration = options.durationSec ?? PIANO_SECONDS;
   const length = Math.round(sr * duration);
   const out = new Float32Array(length);
   /** Inharmonicity: partial k sits at k·f0·√(1 + B·k²). */
@@ -35,7 +37,7 @@ export function synthPiano(options: SynthPianoOptions): Float32Array {
     const amp = (1 / k ** 1.1) * (0.15 + 0.85 * Math.abs(Math.sin(Math.PI * k * strike)));
     // Two-stage decay; higher partials decay faster in both stages.
     const tauFast = 0.7 / (1 + 0.3 * (k - 1));
-    const tauSlow = 4.5 / (1 + 0.18 * (k - 1));
+    const tauSlow = 2.2 / (1 + 0.18 * (k - 1));
     const fastDecay = Math.exp(-1 / (tauFast * sr));
     const slowDecay = Math.exp(-1 / (tauSlow * sr));
     // The two strings of the unison, under a cent apart and struck together, one louder than the other:
@@ -71,7 +73,7 @@ export function synthPiano(options: SynthPianoOptions): Float32Array {
 
   // A clean start and end.
   const attack = Math.round(0.002 * sr);
-  const release = Math.round(0.25 * sr);
+  const release = Math.round(0.6 * sr);
   for (let n = 0; n < attack; n++) out[n] *= n / attack;
   for (let n = 0; n < release; n++) out[length - 1 - n] *= n / release;
 

@@ -570,6 +570,18 @@ describe("Engine 語尾を収める (the tail fitted into a song note)", () => {
     expect(rms(fitted.out, Math.round(0.02 * SR), Math.round(0.14 * SR))).toBeGreaterThan(0.01);
   });
 
+  it("never cuts the head short to fit the tail in: a note the head fills plays the head as it is, fading at the end", () => {
+    const { engine, analysis } = setup(vowel);
+    const headSec = analysis.markers.sustainStart - analysis.markers.rangeStart;
+    const len = Math.max(0.12, headSec * 0.8);
+    const fitted = songNote(engine, len, true);
+    const plain = songNote(setup(vowel).engine, len, false);
+    // Up to where the fade starts, the same sound as without fitting (no jump into the tail).
+    const until = Math.round((len - 0.1) * SR);
+    expect(rms(fitted.out, 0, until)).toBeCloseTo(rms(plain.out, 0, until), 3);
+    expect(fitted.endSec).toBeLessThan(len + 0.01);
+  });
+
   it("the keyboard (no length) is unchanged", () => {
     const a = songNote(setup(vowel).engine, 1.2, false).out;
     const { engine } = setup(vowel);

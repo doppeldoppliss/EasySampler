@@ -79,6 +79,26 @@ export class EngineClient {
     return this.context !== null;
   }
 
+  /** What is heard in the browser, 0–1 (the listening volume: files are written as they are). */
+  private volume = 1;
+  private output: GainNode | null = null;
+
+  /** The listening volume (0–1, as a gain): everything the page plays goes through it; exports do not. */
+  setVolume(gain: number): void {
+    this.volume = Math.max(0, Math.min(1, gain));
+    if (this.output && this.context) this.output.gain.setTargetAtTime(this.volume, this.context.currentTime, 0.02);
+  }
+
+  /** Where the page's sound goes: the listening volume, then the speakers. */
+  private out(context: AudioContext): AudioNode {
+    if (!this.output) {
+      this.output = context.createGain();
+      this.output.gain.value = this.volume;
+      this.output.connect(context.destination);
+    }
+    return this.output;
+  }
+
   /** Call from inside a user gesture: creates or resumes the audio. */
   unlock(): void {
     if (!this.context) {
@@ -94,7 +114,7 @@ export class EngineClient {
     node.port.onmessage = (event: MessageEvent<FromEngine>) => {
       if (event.data.type === "status") this.onStatus(event.data.voices);
     };
-    node.connect(context.destination);
+    node.connect(this.out(context));
     this.node = node;
     for (const message of this.pending) this.post(message);
     this.pending = [];
@@ -300,7 +320,7 @@ export class EngineClient {
     const offset = Math.max(0, Math.min(buffer.duration, fromSec));
     const node = context.createBufferSource();
     node.buffer = buffer;
-    node.connect(context.destination);
+    node.connect(this.out(context));
     // Only the node still in charge reports the end: a seek swaps nodes without ending the preview.
     node.onended = () => {
       if (this.preview !== node) return;

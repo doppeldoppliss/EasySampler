@@ -288,6 +288,26 @@ const openButton = el("label", { className: "button primary", htmlFor: "file", t
 const pianoButton = button("ピアノ", "", () => void addPiano());
 const status = el("p", { className: "status", role: "status" });
 
+// The listening volume (this browser only; the files are written as they are), kept for the next visit.
+const VOLUME_KEY = "easysampler.volume";
+const volumeSlider = el("input", { type: "range", min: "0", max: "100", step: "1", ariaLabel: "全体の音量(聴くときだけ)", className: "volume-slider" });
+const volumeValue = el("span", { className: "fine num volume-value" });
+function applyVolume(percent: number, keepIt: boolean): void {
+  const p = Math.max(0, Math.min(100, Math.round(percent)));
+  volumeSlider.value = String(p);
+  volumeValue.textContent = p === 0 ? "消音" : String(p);
+  // A square law: the slider moves evenly to the ear, not to the meter.
+  client.setVolume((p / 100) ** 2);
+  if (keepIt) safeStorage(VOLUME_KEY, String(p));
+}
+volumeSlider.addEventListener("input", () => applyVolume(Number(volumeSlider.value), true));
+volumeSlider.addEventListener("dblclick", () => applyVolume(100, true));
+{
+  const saved = Number(safeStorage(VOLUME_KEY) ?? "100");
+  applyVolume(Number.isFinite(saved) ? saved : 100, false);
+}
+const volumeControl = el("label", { className: "inline volume", title: "ブラウザで聴くときの全体の音量です。書き出すファイルの音量は変わりません(ダブルクリックで 100)" }, ["🔊 ", volumeSlider, volumeValue]);
+
 // (Shown only once every material has been taken out: a new project starts on the built-in piano.)
 const emptyState = el("section", { className: "empty", hidden: true }, [
   el("p", { className: "empty-title", textContent: "素材を入れたら、DAW に渡せる音源になる。" }),
@@ -1517,7 +1537,7 @@ function openFiles(files: readonly File[]): void {
 const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, rollPanel.element, fxPanel, songPanel.element, exportPanel, detailsPanel]);
 
 document.getElementById("app")!.append(
-  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [rePickButton, openButton, pianoButton])]),
+  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, rePickButton, openButton, pianoButton])]),
   fileInput,
   status,
   emptyState,

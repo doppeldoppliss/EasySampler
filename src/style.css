@@ -1150,3 +1150,16 @@ details.sub.credit > summary {
 .pad-row select {
   max-width: 18em;
 }
+
+/* The listening volume in the header. */
+.volume {
+  gap: 6px;
+  white-space: nowrap;
+}
+.volume-slider {
+  width: 110px;
+}
+.volume-value {
+  min-width: 2.5em;
+  text-align: right;
+}

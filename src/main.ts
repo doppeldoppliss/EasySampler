@@ -286,6 +286,7 @@ function safeStorage(key: string, value?: string | null): string | null {
 const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json,.mid,.midi", multiple: true, className: "visually-hidden", id: "file" });
 const openButton = el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" });
 const demoButton = button("デモ素材(声)", "", () => loadDemo());
+const pianoButton = button("ピアノ", "", () => void addPiano());
 const status = el("p", { className: "status", role: "status" });
 
 // (Shown only once every material has been taken out: a new project starts on the built-in piano.)
@@ -329,6 +330,7 @@ materialSelect.addEventListener("change", () => switchMaterial(materialSelect.va
 const removeMaterialButton = button("この素材を外す", "small", () => material && removeMaterial(material.id));
 /** Another file into the project (the one shown now stays in it). */
 const openMoreButton = el("label", { className: "button small", htmlFor: "file", textContent: "＋ 素材を追加" });
+const addPianoButton = button("＋ 内蔵ピアノ", "small", () => void addPiano());
 const cutBar = el("div", { className: "cut-bar" }, [
   el("span", { className: "control-label", textContent: "区間" }),
   cutSelect,
@@ -529,7 +531,7 @@ editor.onViewChange = (view) => {
 };
 
 const materialPanel = el("section", { className: "panel" }, [
-  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, openMoreButton, removeMaterialButton]),
+  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, openMoreButton, addPianoButton, removeMaterialButton]),
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [
@@ -1516,7 +1518,7 @@ function openFiles(files: readonly File[]): void {
 const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, rollPanel.element, fxPanel, songPanel.element, exportPanel, detailsPanel]);
 
 document.getElementById("app")!.append(
-  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [rePickButton, openButton, demoButton])]),
+  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [rePickButton, openButton, pianoButton, demoButton])]),
   fileInput,
   status,
   emptyState,
@@ -2638,6 +2640,20 @@ async function loadPiano(): Promise<void> {
   nextPresetHint = "decay";
   await load(PIANO_NAME, [synthPiano({ sampleRate: DEMO_RATE })], DEMO_RATE);
   nextPresetHint = "";
+}
+
+/** The built-in piano into the project: shown if it is already there, added (next to the other materials) if not. */
+async function addPiano(): Promise<void> {
+  const there = [...library.values()].find((e) => e.material.name === PIANO_NAME);
+  if (there) {
+    if (there.material !== material) switchMaterial(there.material.id);
+    refreshMaterialSelect();
+    status.textContent = `「${PIANO_NAME}」に切り替えました。トラックで鳴らすには、トラック一覧の区間の欄で選んでください。`;
+    return;
+  }
+  await loadPiano();
+  refreshInstruments();
+  if (material?.name === PIANO_NAME) status.textContent = `「${PIANO_NAME}」を素材に加えました。トラックで鳴らすには、トラック一覧の区間の欄で選ぶか、「＋ トラックを追加」で新しいトラックを作ってください。`;
 }
 
 async function openFile(file: File): Promise<void> {

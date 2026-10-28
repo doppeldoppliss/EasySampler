@@ -2702,7 +2702,7 @@ async function setCorrections(corrections: PitchCorrection[]): Promise<void> {
     target.analysis = analysis;
     target.source = source;
     target.exportSources = new Map([[source.sampleRate, source]]);
-    client.setSource(source);
+    client.setSource(source, target.id);
     editor.setMaterial({ mono: target.mono, sampleRate: target.sampleRate, track: analysis.track });
     editor.setSelection(selection);
     for (const cut of cuts) {
@@ -3432,6 +3432,13 @@ void (async () => {
     }
     if (m.id === project.editing || m === order.at(-1)) await load(audio.name, audio.channels, audio.sampleRate, { id: m.id, settings });
     else await loadInBackground(m.id, audio.name, audio.channels, audio.sampleRate, settings);
+  }
+  // The material to show had no audio left (a save cut short): show another one of the project.
+  if (!material && library.size > 0) {
+    switchMaterialFrom([...library.keys()].at(-1)!);
+    refreshMaterialSelect();
+    emptyState.hidden = true;
+    workspace.hidden = false;
   }
   // A new project (or one whose materials are all gone): it starts on the built-in piano, ready to play.
   if (library.size === 0) {

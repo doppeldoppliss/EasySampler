@@ -214,17 +214,42 @@ export interface Preset {
   apply: (params: InstrumentParams) => InstrumentParams;
 }
 
+/**
+ * What every preset starts from: the sound settings put back to the defaults,
+ * so a preset never inherits another's leftovers (伸ばし方, 音量の形…). Kept
+ * as the user set them: the note and root, the fade-in and fade-out (入り /
+ * 終わりのフェード), velocity sensitivity, the formant, 録音した高さで鳴らす.
+ */
+function presetBase(p: InstrumentParams): InstrumentParams {
+  const d = DEFAULT_PARAMS;
+  return {
+    ...p,
+    pitchMode: "preserve-length",
+    flatten: 1,
+    tune: { ...p.tune, mode: "flatten", retuneSec: 0 },
+    unvoicedFollow: d.unvoicedFollow,
+    levelEven: d.levelEven,
+    unvoicedGainDb: d.unvoicedGainDb,
+    sustainEnabled: true,
+    sustainMode: "pool",
+    stretch: { ...d.stretch },
+    wobble: { ...d.wobble },
+    amp: { ...d.amp, attack: p.amp.attack, fadeOut: p.amp.fadeOut, velocitySens: p.amp.velocitySens },
+  };
+}
+
 /** Starting points (design.md 4.5); the root and markers stay as they are. */
 export const PRESETS: Preset[] = [
-  { id: "synth", label: "シンセ化(平坦)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
+  // Synthesis: flat on the note, the vowel drawn out while held.
+  { id: "synth", label: "シンセ化(平坦)", apply: (p) => presetBase(p) },
   // Not synth-ified at all: the whole cut plays through once, as recorded, moved up or down to the key pressed
   // (a pitch shift that keeps the length and the voice's colour; nothing is held or evened out).
-  { id: "transpose", label: "移調のみ(シンセ化せず全体を上げ下げ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, unvoicedFollow: false, levelEven: 0, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 } }) },
+  { id: "transpose", label: "移調のみ(シンセ化せず全体を上げ下げ)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", levelEven: 0, wobble: { ...DEFAULT_PARAMS.wobble, micro: false } }) },
   // Short material (a shout, a word): played through once at the note, nothing stretched — the 音MAD staple.
-  { id: "short", label: "短い素材(長さ保持・そのまま音程だけ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, unvoicedFollow: true, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, retuneSec: 0 } }) },
+  { id: "short", label: "短い素材(長さ保持・そのまま音程だけ)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", unvoicedFollow: true }) },
   // A struck, piano-like sound from any material: synthesized (flat, the vowel drawn out) and dying away while held —
   // the level falls toward nothing (decay ~1.2 s, sustain 0) — and stopped quickly when let go, as a damper does.
-  { id: "decay", label: "減衰(伸ばしながら消える・ピアノ風)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainEnabled: true, sustainMode: "pool", unvoicedFollow: false, levelEven: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 }, amp: { ...p.amp, attack: 0.002, decay: 1.2, sustain: 0, release: 0.25, fadeOut: 0 } }) },
+  { id: "decay", label: "減衰(伸ばしながら消える・ピアノ風)", apply: (p) => { const b = presetBase(p); return { ...b, amp: { ...b.amp, decay: 1.2, sustain: 0, release: 0.25 } }; } },
 ];
 
 // ---------------------------------------------------------------- export

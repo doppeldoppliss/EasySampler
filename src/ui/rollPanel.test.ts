@@ -12,5 +12,8 @@ describe("一括変更 expressions", () => {
     expect(applyExpression(" ", 7)).toBeNull();
     expect(applyExpression("abc", 7)).toBeNaN();
     expect(applyExpression("/0", 7)).toBeNaN();
+    // Typed with the Japanese input on: full-width digits and symbols.
+    expect(applyExpression("０．５", 2)).toBe(0.5);
+    expect(applyExpression("＋１０", 100)).toBe(110);
   });
 });

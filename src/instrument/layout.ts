@@ -57,7 +57,8 @@ export function hiddenParts(markers: Markers, parts: { sustain: boolean; tail: b
 
 /** What the switches in `params` hide. */
 export function hiddenPartsOf(markers: Markers, params: InstrumentParams): TimeRange[] {
-  return hiddenParts(markers, { sustain: params.sustainEnabled, tail: params.tail.enabled && params.tail.limit !== "none" });
+  // A one-shot (伸ばさない) plays on past the sustain to the recording's end: that part is not hidden.
+  return hiddenParts(markers, { sustain: params.sustainEnabled, tail: (params.tail.enabled && params.tail.limit !== "none") || (params.sustainEnabled && params.sustainMode === "none") });
 }
 
 export function collapsedTime(t: number, removed: readonly TimeRange[]): number {

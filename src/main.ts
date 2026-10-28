@@ -1878,8 +1878,10 @@ async function addKitSound(key: number, name: string, channels: Float32Array[], 
 function forgetKitAudioIfUnused(id: string | null): void {
   if (!id || rollPanel.kit.slots.some((s) => s.sample === id)) return;
   kitAudio.delete(id);
-  void forget(`audio:${id}`);
+  // The song that no longer lists it is saved first, so a page ended in between never points at missing audio.
+  void rollPanel.flush().then(() => whenSaved()).then(() => forget(`audio:${id}`));
 }
+rollPanel.kitSoundReady = (key) => kitBuffers.has(key);
 
 /** The longest a drum sound is kept (seconds): a hit, not a song. */
 const KIT_MAX_SEC = 20;
@@ -2009,6 +2011,12 @@ function kitWave(key: number, slot: KitSlot, audio: { sampleRate: number; channe
 }
 
 function renderKitPanel(): void {
+  // (The list is drawn again after each change: the field being typed in gets the focus back.)
+  const focused = document.activeElement instanceof HTMLElement && kitList.contains(document.activeElement) ? document.activeElement.dataset.kitField ?? null : null;
+  queueMicrotask(() => {
+    if (!focused) return;
+    kitList.querySelector<HTMLElement>(`[data-kit-field="${focused}"]`)?.focus();
+  });
   const kit = rollPanel.kit;
   const keys = [...new Set([...COMMON_KEYS, ...kit.slots.map((s) => s.key)])].sort((a, b) => a - b);
   const ms = (v: number) => String(Math.round(v * 1000));
@@ -2022,6 +2030,7 @@ function renderKitPanel(): void {
     });
     const number = (label: string, value: number, set: (s: NonNullable<typeof slot>, sec: number) => void, title: string) => {
       const input = el("input", { type: "number", min: "0", step: "1", inputMode: "numeric", value: ms(value), ariaLabel: label, title, className: "kit-ms" });
+      input.dataset.kitField = `${key}:${label}`;
       input.addEventListener("change", () => edit((s) => set(s, Math.max(0, Number(input.value) || 0) / 1000)));
       return el("label", { className: "inline fine" }, [`${label} `, input]);
     };
@@ -2163,7 +2172,9 @@ function setView(next: View): void {
     pianoBeforeKit = null;
   }
   rollPanel.setVisible(next === "song");
-  if (next !== "song") rollPanel.stop();
+  if (next !== "song") rollPanel.pause();
+  // (A material preview does not follow into the other views.)
+  if (next !== "material") client.stopPreview();
   else {
     client.stopPreview();
     editor.draw();
@@ -2815,6 +2826,7 @@ function redo(): void {
 }
 window.addEventListener("keydown", (event) => {
   if (isTypingTarget(event.target) || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+  if (view === "kit") return;
   const key = event.key.toLowerCase();
   if (key === "z" && !event.shiftKey) {
     event.preventDefault();
@@ -3501,7 +3513,6 @@ void (async () => {
   refreshInstruments();
   refreshMaterialSelect();
   await loadKitAudio();
-  rebuildKit();
-  sendLiveKit();
-  renderKitPanel();
+  // The kit's sounds are in: the tracks are given them (they played the plain drums until now), the keyboard too.
+  rollPanel.updateKit(() => {});
 })();

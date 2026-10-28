@@ -86,7 +86,7 @@ const ONION_KEY = "easysampler.roll.onion";
  * number sets the value, "*2" multiplies, "+0.5" / "-10" adds. Empty = no change.
  */
 export function applyExpression(text: string, current: number): number | null {
-  const t = text.trim().replace(/[＊×]/g, "*").replace(/[＋]/g, "+").replace(/[－−ー]/g, "-").replace(/[／÷]/g, "/");
+  const t = text.normalize("NFKC").trim().replace(/[＊×]/g, "*").replace(/[＋]/g, "+").replace(/[－−ー]/g, "-").replace(/[／÷]/g, "/");
   if (!t) return null;
   const m = /^([*/+-]?)\s*(\d+(?:\.\d+)?|\.\d+)$/.exec(t);
   if (!m) return Number.NaN;
@@ -754,12 +754,20 @@ export class RollPanel {
   updateKit(change: (kit: Kit) => void): void {
     change(this.project.kit);
     this.project.kit.slots.sort((a, b) => a.key - b.key);
-    if (this.track.kind === "drum") this.showTrackInRoll();
+    if (this.track.kind === "drum") {
+      const rows = drumRows(this.project.kit, this.track.notes);
+      // Same rows: only their names change (the roll keeps its history and selection); others: shown again.
+      if (rows.join() === this.rowKeys.join()) this.roll.setRows(rows.map((k) => keyLabel(this.project.kit, k)));
+      else this.showTrackInRoll();
+    }
     this.onKitChange();
     this.reload();
     this.renderTracks();
     this.scheduleSave();
   }
+
+  /** Whether the page has a kit key's sound ready (its recording loaded); a key without one plays the plain drum. */
+  kitSoundReady: (key: number) => boolean = () => true;
 
   /** What the engine plays for each GM key: the kit's sound (by sample id), or the plain drum sound. */
   kitSpec(): { samples: (string | null)[]; keys: (number | null)[] } {
@@ -767,8 +775,9 @@ export class RollPanel {
     const keys: (number | null)[] = [];
     for (let key = 0; key < 128; key++) {
       const slot = slotFor(this.project.kit, key);
-      samples.push(slot?.sample ? `kit:${key}` : null);
-      keys.push(slot?.sample ? null : key);
+      const own = !!slot?.sample && this.kitSoundReady(key);
+      samples.push(own ? `kit:${key}` : null);
+      keys.push(own ? null : key);
     }
     return { samples, keys };
   }
@@ -1150,6 +1159,13 @@ export class RollPanel {
     this.frame = requestAnimationFrame(tick);
   }
 
+  /** Stops playback keeping the position where it is now (leaving the 曲 view). */
+  pause(): void {
+    if (!this.playing) return;
+    this.from = this.currentSec();
+    this.stop();
+  }
+
   /** Stops playback (the position stays where it was). */
   stop(): void {
     cancelAnimationFrame(this.frame);
@@ -1208,13 +1224,12 @@ export class RollPanel {
     this.sliceButton.disabled = this.roll.notes.length === 0;
     this.onionToggle.classList.toggle("on", this.onion);
     this.onionToggle.hidden = this.track.kind === "drum";
-    this.stepTieButton.hidden = this.stepRestButton.hidden;
     this.velocityToggle.classList.toggle("on", this.roll.showVelocity);
     const drum = this.track.kind === "drum";
     this.stepToggle.textContent = `ステップ入力: ${this.stepMode && !drum ? "オン" : "オフ"}`;
     this.stepToggle.classList.toggle("on", this.stepMode && !drum);
     this.stepToggle.disabled = drum;
     this.stepToggle.title = drum ? "ドラムトラックでは使えません(行をタップして入れてください)" : "鍵盤で弾いた音が、再生位置に音符として入ります";
-    this.stepRestButton.hidden = this.stepBackButton.hidden = this.stepHelp.hidden = !this.stepMode || drum;
+    this.stepRestButton.hidden = this.stepBackButton.hidden = this.stepHelp.hidden = this.stepTieButton.hidden = !this.stepMode || drum;
   }
 }

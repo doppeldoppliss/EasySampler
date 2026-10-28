@@ -136,8 +136,9 @@ class EngineProcessor extends AudioWorkletProcessor {
         break;
       case "live":
         if (this.live.instrument !== message.instrument) this.apply(this.live, message.instrument);
-        this.liveFxOn = message.fx !== null;
         if (message.fx) this.liveFx.set(message.fx);
+        // (Effects all off: nothing to run for the keyboard.)
+        this.liveFxOn = message.fx !== null && this.liveFx.active;
         this.liveMaster = message.master === true;
         break;
       case "noteOn":
@@ -262,10 +263,11 @@ class EngineProcessor extends AudioWorkletProcessor {
         if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
       }
     }
+    // (Previews go through the kit's scratch buffers: the keyboard's, still to be added after the master, stay intact.)
     if (!this.samplePreview.idle()) {
-      this.samplePreview.render(this.liveL, this.liveR, frames);
-      for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
-      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
+      this.samplePreview.render(this.kitL, this.kitR, frames);
+      for (let i = 0; i < frames; i++) left[i] += this.kitL[i];
+      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.kitR[i];
     }
     if (!this.preview.idle()) {
       if (this.previewNote >= 0) {
@@ -275,9 +277,9 @@ class EngineProcessor extends AudioWorkletProcessor {
           this.previewNote = -1;
         }
       }
-      this.preview.render(this.liveL, this.liveR, frames);
-      for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
-      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
+      this.preview.render(this.kitL, this.kitR, frames);
+      for (let i = 0; i < frames; i++) left[i] += this.kitL[i];
+      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.kitR[i];
     }
     if (this.masterOn) this.master.process(left, right, frames);
     if (!this.liveMaster && (liveOn || kitOn || this.liveFxOn)) {

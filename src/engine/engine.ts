@@ -284,7 +284,8 @@ export class Engine {
     this.rangeEnd = markers.rangeEnd * sr;
     this.sustainStart = markers.sustainStart * sr;
     this.sustainEnd = markers.sustainEnd * sr;
-    this.tailStart = markers.tailStart * sr;
+    // (語尾 is gone: the tail starts where the sustain ends, so a one-shot's remaining time — for 終わりのフェード — has no gap.)
+    this.tailStart = Math.min(markers.tailStart, markers.sustainEnd) * sr;
     const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
     this.removedStart = Float64Array.from(removed, (r) => r.start * sr);
     this.removedEnd = Float64Array.from(removed, (r) => r.end * sr);

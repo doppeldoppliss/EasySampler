@@ -214,12 +214,16 @@ export class PianoRoll {
 
   /** Replaces the notes (a load or an import); `keepHistory` makes it one undoable step. */
   setNotes(notes: Note[], keepHistory = false): void {
+    // (A drag under way belongs to the notes being replaced: it ends here, so it cannot land in the new ones' history.)
+    this.drag = null;
+    this.clearLongPress();
     if (keepHistory) this.pushUndo();
     else {
       this.undoStack = [];
       this.redoStack = [];
     }
     this.notesList = sortNotes(notes.map((n) => ({ ...n })));
+    this.gestureStart = this.snapshot();
     this.selected.clear();
     this.draw();
     this.onStateChange();

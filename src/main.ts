@@ -11,7 +11,9 @@
 import { applyCorrections, CORRECTION_LABELS, correctionLabel, type CorrectionKind, type PitchCorrection } from "./analysis/corrections";
 import { midiToHz, pitchLabel } from "./analysis/pitch";
 import { EngineClient } from "./audio/engineClient";
-import { askToPersist, forget, keep, kept } from "./audio/store";
+import { askToPersist, forget, keep, kept, onSaveState, storageEstimate, whenSaved, type SaveState } from "./audio/store";
+import { chooseProject, createProject, currentProject, duplicateProject, newMaterialId, openProjects, projectKey, projectList, remapMaterials, removeProject, renameProject, touchProject } from "./audio/projects";
+import { buildProjectFile, parseProjectFile, PROJECT_FILE_EXTENSION } from "./audio/projectFile";
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
 import type { PitchTrack } from "./analysis/pyin";
@@ -274,7 +276,7 @@ function safeStorage(key: string, value?: string | null): string | null {
 
 // ---------------------------------------------------------------- header, empty state
 
-const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json,.mid,.midi", multiple: true, className: "visually-hidden", id: "file" });
+const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json,.mid,.midi,.easysampler", multiple: true, className: "visually-hidden", id: "file" });
 const openButton = el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" });
 const pianoButton = button("ピアノ", "", () => void addPiano());
 const status = el("p", { className: "status", role: "status" });
@@ -1518,6 +1520,11 @@ async function deliverQueue(kind: "wavs" | "kit"): Promise<void> {
 
 /** Files dropped or chosen: one opens; several make a queue and open the first. Settings and MIDI files are read on their own. */
 function openFiles(files: readonly File[]): void {
+  const project = files.find((f) => f.name.toLowerCase().endsWith(PROJECT_FILE_EXTENSION));
+  if (project) {
+    void openProjectFile(project);
+    return;
+  }
   const isSettings = (f: File) => f.name.toLowerCase().endsWith(".json") || f.type === "application/json";
   const settings = files.filter(isSettings);
   const midi = files.filter((f) => !isSettings(f) && isMidiFile(f));
@@ -1541,6 +1548,154 @@ function openFiles(files: readonly File[]): void {
 }
 
 // ---------------------------------------------------------------- page
+
+// ---------------------------------------------------------------- projects (several in the browser; one as a file)
+
+const projectButton = button("プロジェクト", "", () => void openProjectPanel());
+projectButton.classList.add("project-button");
+const saveState = el("span", { className: "fine save-state", role: "status" });
+let lastSaveState: SaveState = "saved";
+onSaveState((state) => {
+  lastSaveState = state;
+  saveState.textContent = state === "saving" ? "保存中…" : state === "failed" ? "⚠ 保存できませんでした" : "保存済み";
+  saveState.classList.toggle("warn", state === "failed");
+  saveState.title = state === "failed" ? "ブラウザに保存できませんでした。空き容量が足りないか、プライベートウィンドウかもしれません。「プロジェクト」からファイルに保存しておくと安心です。" : "編集はこのブラウザに自動で保存されます";
+});
+function refreshProjectButton(): void {
+  projectButton.textContent = `📁 ${currentProject()?.name ?? "プロジェクト"}`;
+}
+
+/** Everything waiting to be saved goes out, and is done. */
+async function flushAll(): Promise<void> {
+  flushSave();
+  await rollPanel.flush();
+  await whenSaved();
+}
+
+/** Opens another project: the open one is saved first, then the page starts again on the chosen one. */
+async function switchProject(id: string): Promise<void> {
+  await flushAll();
+  await chooseProject(id);
+  location.reload();
+}
+
+/** The open project as one file (.easysampler): every material's samples and settings, and the song. */
+async function saveProjectFile(): Promise<void> {
+  await flushAll();
+  const name = currentProject()?.name ?? "プロジェクト";
+  const materials = [...library.values()].map(({ material: m, settings }) => ({
+    id: m.id,
+    name: m.name,
+    sampleRate: m.sampleRate,
+    channels: m.channels,
+    settings: material && m.id === material.id ? serializeSettings(settingsBody()) : settings ? serializeSettings(settings) : null,
+  }));
+  const bytes = buildProjectFile({ name, project: rollPanel.snapshot(), materials });
+  const fileName = `${safeBaseName(name)}${PROJECT_FILE_EXTENSION}`;
+  downloadFile(new Blob([bytes], { type: "application/octet-stream" }), fileName);
+  status.textContent = `「${fileName}」に保存しました(素材 ${materials.length} 個、${(bytes.byteLength / 1048576).toFixed(1)} MB)。`;
+}
+
+/** A project file becomes a new project in the browser (its materials under new ids), and opens. */
+async function openProjectFile(file: File): Promise<void> {
+  let data;
+  try {
+    data = parseProjectFile(new Uint8Array(await file.arrayBuffer()));
+  } catch (error) {
+    status.textContent = `開けませんでした: ${error instanceof Error ? error.message : error}`;
+    return;
+  }
+  status.textContent = `「${data.name}」を読み込んでいます…`;
+  const map = new Map(data.materials.map((m) => [m.id, newMaterialId()]));
+  for (const m of data.materials) {
+    const id = map.get(m.id)!;
+    await keep(`audio:${id}`, { name: m.name, sampleRate: m.sampleRate, channels: m.channels });
+    if (m.settings) await keep(`settings:${id}`, m.settings);
+  }
+  const names = new Set(projectList().map((p) => p.name));
+  let name = data.name;
+  for (let k = 2; names.has(name); k++) name = `${data.name} (${k})`;
+  const entry = await createProject(name, remapMaterials(data.project, map));
+  await switchProject(entry.id);
+}
+
+const projectFileInput = el("input", { type: "file", accept: `${PROJECT_FILE_EXTENSION},application/octet-stream,application/zip`, className: "visually-hidden" });
+projectFileInput.addEventListener("change", () => {
+  const file = projectFileInput.files?.[0];
+  projectFileInput.value = "";
+  if (file) void openProjectFile(file);
+});
+
+const projectDialog = el("dialog", { className: "project-dialog" });
+const megabytes = (n: number) => (n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : `${Math.max(0.1, n / 1048576).toFixed(1)} MB`);
+
+/** The projects: the open one (name, file), the others (open, copy, remove), and how much room the browser gives. */
+async function openProjectPanel(): Promise<void> {
+  const current = currentProject();
+  const nameInput = el("input", { type: "text", value: current.name, maxLength: 60, ariaLabel: "プロジェクトの名前" });
+  nameInput.addEventListener("change", () => {
+    void renameProject(current.id, nameInput.value).then(refreshProjectButton);
+  });
+  const when = (t: number) => new Date(t).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const rows = projectList().map((p) => {
+    const isOpen = p.id === current.id;
+    const open = button(isOpen ? "開いています" : "開く", `small${isOpen ? "" : " primary"}`, () => void switchProject(p.id));
+    open.disabled = isOpen;
+    const copy = button("複製", "small", async () => {
+      await flushAll();
+      const made = await duplicateProject(p.id, `${p.name} のコピー`);
+      if (made) void openProjectPanel();
+    });
+    const remove = button("削除", "small", async () => {
+      if (!confirm(`「${p.name}」を削除しますか?素材の音声と打ち込みも消え、元に戻せません。${isOpen ? "(開いているプロジェクトです。削除後はほかのプロジェクトを開きます)" : ""}`)) return;
+      if (isOpen) {
+        await flushAll();
+        await removeProject(p.id);
+        location.reload();
+        return;
+      }
+      await removeProject(p.id);
+      void openProjectPanel();
+    });
+    return el("div", { className: `project-row${isOpen ? " open" : ""}` }, [
+      el("span", { className: "project-name", textContent: p.name }),
+      el("span", { className: "fine num", textContent: when(p.updatedAt) }),
+      el("span", { className: "row tight" }, [open, copy, remove]),
+    ]);
+  });
+  const room = el("p", { className: "fine" });
+  void storageEstimate().then((e) => {
+    if (!e) return;
+    const share = e.quota > 0 ? e.usage / e.quota : 0;
+    room.textContent = `このブラウザの保存領域: ${megabytes(e.usage)} 使用 / 上限 約 ${megabytes(e.quota)}${share > 0.8 ? "。残りが少なくなっています。使っていないプロジェクトを削除するか、ファイルに保存してから削除してください。" : ""}`;
+    room.classList.toggle("warn", share > 0.8);
+  });
+  projectDialog.replaceChildren(
+    el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "プロジェクト" }), el("span", { className: "spacer" }), button("閉じる", "small", () => projectDialog.close())]),
+    el("label", { className: "control" }, [el("span", { className: "control-label", textContent: "開いているプロジェクトの名前" }), nameInput]),
+    el("div", { className: "row" }, [
+      button("ファイルに保存(.easysampler)", "small primary", () => void saveProjectFile()),
+      button("ファイルから開く", "small", () => projectFileInput.click()),
+      button("新しいプロジェクト", "small", async () => {
+        await flushAll();
+        const entry = await createProject(`プロジェクト ${projectList().length + 1}`);
+        await switchProject(entry.id);
+      }),
+    ]),
+    el("p", { className: "fine", textContent: "編集はこのブラウザに自動で保存されます。ファイルに保存すると、素材の音声・区間の設定・打ち込みが 1 つにまとまり、別の端末やブラウザで「ファイルから開く」で続きができます(ファイルはページにドロップしても開けます)。" }),
+    el("div", { className: "project-list" }, rows),
+    room,
+    projectFileInput,
+  );
+  if (!projectDialog.open) projectDialog.showModal();
+}
+projectDialog.addEventListener("click", (e) => {
+  // A click on the backdrop closes it.
+  if (e.target === projectDialog) projectDialog.close();
+});
+window.addEventListener("beforeunload", (e) => {
+  if (lastSaveState === "saving") e.preventDefault();
+});
 
 // ---------------------------------------------------------------- the two views: 素材 (the sound) and 曲 (the song)
 
@@ -1592,8 +1747,9 @@ const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs
 setView(view);
 
 document.getElementById("app")!.append(
-  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, rePickButton, openButton, pianoButton])]),
+  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, projectButton, saveState, rePickButton, openButton, pianoButton])]),
   fileInput,
+  projectDialog,
   status,
   emptyState,
   queuePanel,
@@ -2268,7 +2424,10 @@ function flushSave(): void {
   saveTimer = 0;
   saveNow();
 }
-window.addEventListener("pagehide", flushSave);
+window.addEventListener("pagehide", () => {
+  flushSave();
+  void rollPanel.flush();
+});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") flushSave();
 });
@@ -2892,6 +3051,10 @@ refreshExport();
 
 // The project comes back: its tracks, then its materials (the one being edited last, so it is the one shown).
 void (async () => {
+  const opened = await openProjects();
+  rollPanel.useStore(projectKey(opened.id));
+  rollPanel.onSaved = touchProject;
+  refreshProjectButton();
   const project = await rollPanel.restore();
   // The old voice demo is gone from the app: a saved project drops it (its tracks then play nothing until another cut is chosen).
   for (const m of [...project.materials]) {

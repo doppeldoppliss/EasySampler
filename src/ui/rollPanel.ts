@@ -34,7 +34,8 @@ import { DRUM_KEYS } from "../daw/midiWrite";
 import { el } from "./dom";
 import { PianoRoll } from "./pianoRoll";
 
-const STORE_KEY = "project";
+/** Where the song is kept until the page says which project is open (useStore). */
+const DEFAULT_STORE_KEY = "project";
 
 function remembered(key: string): string | null {
   try {
@@ -150,6 +151,22 @@ export class RollPanel {
   readonly exportStatus = el("p", { className: "fine", role: "status" });
 
   private project: Project = emptyProject();
+  private storeKey = DEFAULT_STORE_KEY;
+  /** The song was written to the store (the page notes the project's time). */
+  onSaved: () => void = () => {};
+
+  /** The key the open project's song is kept under (set before restore()). */
+  useStore(key: string): void {
+    this.storeKey = key;
+  }
+
+  /** A save waiting for its moment goes out now. */
+  async flush(): Promise<void> {
+    if (!this.saveTimer) return;
+    clearTimeout(this.saveTimer);
+    this.saveTimer = 0;
+    if (await keep(this.storeKey, this.project)) this.onSaved();
+  }
   private selected = 0;
   private options: InstrumentOption[] = [];
   /** The cut being edited on the sampling side: what a new track plays. */
@@ -399,7 +416,7 @@ export class RollPanel {
 
   /** Reads the kept project (call once at start); the page then opens its materials. */
   async restore(): Promise<Project> {
-    const stored = await kept(STORE_KEY);
+    const stored = await kept(this.storeKey);
     if (stored !== undefined) {
       this.project = sanitizeProject(stored);
       this.selected = 0;
@@ -493,7 +510,10 @@ export class RollPanel {
 
   private scheduleSave(): void {
     clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => void keep(STORE_KEY, this.project), 400);
+    this.saveTimer = window.setTimeout(() => {
+      this.saveTimer = 0;
+      void keep(this.storeKey, this.project).then((ok) => ok && this.onSaved());
+    }, 400);
   }
 
   /**

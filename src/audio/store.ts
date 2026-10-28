@@ -29,12 +29,48 @@ async function run<T>(mode: IDBTransactionMode, body: (store: IDBObjectStore) =>
   }
 }
 
-/** Keeps a value under its key (structured clone: typed arrays as they are). */
-export async function keep(key: string, value: unknown): Promise<void> {
+/** Where saving stands: nothing waiting, writes under way, or the last write failed (a full disk, a private window). */
+export type SaveState = "saved" | "saving" | "failed";
+let pending = 0;
+let failed = false;
+const listeners = new Set<(state: SaveState) => void>();
+const idle: (() => void)[] = [];
+
+function saveState(): SaveState {
+  return pending > 0 ? "saving" : failed ? "failed" : "saved";
+}
+
+function notify(): void {
+  const state = saveState();
+  for (const listener of listeners) listener(state);
+  if (pending === 0) for (const resolve of idle.splice(0)) resolve();
+}
+
+/** Called with the save state now and whenever it changes. */
+export function onSaveState(listener: (state: SaveState) => void): void {
+  listeners.add(listener);
+  listener(saveState());
+}
+
+/** Resolves once every write under way has finished. */
+export function whenSaved(): Promise<void> {
+  return pending === 0 ? Promise.resolve() : new Promise((resolve) => idle.push(resolve));
+}
+
+/** Keeps a value under its key (structured clone: typed arrays as they are). Whether it was kept. */
+export async function keep(key: string, value: unknown): Promise<boolean> {
+  pending++;
+  notify();
   try {
     await run("readwrite", (store) => store.put(value, key));
+    failed = false;
+    return true;
   } catch {
-    // not kept this time
+    failed = true;
+    return false;
+  } finally {
+    pending--;
+    notify();
   }
 }
 
@@ -59,4 +95,14 @@ export async function forget(key: string): Promise<void> {
 /** Asks the browser not to clear the store under storage pressure (granted or not, nothing else changes). */
 export function askToPersist(): void {
   void navigator.storage?.persist?.().catch(() => false);
+}
+
+/** How much the browser holds for this site, and how much it allows (bytes), where it says. */
+export async function storageEstimate(): Promise<{ usage: number; quota: number } | null> {
+  try {
+    const e = await navigator.storage?.estimate?.();
+    return e && typeof e.usage === "number" && typeof e.quota === "number" ? { usage: e.usage, quota: e.quota } : null;
+  } catch {
+    return null;
+  }
 }

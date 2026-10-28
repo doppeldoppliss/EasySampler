@@ -1285,3 +1285,55 @@ details.sub.credit > summary {
 .workspace[data-view="material"] > .axis-song {
   display: none;
 }
+
+/* Projects: the header's button and save state, and the panel. */
+.project-button {
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.save-state {
+  white-space: nowrap;
+}
+.project-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 16px;
+}
+.project-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+.project-dialog .spacer {
+  flex: 1;
+}
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+.project-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.project-row.open {
+  border-color: var(--accent);
+}
+.project-name {
+  flex: 1;
+  min-width: 8em;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

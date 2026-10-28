@@ -1,11 +1,15 @@
 // The piano roll (design.md 13, phase 1): notes on a beat grid, edited with a
 // mouse or a finger.
 //
-// Mouse / pen: click on empty grid = a note there; drag on empty = select a
-// box (Shift adds); drag a note = move the selection (Ctrl = a copy); drag a
-// note's right end = change the length; double-click or right-click a note =
-// delete. Finger: tap = a note, drag on empty = scroll (or select, with
-// 範囲選択 on), drag a note or its right end as with a mouse.
+// Mouse / pen (after Domino): click on empty grid = a note there (the length
+// and velocity set for new notes); drag on empty = select a box (Shift adds);
+// drag a note = move the selection (Ctrl at the start = a copy; Ctrl pressed
+// during the drag, or Alt = off the grid); drag a note's right end = change
+// the length; double-click a note = delete; right-click = the menu (on a note:
+// its length and velocity become the ones for new notes, a "dropper"); a
+// right-click during a drag cancels it. Finger: tap = a note, drag on empty =
+// scroll (or select, with 範囲選択 on), long-press = the menu.
+// Drum rows: a click on a row's name selects its notes (Shift adds).
 // The ruler: tap = play from there, double-tap = start playing, drag = loop range.
 // Scrolling: the bars along the right and bottom edges (drag the thumb, or
 // press the track to jump there), the wheel (Shift = sideways), a middle-
@@ -13,9 +17,10 @@
 // The velocity lane (強弱, when shown) under the notes: drag across it to set
 // each note's velocity (only the selected notes', when some are selected).
 // Keys (when the roll has the focus): Delete, Ctrl+A / C / X / V / D, arrows
-// (Shift = an octave), Ctrl+Z / Y, Space = play / stop, Esc.
+// (Shift = an octave), Ctrl+Z / Y, Space = play / stop, Esc,
+// Ctrl+PageUp / PageDown = the track before / after.
 
-import { clampPitch, MIN_LENGTH, newId, shifted, snap, snapDown, songEnd, sortNotes, type Note } from "../daw/model";
+import { clampPitch, DEFAULT_VELOCITY, MIN_LENGTH, newId, shifted, snap, snapDown, songEnd, sortNotes, type Note } from "../daw/model";
 import { cssVar } from "./dom";
 
 const KEYS_W = 44;
@@ -26,6 +31,8 @@ const EDGE_MOUSE = 6;
 const EDGE_TOUCH = 14;
 const TAP_PX = COARSE ? 10 : 4;
 const DOUBLE_TAP_MS = 350;
+/** A finger held still this long opens the menu (as a right-click does). */
+const LONG_PRESS_MS = 550;
 const HISTORY = 200;
 /** The scroll bars' thickness, and the shortest a thumb gets. */
 const SCROLLBAR = COARSE ? 14 : 10;
@@ -37,8 +44,8 @@ type Drag =
   | { kind: "pending"; x: number; y: number; shift: boolean; fine: boolean }
   | { kind: "pan"; x: number; y: number; beat: number; top: number }
   | { kind: "box"; x0: number; y0: number; x1: number; y1: number; add: Set<number> }
-  | { kind: "move"; anchor: Note; x: number; y: number; orig: Map<number, Note>; moved: boolean; lastPitch: number }
-  | { kind: "resize"; anchor: Note; orig: Map<number, Note> }
+  | { kind: "move"; anchor: Note; x: number; y: number; orig: Map<number, Note>; moved: boolean; lastPitch: number; ctrl: boolean }
+  | { kind: "resize"; anchor: Note; orig: Map<number, Note>; ctrl: boolean }
   | { kind: "ruler"; x: number; moved: boolean }
   | { kind: "velocity"; x: number; value: number }
   | { kind: "scrollH"; grab: number }
@@ -63,13 +70,26 @@ export class PianoRoll {
   onTogglePlay: () => void = () => {};
   /** Selection or history changed (for the buttons around the roll). */
   onStateChange: () => void = () => {};
+  /** The menu asked for (a right-click, a long press) at a page position, on a note or on empty grid. */
+  onMenu: (clientX: number, clientY: number, note: Note | null) => void = () => {};
+  /** The length or velocity for new notes changed (a note resized, or picked with the dropper). */
+  onDefaultsChange: () => void = () => {};
+  /** Ctrl+PageUp / PageDown: the track before / after. */
+  onTrackStep: (delta: number) => void = () => {};
 
   /** Snap in beats (0 = off). */
   grid = 0.25;
   /** Finger drag on empty grid selects instead of scrolling. */
   selectMode = false;
-  /** Length of the next note placed (follows the last one resized). */
+  /** Length of the next note placed (follows the last one resized, or the one picked). */
   lastLength = 1;
+  /** Velocity of the next note placed (0–1). */
+  defaultVelocity = DEFAULT_VELOCITY;
+  /** Other tracks' notes, drawn faintly behind (オニオンスキン), or none. */
+  private ghosts: readonly { start: number; length: number; pitch: number }[] = [];
+  /** A right-click that cancelled a drag: no menu for it. */
+  private menuSuppressed = false;
+  private longPress = 0;
   /** The velocity lane is shown under the notes. */
   private velocityLane = false;
 
@@ -155,8 +175,12 @@ export class PianoRoll {
     });
     this.canvas.addEventListener("contextmenu", (e) => {
       e.preventDefault();
-      const hit = this.noteAt(e.offsetX, e.offsetY);
-      if (hit) this.edit(() => this.removeIds(new Set([hit.note.id])));
+      if (this.menuSuppressed) {
+        this.menuSuppressed = false;
+        return;
+      }
+      const { x, y } = this.local(e);
+      this.menuAt(x, y, e.clientX, e.clientY);
     });
     this.canvas.addEventListener("wheel", (e) => this.wheel(e), { passive: false });
     this.canvas.addEventListener("keydown", (e) => this.key(e));
@@ -249,7 +273,77 @@ export class PianoRoll {
     else this.draw();
   }
 
+  /** Other tracks' notes to show faintly behind this one's (オニオンスキン); empty for none. */
+  setGhosts(notes: readonly { start: number; length: number; pitch: number }[]): void {
+    this.ghosts = notes;
+    this.draw();
+  }
+
+  get hasClipboard(): boolean {
+    return this.clipboard.length > 0;
+  }
+
   // ------------------------------------------------------------- commands
+
+  selectNone(): void {
+    if (!this.selected.size) return;
+    this.selected.clear();
+    this.draw();
+    this.onStateChange();
+  }
+
+  /** A drum row's notes (Shift: added to the selection). */
+  selectRow(row: number, add = false): void {
+    if (!add) this.selected.clear();
+    for (const n of this.notesList) if (n.pitch === row) this.selected.add(n.id);
+    this.draw();
+    this.onStateChange();
+  }
+
+  /** Changes every selected note (all of them when none is selected) as one undoable step. */
+  changeNotes(change: (n: Note) => void): number {
+    const targets = this.selected.size ? this.selection() : this.notesList;
+    this.edit(() => {
+      for (const n of targets) {
+        change(n);
+        n.length = Math.max(MIN_LENGTH, n.length);
+        n.velocity = Math.max(0.01, Math.min(1, n.velocity));
+        n.pitch = this.clampP(n.pitch);
+        n.start = Math.max(0, n.start);
+      }
+    });
+    return targets.length;
+  }
+
+  /**
+   * スライス: the selected notes (all when none is selected) that run across
+   * the beat are cut there into two. Returns how many were cut.
+   */
+  sliceAt(beat: number): number {
+    const targets = (this.selected.size ? this.selection() : this.notesList).filter((n) => n.start < beat - 1e-9 && n.start + n.length > beat + 1e-9);
+    if (!targets.length) return 0;
+    this.edit(() => {
+      for (const n of targets) {
+        const right: Note = { ...n, id: newId(), start: beat, length: n.start + n.length - beat };
+        n.length = beat - n.start;
+        this.notesList.push(right);
+        this.selected.add(right.id);
+      }
+    });
+    return targets.length;
+  }
+
+  /** The playing / step position (beats), or null. */
+  get position(): number | null {
+    return this.playhead;
+  }
+
+  /** Lengthens the notes that start at a beat on the given pitches (step input's タイ). */
+  lengthenAt(start: number, pitches: readonly number[], by: number): void {
+    this.edit(() => {
+      for (const n of this.notesList) if (Math.abs(n.start - start) < 1e-9 && pitches.includes(n.pitch)) n.length = Math.max(MIN_LENGTH, n.length + by);
+    });
+  }
 
   selectAll(): void {
     this.selected = new Set(this.notesList.map((n) => n.id));
@@ -588,7 +682,34 @@ export class PianoRoll {
     return { x: e.clientX - box.left, y: e.clientY - box.top };
   }
 
+  /** The menu at a point: on a note, the dropper first (its length and velocity for new notes), and the note joins the selection. */
+  private menuAt(x: number, y: number, clientX: number, clientY: number): void {
+    const hit = y >= RULER_H && !this.inLane(y) ? this.noteAt(x, y) : null;
+    if (hit) {
+      this.lastLength = hit.note.length;
+      this.defaultVelocity = hit.note.velocity;
+      this.onDefaultsChange();
+      if (!this.selected.has(hit.note.id)) this.selected = new Set([hit.note.id]);
+      this.draw();
+      this.onStateChange();
+    }
+    this.onMenu(clientX, clientY, hit?.note ?? null);
+  }
+
+  private clearLongPress(): void {
+    clearTimeout(this.longPress);
+    this.longPress = 0;
+  }
+
   private down(e: PointerEvent): void {
+    // A right-click during a drag cancels it (as in Domino); otherwise it is the menu (contextmenu).
+    if (e.pointerType === "mouse" && e.button === 2) {
+      if (this.drag && this.drag.kind !== "pending") {
+        this.cancel();
+        this.menuSuppressed = true;
+      }
+      return;
+    }
     const middle = e.pointerType === "mouse" && e.button === 1;
     if (e.button !== 0 && e.pointerType === "mouse" && !middle) return;
     this.canvas.focus({ preventScroll: true });
@@ -632,9 +753,25 @@ export class PianoRoll {
       return;
     }
     if (x < this.keysW) {
+      // A drum row's name selects its notes; a key sounds its pitch.
+      if (this.rowNames) this.selectRow(this.pitchAt(y), e.shiftKey);
       this.onPreview(this.pitchAt(y));
       this.drag = null;
       return;
+    }
+    if (e.pointerType === "touch") {
+      this.clearLongPress();
+      const clientX = e.clientX;
+      const clientY = e.clientY;
+      this.longPress = window.setTimeout(() => {
+        this.longPress = 0;
+        const d = this.drag;
+        // Only a finger that stayed put: nothing moved, nothing scrolled.
+        if (!d || (d.kind !== "pending" && !(d.kind === "move" && !d.moved) && d.kind !== "resize")) return;
+        if (d.kind === "resize") this.restore(this.gestureStart);
+        this.drag = null;
+        this.menuAt(x, y, clientX, clientY);
+      }, LONG_PRESS_MS);
     }
     const hit = this.noteAt(x, y, fine ? EDGE_MOUSE : EDGE_TOUCH);
     if (hit) {
@@ -653,10 +790,10 @@ export class PianoRoll {
         this.notesList.push(...copies);
         const anchorCopy = copies[this.selection().indexOf(hit.note)] ?? copies[0];
         this.selected = new Set(copies.map((n) => n.id));
-        this.startMove(anchorCopy, x, y);
+        this.startMove(anchorCopy, x, y, true);
       } else if (hit.edge) {
-        this.drag = { kind: "resize", anchor: hit.note, orig: this.origOfSelection() };
-      } else this.startMove(hit.note, x, y);
+        this.drag = { kind: "resize", anchor: hit.note, orig: this.origOfSelection(), ctrl: e.ctrlKey || e.metaKey };
+      } else this.startMove(hit.note, x, y, e.ctrlKey || e.metaKey);
       this.draw();
       this.onStateChange();
       return;
@@ -664,8 +801,13 @@ export class PianoRoll {
     this.drag = { kind: "pending", x, y, shift: e.shiftKey, fine };
   }
 
-  private startMove(anchor: Note, x: number, y: number): void {
-    this.drag = { kind: "move", anchor, x, y, orig: this.origOfSelection(), moved: false, lastPitch: anchor.pitch };
+  private startMove(anchor: Note, x: number, y: number, ctrl = false): void {
+    this.drag = { kind: "move", anchor, x, y, orig: this.origOfSelection(), moved: false, lastPitch: anchor.pitch, ctrl };
+  }
+
+  /** Off the grid for this move: Alt, or Ctrl pressed after the drag began (Domino's temporary snap toggle). */
+  private static free(e: PointerEvent, ctrlAtStart: boolean): boolean {
+    return e.altKey || (!ctrlAtStart && (e.ctrlKey || e.metaKey));
   }
 
   private origOfSelection(): Map<number, Note> {
@@ -688,6 +830,7 @@ export class PianoRoll {
     switch (d.kind) {
       case "pending": {
         if (Math.hypot(x - d.x, y - d.y) < TAP_PX) return;
+        this.clearLongPress();
         if (d.fine || this.selectMode) this.drag = { kind: "box", x0: d.x, y0: d.y, x1: x, y1: y, add: d.shift ? new Set(this.selected) : new Set() };
         else this.drag = { kind: "pan", x: d.x, y: d.y, beat: this.scrollBeat, top: this.rowNames ? this.scrollRow : this.topPitch };
         this.move(e);
@@ -716,9 +859,10 @@ export class PianoRoll {
       case "move": {
         if (!d.moved && Math.hypot(x - d.x, y - d.y) < TAP_PX) return;
         d.moved = true;
+        this.clearLongPress();
         const anchorOrig = d.orig.get(d.anchor.id)!;
         const raw = anchorOrig.start + (x - d.x) / this.pxPerBeat;
-        let dBeat = (e.altKey ? raw : snap(raw, this.grid)) - anchorOrig.start;
+        let dBeat = (PianoRoll.free(e, d.ctrl) ? raw : snap(raw, this.grid)) - anchorOrig.start;
         const earliest = Math.min(...[...d.orig.values()].map((n) => n.start));
         dBeat = Math.max(-earliest, dBeat);
         const dPitch = this.pitchAt(y) - this.pitchAt(d.y);
@@ -739,13 +883,15 @@ export class PianoRoll {
         const anchorOrig = d.orig.get(d.anchor.id)!;
         const rawEnd = this.beatAt(x);
         const minLen = this.grid > 0 ? this.grid : MIN_LENGTH;
-        const end = e.altKey ? rawEnd : snap(rawEnd, this.grid);
+        const end = PianoRoll.free(e, d.ctrl) ? rawEnd : snap(rawEnd, this.grid);
+        this.clearLongPress();
         const dLen = Math.max(minLen, end - anchorOrig.start) - anchorOrig.length;
         for (const n of this.notesList) {
           const o = d.orig.get(n.id);
           if (o) n.length = Math.max(minLen, o.length + dLen);
         }
         this.lastLength = d.anchor.length;
+        this.onDefaultsChange();
         this.draw();
         return;
       }
@@ -776,6 +922,7 @@ export class PianoRoll {
   }
 
   private up(e: PointerEvent): void {
+    this.clearLongPress();
     const d = this.drag;
     this.drag = null;
     if (!d) return;
@@ -785,7 +932,7 @@ export class PianoRoll {
         if (this.rowNames && this.rowNames.length === 0) return; // a drum track with no rows yet
         // A tap on empty grid: a note there.
         const start = Math.max(0, snapDown(this.beatAt(x), this.grid));
-        const note: Note = { id: newId(), start, length: this.lastLength, pitch: this.pitchAt(y), velocity: 0.8 };
+        const note: Note = { id: newId(), start, length: this.lastLength, pitch: this.pitchAt(y), velocity: this.defaultVelocity };
         this.notesList.push(note);
         this.selected = new Set([note.id]);
         this.finishGesture();
@@ -819,6 +966,7 @@ export class PianoRoll {
   }
 
   private cancel(): void {
+    this.clearLongPress();
     if (this.drag && this.drag.kind !== "pan" && this.drag.kind !== "pending" && this.drag.kind !== "scrollH" && this.drag.kind !== "scrollV") this.restore(this.gestureStart);
     this.drag = null;
   }
@@ -877,6 +1025,7 @@ export class PianoRoll {
     else if (mod && k === "z") this.undo();
     else if (k === "arrowup" || k === "arrowdown") this.transposeSelected((k === "arrowup" ? 1 : -1) * (e.shiftKey ? 12 : 1));
     else if (k === "arrowleft" || k === "arrowright") this.nudgeSelected((k === "arrowright" ? 1 : -1) * (this.grid || 0.25));
+    else if (mod && (k === "pageup" || k === "pagedown")) this.onTrackStep(k === "pageup" ? -1 : 1);
     else handled = false;
     if (handled) {
       e.preventDefault();
@@ -960,6 +1109,19 @@ export class PianoRoll {
     const text = cssVar("--text");
     g.font = `${Math.min(11, this.rowH - 3)}px system-ui, sans-serif`;
     g.textBaseline = "middle";
+    if (!rowsMode && this.ghosts.length) {
+      g.fillStyle = cssVar("--muted");
+      for (const n of this.ghosts) {
+        if (n.pitch < firstPitch || n.pitch > lastPitch) continue;
+        const x0 = this.xOf(n.start);
+        const x1 = this.xOf(n.start + n.length);
+        if (x1 < this.keysW || x0 > cw) continue;
+        const left = Math.max(this.keysW, x0);
+        g.globalAlpha = 0.28;
+        g.fillRect(left + 0.5, this.yOf(n.pitch) + 2, Math.max(2, x1 - left - 1), this.rowH - 4);
+      }
+      g.globalAlpha = 1;
+    }
     for (const n of this.notesList) {
       if (n.pitch < firstPitch || n.pitch > lastPitch) continue;
       const x0 = this.xOf(n.start);

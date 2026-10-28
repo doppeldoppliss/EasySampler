@@ -72,6 +72,42 @@ const GRIDS: [number, string][] = [
   [0, "吸着なし"],
 ];
 
+/** Lengths offered for new notes (beats). */
+const NOTE_LENGTHS: [number, string][] = [
+  [0.125, "1/8 拍(32 分)"],
+  [0.25, "1/4 拍(16 分)"],
+  [1 / 3, "1/3 拍(3 連)"],
+  [0.5, "1/2 拍(8 分)"],
+  [1, "1 拍(4 分)"],
+  [2, "2 拍(2 分)"],
+  [4, "4 拍(全音符)"],
+];
+const ONION_KEY = "easysampler.roll.onion";
+
+/**
+ * 一括変更: "240"-style input after Domino, in this app's units. A plain
+ * number sets the value, "*2" multiplies, "+0.5" / "-10" adds. Empty = no change.
+ */
+export function applyExpression(text: string, current: number): number | null {
+  const t = text.trim().replace(/[＊×]/g, "*").replace(/[＋]/g, "+").replace(/[－−ー]/g, "-").replace(/[／÷]/g, "/");
+  if (!t) return null;
+  const m = /^([*/+-]?)\s*(\d+(?:\.\d+)?|\.\d+)$/.exec(t);
+  if (!m) return Number.NaN;
+  const v = Number(m[2]);
+  switch (m[1]) {
+    case "*":
+      return current * v;
+    case "/":
+      return v === 0 ? Number.NaN : current / v;
+    case "+":
+      return current + v;
+    case "-":
+      return current - v;
+    default:
+      return v;
+  }
+}
+
 /** Portamento times offered (seconds; 0 = off). */
 const GLIDES: [number, string][] = [
   [0, "オフ"],
@@ -176,9 +212,31 @@ export class RollPanel {
   private stepChordStart = 0;
   private readonly stepHistory: { start: number; pitch: number }[] = [];
   private readonly stepToggle = button("", "small toggle", () => this.setStepMode(!this.stepMode), "鍵盤で弾いた音が、再生位置に音符として入ります");
+  /** The last chord put in by step input (for タイ). */
+  private stepLastChord: { start: number; pitches: number[] } | null = null;
   private readonly stepRestButton = button("休符", "small", () => this.stepRest(), "音符を入れずに 1 つ進めます");
   private readonly stepBackButton = button("1 つ戻す", "small", () => this.stepBack(), "最後に入れた音符を消して、位置を戻します");
   private readonly stepHelp = el("span", { className: "fine", textContent: "画面の鍵盤か PC キーボードで弾くと、再生位置に音符が入り、吸着の幅だけ進みます。和音は同時に押します。" });
+  private readonly lengthSelect = el("select", { ariaLabel: "置く音符の長さ" });
+  private readonly velocityInput = el("input", { type: "number", min: "1", max: "127", step: "1", inputMode: "numeric", ariaLabel: "置く音符の強さ", className: "velocity-input" });
+  private readonly copyButton = button("コピー", "small", () => this.roll.copy(), "選んだ音符をコピー(Ctrl+C)");
+  private readonly pasteButton = button("貼り付け", "small", () => this.roll.paste(), "コピーした音符を再生位置に貼り付け(Ctrl+V)");
+  private readonly selectAllButton = button("すべて選択", "small", () => this.roll.selectAll(), "Ctrl+A");
+  private readonly nudgeButtons = [
+    button("◀", "small", () => this.roll.nudgeSelected(-(this.roll.grid || 0.25)), "選んだ音符を吸着の幅だけ前へ(←)"),
+    button("▶", "small", () => this.roll.nudgeSelected(this.roll.grid || 0.25), "選んだ音符を吸着の幅だけ後ろへ(→)"),
+  ];
+  private readonly sliceButton = button("スライス", "small", () => this.slice(), "再生位置で、選んだ音符(選んでいなければ全部)を 2 つに分けます");
+  private onion = remembered(ONION_KEY) === "on";
+  private readonly onionToggle = button("他のトラックを表示", "small toggle", () => {
+    this.onion = !this.onion;
+    remember(ONION_KEY, this.onion ? "on" : "off");
+    this.refreshGhosts();
+    this.refreshButtons();
+  }, "ほかのトラックの音符を薄く表示します(オニオンスキン)");
+  private readonly stepTieButton = button("タイ", "small", () => this.stepTie(), "最後に入れた音符を 1 つぶん伸ばします");
+  /** The menu (a right-click or a long press on the roll), while open. */
+  private menu: HTMLElement | null = null;
   private readonly position = el("span", { className: "fine num" });
   /** The seek bar: the song from its start to a little past its last note (or the loop's end), in beats. */
   private readonly seekBar = el("input", { type: "range", min: "0", max: "16", step: "any", value: "0", className: "song-seek", ariaLabel: "再生位置" });
@@ -196,6 +254,23 @@ export class RollPanel {
     });
 
     this.roll.onChange = (notes) => this.changed(notes);
+    this.roll.onMenu = (x, y, note) => this.openMenu(x, y, note);
+    this.roll.onDefaultsChange = () => {
+      this.track.noteLength = this.roll.lastLength;
+      this.track.noteVelocity = this.roll.defaultVelocity;
+      this.showDefaults();
+      this.scheduleSave();
+    };
+    this.roll.onTrackStep = (delta) => this.selectTrack(Math.max(0, Math.min(this.project.tracks.length - 1, this.selected + delta)));
+    this.lengthSelect.addEventListener("change", () => {
+      this.roll.lastLength = Number(this.lengthSelect.value);
+      this.roll.onDefaultsChange();
+    });
+    this.velocityInput.addEventListener("change", () => {
+      const v = Math.max(1, Math.min(127, Math.round(Number(this.velocityInput.value) || 100)));
+      this.roll.defaultVelocity = v / 127;
+      this.roll.onDefaultsChange();
+    });
     this.roll.onStateChange = () => this.refreshButtons();
     this.roll.onPreview = (pitch) => this.preview(pitch);
     this.roll.onTogglePlay = () => this.toggle();
@@ -223,7 +298,6 @@ export class RollPanel {
     this.gridSelect.value = String(this.roll.grid);
     this.gridSelect.addEventListener("change", () => {
       this.roll.grid = Number(this.gridSelect.value);
-      if (this.roll.grid > 0) this.roll.lastLength = Math.max(this.roll.grid, this.roll.lastLength);
       this.roll.draw();
     });
     this.selectToggle.hidden = !COARSE;
@@ -255,14 +329,21 @@ export class RollPanel {
       el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack()), button("＋ ドラムトラックを追加", "small", () => this.addTrack(true))]),
       this.padList,
       this.glideRow,
-      el("div", { className: "row roll-tools" }, [this.undoButton, this.redoButton, this.deleteButton, this.duplicateButton, ...this.transposeButtons, this.quantizeButton, this.velocityToggle, this.selectToggle, button("−", "small", () => this.roll.zoom(1 / 1.5), "縮小"), button("+", "small", () => this.roll.zoom(1.5), "拡大")]),
-      el("div", { className: "row step-input" }, [this.stepToggle, this.stepRestButton, this.stepBackButton, this.stepHelp]),
+      el("div", { className: "row roll-defaults" }, [
+        el("span", { className: "fine", textContent: "置く音符:" }),
+        el("label", { className: "inline" }, ["長さ ", this.lengthSelect]),
+        el("label", { className: "inline" }, ["強さ ", this.velocityInput]),
+        el("span", { className: "fine", textContent: "(音符を右クリック / 長押しで、その音符の値を拾えます)" }),
+      ]),
+      el("div", { className: "row roll-tools" }, [this.undoButton, this.redoButton, this.selectAllButton, this.copyButton, this.pasteButton, this.deleteButton, this.duplicateButton, ...this.nudgeButtons, ...this.transposeButtons, this.quantizeButton, this.sliceButton]),
+      el("div", { className: "row roll-tools" }, [this.velocityToggle, this.onionToggle, this.selectToggle, button("−", "small", () => this.roll.zoom(1 / 1.5), "縮小"), button("+", "small", () => this.roll.zoom(1.5), "拡大")]),
+      el("div", { className: "row step-input" }, [this.stepToggle, this.stepRestButton, this.stepTieButton, this.stepBackButton, this.stepHelp]),
       this.roll.element,
       el("p", {
         className: "fine help",
         textContent: COARSE
-          ? "空いたところをタップで音符、音符をドラッグで移動、右端をドラッグで長さ。上の目盛りはタップで位置、2 回タップで再生、ドラッグでループ範囲。空いたところを指でドラッグするか、右端・下端のバーでスクロール。"
-          : "クリックで音符、ドラッグで範囲選択、音符のドラッグで移動(Ctrl で複製・Alt で吸着なし)、右端で長さ、ダブルクリックか右クリックで削除。上の目盛りはクリックで位置、ダブルクリックで再生、ドラッグでループ範囲。スクロールは右端・下端のバー、ホイール(Shift で左右)、ホイールを押し込んでドラッグ。Space で再生 / 停止。",
+          ? "空いたところをタップで音符、音符をドラッグで移動、右端をドラッグで長さ、長押しでメニュー(コピー・貼り付け・一括変更など)。上の目盛りはタップで位置、2 回タップで再生、ドラッグでループ範囲。空いたところを指でドラッグするか、右端・下端のバーでスクロール。"
+          : "クリックで音符、ドラッグで範囲選択(Shift で追加)、音符のドラッグで移動(Ctrl を押してから始めると複製、ドラッグ中の Ctrl か Alt で吸着なし、ドラッグ中の右クリックで取り消し)、右端で長さ、ダブルクリックで削除、右クリックでメニュー(音符の上ならその長さと強さを拾うスポイト)。上の目盛りはクリックで位置、ダブルクリックで再生、ドラッグでループ範囲。スクロールは右端・下端のバー、ホイール(Shift で左右)、ホイールを押し込んでドラッグ。Space で再生 / 停止、Ctrl+PageUp / PageDown でトラック切り替え。",
       }),
       el("div", { className: "row" }, [this.clearButton]),
       this.info,
@@ -401,6 +482,7 @@ export class RollPanel {
 
   private changed(notes: Note[]): void {
     this.track.notes = notes;
+    this.closeMenu();
     this.info.textContent = "";
     this.reload();
     this.scheduleSave();
@@ -484,6 +566,11 @@ export class RollPanel {
     this.tailFitBox.checked = t.tailFit;
     this.stepHeld.clear();
     this.stepHistory.length = 0;
+    this.stepLastChord = null;
+    this.roll.lastLength = t.noteLength;
+    this.roll.defaultVelocity = t.noteVelocity;
+    this.showDefaults();
+    this.refreshGhosts();
     this.roll.setRows(t.kind === "drum" ? t.pads.map((p, i) => this.padLabel(p, i)) : null);
     this.roll.setNotes(t.notes);
     if (t.kind === "drum") this.roll.frame(0);
@@ -686,6 +773,137 @@ export class RollPanel {
     this.roll.setRoot(option ? option.note : null);
   }
 
+  // ------------------------------------------------------------- new notes' values, other tracks, the menu
+
+  /** The length and velocity a new note gets, as the fields show them. */
+  private showDefaults(): void {
+    const len = this.roll.lastLength;
+    const known = NOTE_LENGTHS.some(([v]) => Math.abs(v - len) < 1e-6);
+    this.lengthSelect.replaceChildren(
+      ...NOTE_LENGTHS.map(([v, label]) => el("option", { value: String(v), textContent: label })),
+      ...(known ? [] : [el("option", { value: String(len), textContent: `${+len.toFixed(3)} 拍` })]),
+    );
+    this.lengthSelect.value = String(known ? NOTE_LENGTHS.find(([v]) => Math.abs(v - len) < 1e-6)![0] : len);
+    this.velocityInput.value = String(Math.round(this.roll.defaultVelocity * 127));
+  }
+
+  /** オニオンスキン: the other melodic tracks' notes behind this one's. */
+  private refreshGhosts(): void {
+    const t = this.track;
+    this.roll.setGhosts(this.onion && t.kind !== "drum" ? this.project.tracks.filter((o) => o !== t && o.kind !== "drum").flatMap((o) => o.notes) : []);
+  }
+
+  private slice(): void {
+    const at = this.roll.position ?? secToBeats(this.from, this.project.bpm);
+    const n = this.roll.sliceAt(at);
+    this.info.textContent = n ? `${n} 個の音符を再生位置で分けました。` : "再生位置をまたぐ音符がありません。目盛りで分けたい位置を選んでから押してください。";
+  }
+
+  /** The menu at a page position (a right-click, a long press): what can be done with the selection, or here. */
+  private openMenu(clientX: number, clientY: number, note: Note | null): void {
+    this.closeMenu();
+    const sel = this.roll.selectionSize;
+    const item = (label: string, run: () => void, enabled = true) => {
+      const b = button(label, "menu-item", () => {
+        this.closeMenu();
+        run();
+      });
+      b.disabled = !enabled;
+      return b;
+    };
+    const items: HTMLElement[] = [];
+    if (note) items.push(el("p", { className: "menu-note fine", textContent: `スポイト: 次に置く音符を 長さ ${+note.length.toFixed(3)} 拍・強さ ${Math.round(note.velocity * 127)} にしました` }));
+    items.push(
+      item("コピー", () => this.roll.copy(), sel > 0),
+      item("切り取り", () => this.roll.copy(true), sel > 0),
+      item("貼り付け(再生位置に)", () => this.roll.paste(), this.roll.hasClipboard),
+      item("複製(直後に)", () => this.roll.duplicateSelected(), sel > 0),
+      item("削除", () => this.roll.deleteSelected(), sel > 0),
+      el("hr"),
+      item("すべて選択", () => this.roll.selectAll(), this.roll.notes.length > 0),
+      item("選択を解除", () => this.roll.selectNone(), sel > 0),
+      el("hr"),
+      item("1 オクターブ上げる", () => this.roll.transposeSelected(12), sel > 0 && this.track.kind !== "drum"),
+      item("1 オクターブ下げる", () => this.roll.transposeSelected(-12), sel > 0 && this.track.kind !== "drum"),
+      item("クオンタイズ", () => this.quantize(), this.roll.notes.length > 0),
+      item("再生位置でスライス", () => this.slice(), this.roll.notes.length > 0),
+      item(`一括変更…(${sel ? `選んだ ${sel} 個` : "すべて"})`, () => this.openBatch(clientX, clientY), this.roll.notes.length > 0),
+    );
+    this.showMenu(clientX, clientY, items);
+  }
+
+  /** 一括変更: the length (beats) and velocity (1–127) of the selection, set / ×  / ± (Domino's 一括変更). */
+  private openBatch(clientX: number, clientY: number): void {
+    const lengthField = el("input", { type: "text", placeholder: "例: 0.5 / *2 / +0.25", ariaLabel: "長さ(拍)", inputMode: "decimal" });
+    const velocityField = el("input", { type: "text", placeholder: "例: 100 / *0.8 / -10", ariaLabel: "強さ(1〜127)", inputMode: "decimal" });
+    const error = el("p", { className: "warn", hidden: true });
+    const apply = () => {
+      const lenText = lengthField.value;
+      const velText = velocityField.value;
+      const bad = (text: string) => text.trim() !== "" && Number.isNaN(applyExpression(text, 1) ?? 0);
+      if (bad(lenText) || bad(velText)) {
+        error.textContent = "数(0.5)、倍率(*2)、足し引き(+10 / -10)のどれかで書いてください。";
+        error.hidden = false;
+        return;
+      }
+      const n = this.roll.changeNotes((note) => {
+        const len = applyExpression(lenText, note.length);
+        if (len !== null) note.length = len;
+        const vel = applyExpression(velText, note.velocity * 127);
+        if (vel !== null) note.velocity = Math.max(1, Math.min(127, Math.round(vel))) / 127;
+      });
+      this.closeMenu();
+      this.info.textContent = `${n} 個の音符を一括変更しました。取り消しで戻せます。`;
+    };
+    const form = el("form", { className: "batch-form" }, [
+      el("p", { className: "control-label", textContent: `一括変更(${this.roll.selectionSize ? `選んだ ${this.roll.selectionSize} 個` : "すべての音符"})` }),
+      el("label", { className: "control" }, [el("span", { className: "fine", textContent: "長さ(拍)" }), lengthField]),
+      el("label", { className: "control" }, [el("span", { className: "fine", textContent: "強さ(1〜127)" }), velocityField]),
+      el("p", { className: "fine", textContent: "数で指定、*2 で 2 倍、+10 / -10 で足し引き。空欄は変えません。" }),
+      error,
+      el("div", { className: "row" }, [el("button", { type: "submit", className: "button small primary", textContent: "変更する" }), button("やめる", "small", () => this.closeMenu())]),
+    ]);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      apply();
+    });
+    this.showMenu(clientX, clientY, [form]);
+    lengthField.focus();
+  }
+
+  private showMenu(clientX: number, clientY: number, items: HTMLElement[]): void {
+    this.closeMenu();
+    const menu = el("div", { className: "roll-menu", role: "menu" }, items);
+    document.body.append(menu);
+    // Inside the window, next to the pointer.
+    const w = menu.offsetWidth;
+    const h = menu.offsetHeight;
+    menu.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, clientX))}px`;
+    menu.style.top = `${Math.max(8, Math.min(window.innerHeight - h - 8, clientY))}px`;
+    this.menu = menu;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !menu.contains(e.target as Node)) this.closeMenu();
+    };
+    setTimeout(() => {
+      document.addEventListener("pointerdown", close, true);
+      document.addEventListener("keydown", close, true);
+      window.addEventListener("scroll", () => this.closeMenu(), { once: true, capture: true });
+    });
+    this.menuCleanup = () => {
+      document.removeEventListener("pointerdown", close, true);
+      document.removeEventListener("keydown", close, true);
+    };
+  }
+
+  private menuCleanup: () => void = () => {};
+
+  private closeMenu(): void {
+    if (!this.menu) return;
+    this.menu.remove();
+    this.menu = null;
+    this.menuCleanup();
+  }
+
   // ------------------------------------------------------------- quantize, step input
 
   private quantize(): void {
@@ -696,6 +914,11 @@ export class RollPanel {
     const all = this.roll.selectionSize === 0;
     const changed = this.roll.quantize();
     this.info.textContent = changed ? `${all ? "すべての" : "選んだ"}音符のうち ${changed} 個を吸着の線に合わせました。取り消しで戻せます。` : "どの音符もすでに吸着の線の上にあります。";
+  }
+
+  /** The step position (beats), without the rounding a trip through seconds leaves. */
+  private get stepAt(): number {
+    return Math.round(secToBeats(this.from, this.project.bpm) * 1e6) / 1e6;
   }
 
   /** One step of step input (beats): the grid, or the last note length with no grid. */
@@ -729,24 +952,38 @@ export class RollPanel {
     if (!down) return this.stepHeld.delete(pitch);
     if (!this.stepMode || !this.element.open || this.playing || this.track.kind === "drum") return false;
     const chord = this.stepHeld.size > 0;
-    if (!chord) this.stepChordStart = secToBeats(this.from, this.project.bpm);
+    if (!chord) this.stepChordStart = this.stepAt;
     this.stepHeld.add(pitch);
     const step = this.stepBeats;
-    this.roll.insertNote(this.stepChordStart, step, pitch, DEFAULT_VELOCITY, chord);
+    this.roll.insertNote(this.stepChordStart, step, pitch, this.roll.defaultVelocity || DEFAULT_VELOCITY, chord);
     this.stepHistory.push({ start: this.stepChordStart, pitch });
+    if (!chord || !this.stepLastChord) this.stepLastChord = { start: this.stepChordStart, pitches: [] };
+    this.stepLastChord.pitches.push(pitch);
     this.preview(pitch);
     this.stepTo(this.stepChordStart + step);
     return true;
   }
 
+  /** タイ: the last chord put in is held one step longer, and the position moves on with it. */
+  private stepTie(): void {
+    const chord = this.stepLastChord;
+    if (!chord) {
+      this.info.textContent = "タイは、ステップ入力で音符を入れた直後に使います。";
+      return;
+    }
+    const step = this.stepBeats;
+    this.roll.lengthenAt(chord.start, chord.pitches, step);
+    this.stepTo(this.stepAt + step);
+  }
+
   private stepRest(): void {
-    this.stepTo(secToBeats(this.from, this.project.bpm) + this.stepBeats);
+    this.stepTo(this.stepAt + this.stepBeats);
   }
 
   private stepBack(): void {
     const last = this.stepHistory.pop();
     if (!last) {
-      this.stepTo(secToBeats(this.from, this.project.bpm) - this.stepBeats);
+      this.stepTo(this.stepAt - this.stepBeats);
       return;
     }
     this.roll.removeNoteAt(last.start, last.pitch);
@@ -950,6 +1187,14 @@ export class RollPanel {
     this.selectToggle.textContent = `範囲選択: ${this.roll.selectMode ? "オン" : "オフ"}`;
     this.clearButton.disabled = this.roll.notes.length === 0;
     this.quantizeButton.disabled = this.roll.notes.length === 0;
+    this.copyButton.disabled = none;
+    this.pasteButton.disabled = !this.roll.hasClipboard;
+    this.selectAllButton.disabled = this.roll.notes.length === 0;
+    for (const b of this.nudgeButtons) b.disabled = none;
+    this.sliceButton.disabled = this.roll.notes.length === 0;
+    this.onionToggle.classList.toggle("on", this.onion);
+    this.onionToggle.hidden = this.track.kind === "drum";
+    this.stepTieButton.hidden = this.stepRestButton.hidden;
     this.velocityToggle.classList.toggle("on", this.roll.showVelocity);
     const drum = this.track.kind === "drum";
     this.stepToggle.textContent = `ステップ入力: ${this.stepMode && !drum ? "オン" : "オフ"}`;

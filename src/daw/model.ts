@@ -43,6 +43,9 @@ export interface Track {
   glide: number;
   /** 語尾を収める: the tail is started early so it ends where the note does (otherwise it rings on after it). */
   tailFit: boolean;
+  /** What a note placed on this track gets: its length (beats) and velocity (0–1) (Domino's default Gate / Velocity). */
+  noteLength: number;
+  noteVelocity: number;
 }
 
 export interface Pad {
@@ -56,7 +59,7 @@ export interface Pad {
 export const BACKING = "backing";
 
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, kind: "melodic", instrument, pads: [], notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, tailFit: false };
+  return { id: newTrackId(), name, kind: "melodic", instrument, pads: [], notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, tailFit: false, noteLength: 1, noteVelocity: DEFAULT_VELOCITY };
 }
 
 /** A drum track: its first row plays the given cut (if any). */
@@ -227,6 +230,8 @@ export function sanitizeProject(raw: unknown): Project {
           solo: tr.solo === true,
           glide: num(tr.glide, 0, 0, 2),
           tailFit: tr.tailFit === true,
+          noteLength: num(tr.noteLength, 1, MIN_LENGTH, 64),
+          noteVelocity: num(tr.noteVelocity, DEFAULT_VELOCITY, 0.01, 1),
         };
       })
     : d.tracks;

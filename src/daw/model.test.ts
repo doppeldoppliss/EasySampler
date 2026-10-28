@@ -36,8 +36,6 @@ describe("daw model", () => {
     expect(sanitizeProject({ tracks: [{ glide: 0.15 }] }).tracks[0].glide).toBe(0.15);
     expect(sanitizeProject({ tracks: [{ glide: 99 }] }).tracks[0].glide).toBe(2);
     expect(sanitizeProject({ tracks: [{}] }).tracks[0].glide).toBe(0);
-    expect(sanitizeProject({ tracks: [{ tailFit: true }] }).tracks[0].tailFit).toBe(true);
-    expect(sanitizeProject({ tracks: [{}] }).tracks[0].tailFit).toBe(false);
   });
 
   it("takes a MIDI part in beats, and copies with fresh ids", () => {

@@ -191,7 +191,8 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   sustainMode: "pool",
   wavetableCycles: 1,
   stretch: { head: 1, sustain: 1, tail: 1 },
-  tail: { enabled: true, limit: "unlimited" },
+  // 語尾 is no more (2026-10-28): a held note ends with the release; a one-shot plays its recording out.
+  tail: { enabled: false, limit: "unlimited" },
   wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, vibratoAttackSec: 0.15, vibratoReleaseSec: 0, vibratoPhase: 0, tremoloDepth: 0, driftCents: 0, micro: true, smoothSec: 0, keepDrift: 1, keepModulation: 1 },
   amp: { attack: 0.005, decay: 0.1, sustain: 1, release: 0.02, velocitySens: 0.5, fadeOut: 0 },
   maxVoices: 24,
@@ -218,12 +219,12 @@ export const PRESETS: Preset[] = [
   { id: "synth", label: "シンセ化(平坦)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true } }) },
   // Not synth-ified at all: the whole cut plays through once, as recorded, moved up or down to the key pressed
   // (a pitch shift that keeps the length and the voice's colour; nothing is held or evened out).
-  { id: "transpose", label: "移調のみ(シンセ化せず全体を上げ下げ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: true, limit: "unlimited" }, unvoicedFollow: false, levelEven: 0, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 } }) },
+  { id: "transpose", label: "移調のみ(シンセ化せず全体を上げ下げ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, unvoicedFollow: false, levelEven: 0, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 } }) },
   // Short material (a shout, a word): played through once at the note, nothing stretched — the 音MAD staple.
-  { id: "short", label: "短い素材(長さ保持・そのまま音程だけ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: true }, unvoicedFollow: true, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, retuneSec: 0 } }) },
+  { id: "short", label: "短い素材(長さ保持・そのまま音程だけ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, unvoicedFollow: true, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, retuneSec: 0 } }) },
   // A struck, piano-like sound from any material: synthesized (flat, the vowel drawn out) and dying away while held —
   // the level falls toward nothing (decay ~1.2 s, sustain 0) — and stopped quickly when let go, as a damper does.
-  { id: "decay", label: "減衰(伸ばしながら消える・ピアノ風)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainEnabled: true, sustainMode: "pool", tail: { ...p.tail, enabled: false }, unvoicedFollow: false, levelEven: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 }, amp: { ...p.amp, attack: 0.002, decay: 1.2, sustain: 0, release: 0.25, fadeOut: 0 } }) },
+  { id: "decay", label: "減衰(伸ばしながら消える・ピアノ風)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainEnabled: true, sustainMode: "pool", unvoicedFollow: false, levelEven: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 }, amp: { ...p.amp, attack: 0.002, decay: 1.2, sustain: 0, release: 0.25, fadeOut: 0 } }) },
 ];
 
 // ---------------------------------------------------------------- export

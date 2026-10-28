@@ -607,12 +607,12 @@ export class Engine {
     v.released = true;
     v.releasedAt = v.clock / this.sampleRate;
     const params = this.params!;
-    // Sustain off: the head (and the tail) play out whatever the key does.
-    if (!params.sustainEnabled) return;
-    if (this.tailOn() && params.sustainMode !== "none") {
-      // The tail plays the material's own end at full level; the envelope holds.
+    // Sustain off: the head plays out whatever the key does. A one-shot (伸ばさない) plays through the same way.
+    if (!params.sustainEnabled || params.sustainMode === "none") return;
+    if (this.tailOn()) {
+      // (The tail — 語尾 — was taken out of the app on 2026-10-28; the engine still plays one when asked.)
       if (v.phase === Phase.Sustain) this.jumpToTail(v);
-    } else if (!this.tailOn()) {
+    } else {
       v.env = Env.Release;
     }
   }

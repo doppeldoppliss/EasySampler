@@ -367,7 +367,8 @@ describe("音階に合わせる (tune mode \"scale\")", () => {
 
   it("vibrato: a release fades it, a phase moves it; tremolo shakes the level", () => {
     const material = demoSyllable(SR);
-    const base = { wobble: { ...DEFAULT_PARAMS.wobble, vibratoCents: 80, vibratoHz: 6, vibratoDelaySec: 0, vibratoAttackSec: 0.01 } };
+    // (A long release keeps the note sounding after the key is let go: that is where the vibrato's release shows.)
+    const base = { wobble: { ...DEFAULT_PARAMS.wobble, vibratoCents: 80, vibratoHz: 6, vibratoDelaySec: 0, vibratoAttackSec: 0.01 }, amp: { ...DEFAULT_PARAMS.amp, release: 1.5 } };
     const kept = play(setup(material, base).engine, 62, 0.5, 0.6);
     const released = play(setup(material, { wobble: { ...base.wobble, vibratoReleaseSec: 0.1 } }).engine, 62, 0.5, 0.6);
     // After the release (plus the 0.1 s fade) the released one is steady while the kept one still wobbles.
@@ -527,102 +528,6 @@ describe("Engine portamento (a song track's glide)", () => {
     expect(mid).toBeGreaterThan(61);
     expect(mid).toBeLessThan(66);
     expect(Math.abs(pitchOf(out, 1.0, 1.3) - 67)).toBeLessThan(0.3);
-  });
-});
-
-describe("Engine 語尾を収める (the tail fitted into a song note)", () => {
-  const vowel = synthVoice({ sampleRate: SR, durationSec: 0.8, pitch: demoPhrasePitch(57, 0.8) });
-
-  /** A note written `lengthSec` long (note-off at its end, as the song plays it): the output, and where the sound ends. */
-  function songNote(engine: Engine, lengthSec: number, fit: boolean): { out: Float32Array; endSec: number } {
-    const out = new Float32Array(Math.ceil((lengthSec + 2) * SR));
-    const l = new Float32Array(128);
-    const r = new Float32Array(128);
-    engine.noteOn(60, 1, fit ? lengthSec : undefined);
-    let off = false;
-    for (let at = 0; at < out.length; at += 128) {
-      if (!off && at >= lengthSec * SR) {
-        engine.noteOff(60);
-        off = true;
-      }
-      engine.render(l, r);
-      out.set(l.subarray(0, Math.min(128, out.length - at)), at);
-    }
-    let end = 0;
-    for (let i = 0; i < out.length; i++) if (Math.abs(out[i]) > 1e-4) end = i;
-    return { out, endSec: end / SR };
-  }
-
-  it("without it, the tail rings on after the note; with it, the sound is over by the note's end", () => {
-    const { engine } = setup(vowel);
-    const plain = songNote(engine, 1.2, false);
-    expect(plain.endSec).toBeGreaterThan(1.3);
-    const fitted = songNote(setup(vowel).engine, 1.2, true);
-    expect(fitted.endSec).toBeLessThan(1.2 + 0.01);
-    expect(fitted.endSec).toBeGreaterThan(1.1);
-    // The tail is what is heard at the end: sound right up to it, not a fade from the middle.
-    expect(rms(fitted.out, Math.round(1.0 * SR), Math.round(1.1 * SR))).toBeGreaterThan(0.01);
-  });
-
-  it("a note shorter than the tail keeps its first half, and still ends with the note", () => {
-    const fitted = songNote(setup(vowel).engine, 0.3, true);
-    expect(fitted.endSec).toBeLessThan(0.31);
-    expect(rms(fitted.out, Math.round(0.02 * SR), Math.round(0.14 * SR))).toBeGreaterThan(0.01);
-  });
-
-  it("never cuts the head short to fit the tail in: a note the head fills plays the head as it is, fading at the end", () => {
-    const { engine, analysis } = setup(vowel);
-    const headSec = analysis.markers.sustainStart - analysis.markers.rangeStart;
-    const len = Math.max(0.12, headSec * 0.8);
-    const fitted = songNote(engine, len, true);
-    const plain = songNote(setup(vowel).engine, len, false);
-    // Up to where the fade starts, the same sound as without fitting (no jump into the tail).
-    const until = Math.round((len - 0.1) * SR);
-    expect(rms(fitted.out, 0, until)).toBeCloseTo(rms(plain.out, 0, until), 3);
-    expect(fitted.endSec).toBeLessThan(len + 0.01);
-  });
-
-  it("the keyboard (no length) is unchanged", () => {
-    const a = songNote(setup(vowel).engine, 1.2, false).out;
-    const { engine } = setup(vowel);
-    const b = new Float32Array(a.length);
-    const l = new Float32Array(128);
-    const r = new Float32Array(128);
-    engine.noteOn(60, 1);
-    let off = false;
-    for (let at = 0; at < b.length; at += 128) {
-      if (!off && at >= 1.2 * SR) {
-        engine.noteOff(60);
-        off = true;
-      }
-      engine.render(l, r);
-      b.set(l.subarray(0, Math.min(128, b.length - at)), at);
-    }
-    expect(rms(a, 0, a.length)).toBeCloseTo(rms(b, 0, b.length), 6);
-  });
-});
-
-describe("Engine: the tail goes on from the note's level", () => {
-  // A vowel whose recording drops by 10 dB where its tail begins (a held note is louder than the tail's start).
-  const stepped = (() => {
-    const x = synthVoice({ sampleRate: SR, durationSec: 1.4, pitch: () => 57 });
-    for (let i = Math.round(0.9 * SR); i < x.length; i++) x[i] *= 0.316 * Math.exp(-(i / SR - 0.9) / 0.25);
-    return x;
-  })();
-  const dbOf = (x: Float32Array, a: number, b: number) => 20 * Math.log10(rms(x, Math.round(a * SR), Math.round(b * SR)) + 1e-12);
-
-  it("has no step in level where the tail takes over, and keeps the tail's own decay after it", () => {
-    const { engine, analysis } = setup(stepped);
-    const m = { ...analysis.markers, sustainStart: 0.3, sustainEnd: 0.8, tailStart: 0.9, rangeEnd: 1.4 };
-    engine.setInstrument(m, { ...DEFAULT_PARAMS, root: 57 });
-    const out = play(engine, 57, 1.5, 1.0);
-    const before = dbOf(out, 1.42, 1.48);
-    const after = dbOf(out, 1.52, 1.58);
-    expect(Math.abs(after - before)).toBeLessThan(3);
-    // …and from there it decays as recorded (0.25 s time constant: about 8.7 dB down 0.25 s later).
-    const later = dbOf(out, 1.77, 1.83);
-    expect(after - later).toBeGreaterThan(5);
-    expect(after - later).toBeLessThan(13);
   });
 });
 

@@ -73,7 +73,8 @@ const DOUBLE_TAP_PX = 24;
 /** The closest zoom: this many seconds across the plot. */
 const MIN_VIEW_SEC = 0.05;
 
-const HANDLE_ORDER: Handle[] = ["rangeStart", "attack", "sustainStart", "sustainEnd", "tailStart", "rangeEnd"];
+// (No tailStart: 語尾 was taken out; the tail's start follows the sustain's end.)
+const HANDLE_ORDER: Handle[] = ["rangeStart", "attack", "sustainStart", "sustainEnd", "rangeEnd"];
 
 export class MaterialEditor {
   readonly element: HTMLElement;
@@ -614,7 +615,7 @@ export class MaterialEditor {
     const index = HANDLE_ORDER.indexOf(handle);
     const m = { ...this.markers!, [handle]: time };
     // Moving the sustain end drags a tail start that sat on it along (the usual case).
-    if (handle === "sustainEnd" && Math.abs(this.markers!.tailStart - this.markers!.sustainEnd) < 1e-6) m.tailStart = time;
+    if (handle === "sustainEnd") m.tailStart = time;
     for (let i = index + 1; i < HANDLE_ORDER.length; i++) m[HANDLE_ORDER[i]] = Math.max(m[HANDLE_ORDER[i]], time);
     for (let i = index - 1; i >= 0; i--) m[HANDLE_ORDER[i]] = Math.min(m[HANDLE_ORDER[i]], time);
     return clampMarkers(m);
@@ -792,7 +793,6 @@ export class MaterialEditor {
     const bands: [number, number, string, string][] = [
       [markers.rangeStart, markers.sustainStart, "--band-head", "頭部"],
       [markers.sustainStart, markers.sustainEnd, "--band-sustain", "持続区間"],
-      [markers.tailStart, markers.rangeEnd, "--band-tail", "語尾"],
     ].filter(([, , color]) => (color !== "--band-sustain" || this.parts.sustain) && (color !== "--band-tail" || this.parts.tail)) as [number, number, string, string][];
     g.fillStyle = cssVar("--strip");
     g.fillRect(0, plotHeight, width, strip);
@@ -851,7 +851,7 @@ export class MaterialEditor {
       const parts: [number, number, string, string][] = [
         [0, layout.headSec, "--band-head", `頭部 ${ratio(layout.headSec, layout.headSrcSec)}`],
         [layout.headSec, layout.headSec + layout.sustainSec, "--band-sustain", `持続区間 ${layout.elastic ? `${ratio(layout.sustainSec, layout.sustainSrcSec)}(音の長さまで伸ばす)` : ratio(layout.sustainSec, layout.sustainSrcSec)}`],
-        [layout.headSec + layout.sustainSec, layout.totalSec, "--band-tail", `語尾 ${ratio(layout.tailSec, layout.tailSrcSec)}`],
+        [layout.headSec + layout.sustainSec, layout.totalSec, "--band-tail", `終わり ${ratio(layout.tailSec, layout.tailSrcSec)}`],
       ];
       g.font = `${11 * dpr}px system-ui, sans-serif`;
       for (const [from, to, color, text] of parts) {

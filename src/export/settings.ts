@@ -114,7 +114,8 @@ function sanitizeCut(raw: unknown, index: number): CutSettings | null {
     attack: num(m.attack, 0),
     sustainStart: num(m.sustainStart, 0),
     sustainEnd: num(m.sustainEnd, 1),
-    tailStart: num(m.tailStart, 1),
+    // (No tail: its start is the sustain's end.)
+    tailStart: num(m.sustainEnd, 1),
     removed: Array.isArray(m.removed)
       ? m.removed.filter((r): r is Record<string, unknown> => isRecord(r)).map((r) => ({ start: num(r.start, 0), end: num(r.end, 0) }))
       : undefined,
@@ -161,7 +162,8 @@ function sanitizeParams(raw: unknown): InstrumentParams {
       tail: clamp(num(isRecord(raw.stretch) ? raw.stretch.tail : undefined, d.stretch.tail), 0.25, 4),
     },
     tail: {
-      enabled: typeof tail.enabled === "boolean" ? tail.enabled : d.tail.enabled,
+      // (語尾 was taken out: a cut saved with one comes back without it.)
+      enabled: false,
       limit: tail.limit === "none" || tail.limit === "beat" || tail.limit === "bar" ? tail.limit : "unlimited",
     },
     wobble: {

@@ -141,12 +141,3 @@ describe("renderNote with effects", () => {
   });
 });
 
-describe("renderNote with the tail (on by default)", () => {
-  it("runs on past the asked length by the tail", () => {
-    const { analysis, source, params } = setup();
-    expect(params.tail.enabled).toBe(true);
-    const withTail = renderNote(source, analysis.markers, params, 64, 1.5);
-    const without = renderNote(source, analysis.markers, { ...params, tail: { enabled: false, limit: "unlimited" } }, 64, 1.5);
-    expect(withTail.channels[0].length).toBeGreaterThan(without.channels[0].length);
-  });
-});

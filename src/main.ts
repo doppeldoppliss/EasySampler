@@ -315,7 +315,7 @@ const emptyState = el("section", { className: "empty", hidden: true }, [
 
 const guide = el("aside", { className: "steps", hidden: safeStorage(GUIDE_KEY) === "seen" }, [
   el("ol", {}, [
-    el("li", {}, [el("strong", { textContent: "聴いて確かめる" }), " — ▶ で鳴らし、判定した高さと帯(頭部・持続区間・語尾)がずれていれば直します"]),
+    el("li", {}, [el("strong", { textContent: "聴いて確かめる" }), " — ▶ で鳴らし、判定した高さと帯(頭部・持続区間)がずれていれば直します"]),
     el("li", {}, [el("strong", { textContent: "音名と長さを決める" }), " — 鍵盤は DAW で弾いたときの音の確認。●が書き出す音名です"]),
     el("li", {}, [el("strong", { textContent: "共有 / 保存" }), " — 1 音の WAV ができます。DAW のサンプラーに読み込んで曲にします"]),
   ]),
@@ -584,8 +584,7 @@ const materialPanel = el("section", { className: "panel" }, [
   ]),
   el("p", { className: "fine band-legend" }, [
     el("span", { className: "band-dot head" }), "頭部 = 1 回だけ鳴る出だし　",
-    el("span", { className: "band-dot sustain" }), "持続区間 = 押している間くり返す部分　",
-    el("span", { className: "band-dot tail" }), "語尾 = 離したあとに鳴る終わり",
+    el("span", { className: "band-dot sustain" }), "持続区間 = 押している間くり返す部分",
   ]),
   fixBar,
 ]);
@@ -660,7 +659,7 @@ const songBpmButton = button("曲の BPM に合わせる", "small", () => {
     s.bpm = bpm;
     s.lengthMode = "beats";
   });
-  songBpmButton.title = `長さの BPM を曲と同じ ${bpm} にしました(語尾の長さと拍同期のエフェクトも変わります)`;
+  songBpmButton.title = `長さの BPM を曲と同じ ${bpm} にしました(拍同期のエフェクトも変わります)`;
 });
 songBpmButton.title = "打ち込み(曲の画面)の BPM を、拍で数える長さの BPM にします";
 
@@ -679,7 +678,6 @@ const timePanel = el("details", { className: "sub" }, [
   el("p", { className: "fine", textContent: "各部分の長さの倍率。1.00 が録音のまま。持続区間は普段「音の長さまで伸ばす」ので、倍率が効くのはワンショット(伸ばさない)のときだけです。" }),
   range("頭部 ×", 0.25, 4, 0.05, () => params.stretch.head, (p, v) => (p.stretch.head = v), stretchFormat),
   sustainStretchRow,
-  range("語尾 ×", 0.25, 4, 0.05, () => params.stretch.tail, (p, v) => (p.stretch.tail = v), stretchFormat),
 ]);
 // 音階: the key and the scale (shown in "scale" mode).
 const tuneScaleRow = el("div", { className: "row tight" }, [
@@ -720,22 +718,17 @@ function partSwitch(label: string, band: string, get: () => boolean, set: (p: In
 }
 const partsHelp = el("p", { className: "fine help" });
 function refreshPartsHelp(): void {
-  const sustain = params.sustainEnabled;
-  const tail = params.tail.enabled;
-  partsHelp.textContent = sustain
-    ? tail
-      ? "押している間は持続区間で伸ばし、離すと語尾が鳴ります。書き出す WAV は、指定した長さのあとに語尾が付きます。"
-      : "押している間は持続区間で伸ばし、離すと短くフェードして終わります。"
-    : tail
-      ? "頭部のあと、すぐ語尾が鳴って終わります(押している長さに関係なく)。"
-      : "頭部だけ鳴って終わります(押している長さに関係なく)。";
+  partsHelp.textContent = !params.sustainEnabled
+    ? "頭部だけ鳴って終わります(押している長さに関係なく)。"
+    : params.sustainMode === "none"
+      ? "録音の終わりまで 1 回鳴らします(押している長さに関係なく)。"
+      : "押している間は持続区間で伸ばし、離すと「離したあとの消え方」の長さで消えます。";
 }
 controlsRefreshers.push(refreshPartsHelp);
 const partsRow = el("div", { className: "parts-row" }, [
   el("span", { className: "control-label", textContent: "鳴らす部分" }),
   el("span", { className: "part-fixed", textContent: "頭部" }),
   partSwitch("持続区間", "--band-sustain", () => params.sustainEnabled, (p, on) => (p.sustainEnabled = on)),
-  partSwitch("語尾", "--band-tail", () => params.tail.enabled, (p, on) => (p.tail = { ...p.tail, enabled: on })),
 ]);
 
 /** What the chosen 伸ばし方 does (or that it is unused with the sustain off). */
@@ -799,17 +792,8 @@ const tunePanel = el("section", { className: "panel tune" }, [
   ),
   sustainHelp,
   range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
-  select(
-    "語尾の長さ",
-    [
-      ["unlimited", "最後まで"],
-      ["beat", "1 拍まで"],
-      ["bar", "1 小節(4 拍)まで"],
-    ],
-    () => (params.tail.limit === "none" ? "unlimited" : params.tail.limit),
-    (p, v) => (p.tail = { enabled: p.tail.enabled, limit: v }),
-  ),
-  el("p", { className: "fine help", textContent: "拍は「長さ」の BPM で数えます(打ち込みの再生中は曲の BPM)。上限に来た語尾は短くフェードして切れます。" }),
+  // How a held note ends (語尾 was taken out: this is it).
+  range("離したあとの消え方(リリース)", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms),
   pitchModeNote,
   pitchGroup([
     range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
@@ -820,7 +804,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
     el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなしでケロケロになります(プリセット「ケロケロ」)。" }),
   ]),
   range("持続部の音量を揃える", 0, 1, 0.05, () => params.levelEven, (p, v) => (p.levelEven = v), pct, true),
-  el("p", { className: "fine help", textContent: "素材の持続区間が減衰していても、伸ばした音の音量が一定になります。0% で録音どおりの強弱(頭部と語尾は常にそのまま)。" }),
+  el("p", { className: "fine help", textContent: "素材の持続区間が減衰していても、伸ばした音の音量が一定になります。0% で録音どおりの強弱(頭部は常にそのまま)。" }),
   pitchGroup([
     range("子音・息(音程なし)の音量", -60, 12, 1, () => params.unvoicedGainDb, (p, v) => (p.unvoicedGainDb = v), (v) => (v <= -60 ? "消す" : `${v > 0 ? "+" : ""}${v} dB`), true),
     check("子音や息(音程なし)も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v), true),
@@ -1290,7 +1274,6 @@ const detailsPanel = el("details", { className: "panel params" }, [
       el("legend", { textContent: "エンベロープ" }),
       range("ディケイ", 0.01, 10, 0.01, () => params.amp.decay, (p, v) => (p.amp.decay = v), ms),
       range("サステイン", 0, 1, 0.01, () => params.amp.sustain, (p, v) => (p.amp.sustain = v), pct),
-      range("リリース", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms),
       range("ベロシティ感度", 0, 1, 0.01, () => params.amp.velocitySens, (p, v) => (p.amp.velocitySens = v), pct),
     ]),
     location.search.includes("bench") ? el("div", { className: "row" }, [benchButton, benchResult]) : el("span"),
@@ -2943,7 +2926,6 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
       instrument: { source: found.material.source, markers: found.cut.markers, params: { ...found.cut.params, maxVoices: DEFAULT_PARAMS.maxVoices }, hold: exportLengthSec(found.exportOf) },
       notes,
       glide: t.glide,
-      tailFit: t.tailFit,
       ...mix,
     });
   }

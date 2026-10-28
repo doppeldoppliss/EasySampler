@@ -598,3 +598,17 @@ describe("Engine: 減衰 (synthesized, dying away while held)", () => {
     expect(dbAt(short, 0.85)).toBeLessThan(-90);
   });
 });
+
+describe("離したら止める (stopOnRelease)", () => {
+  it("a one-shot let go early plays out by default, and stops there (over the release) with the option", () => {
+    const vowel = synthVoice({ sampleRate: SR, durationSec: 1.2, pitch: () => 57 });
+    const base = { sustainMode: "none" as const, amp: { ...DEFAULT_PARAMS.amp, release: 0.02 } };
+    const out = (stop: boolean) => play(setup(vowel, { ...base, stopOnRelease: stop }).engine, 57, 0.15, 0.8);
+    const window = (x: Float32Array) => rms(x, Math.round(0.4 * SR), Math.round(0.6 * SR));
+    expect(window(out(false))).toBeGreaterThan(0.01);
+    expect(window(out(true))).toBeLessThan(1e-4);
+    // The sustain switched off: the same.
+    const off = play(setup(vowel, { sustainEnabled: false, stopOnRelease: true, amp: base.amp }).engine, 57, 0.15, 0.8);
+    expect(window(off)).toBeLessThan(1e-4);
+  });
+});

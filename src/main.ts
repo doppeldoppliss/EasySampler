@@ -798,6 +798,11 @@ const partsRow = el("div", { className: "parts-row" }, [
 
 /** What the chosen 伸ばし方 does (or that it is unused with the sustain off). */
 const sustainHelp = el("p", { className: "fine help" });
+// 離したら止める: only where letting go would otherwise do nothing (伸ばさない, or the sustain off).
+const stopOnReleaseRow = el("div", {}, [
+  check("鍵を離したらそこで止める(頭部や録音の途中でも)", () => params.stopOnRelease, (p, v) => (p.stopOnRelease = v), true),
+  el("p", { className: "fine help", textContent: "オフ: 短く押しても録音の最後まで鳴ります。オン: 離した所から「リリース」の長さで消えます(打ち込みでは音符の長さで切れます)。書き出す単音の WAV は最後まで入ります。" }),
+]);
 function refreshSustainHelp(): void {
   const texts: Record<string, string> = {
     pool: "持続区間の安定した周期をつなぎ合わせて、押している間いくらでも伸ばします(自然)。",
@@ -807,6 +812,7 @@ function refreshSustainHelp(): void {
     none: "伸ばしません。持続区間から録音の終わりまで、そのまま 1 回鳴らします(長さの倍率は効きます)。",
   };
   sustainHelp.textContent = params.sustainEnabled ? (texts[params.sustainMode] ?? "") : "持続区間がオフなので、伸ばし方は使われません。";
+  stopOnReleaseRow.hidden = params.sustainEnabled && params.sustainMode !== "none";
 }
 
 // Played by resampling (無加工, ドラム・効果音…), a cut's pitch only follows the key, sped up or slowed down:
@@ -840,7 +846,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
   fixedPitchCheck,
   fixedPitchNote,
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
-  el("p", { className: "fine help", textContent: "プリセットは出発点です。選ぶと音の設定がそのプリセットの形に戻ります(音名・入りと終わりのフェード・ベロシティ感度・フォルマント・「録音した高さで鳴らす」はそのまま)。つまみを動かすと「(カスタム)」になります。" }),
+  el("p", { className: "fine help", textContent: "プリセットは出発点です。選ぶと音の設定がそのプリセットの形に戻ります(音名・入りと終わりのフェード・ベロシティ感度・フォルマント・「録音した高さで鳴らす」「鍵を離したらそこで止める」はそのまま)。つまみを動かすと「(カスタム)」になります。" }),
   partsRow,
   partsHelp,
   select(
@@ -859,6 +865,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
   range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
   // How a held note ends (語尾 was taken out: this is it).
   range("離したあとの消え方(リリース)", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms),
+  stopOnReleaseRow,
   pitchModeNote,
   pitchGroup([
     range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),

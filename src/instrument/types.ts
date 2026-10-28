@@ -70,6 +70,12 @@ export interface InstrumentParams {
    */
   fixedPitch: boolean;
   /**
+   * 離したら止める: when nothing is held (伸ばさない, or the sustain switched off), letting the key go
+   * still ends the note there, over the リリース — instead of the recording playing out. Not a preset's
+   * choice either.
+   */
+  stopOnRelease: boolean;
+  /**
    * How much the sustain's grains are evened out in level (0 = each period as loud as it was
    * recorded, so a decaying vowel makes the random walk wander in level; 1 = every period scaled
    * to the sustain's median loudness, boost capped at ×4). The head and the tail keep their own.
@@ -195,6 +201,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   tune: { mode: "flatten", scale: "chromatic", key: 0, retuneSec: 0 },
   unvoicedFollow: false,
   fixedPitch: false,
+  stopOnRelease: false,
   levelEven: 1,
   formantSemitones: 0,
   formantFollow: 0.5,

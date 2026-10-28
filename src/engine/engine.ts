@@ -609,7 +609,11 @@ export class Engine {
     v.releasedAt = v.clock / this.sampleRate;
     const params = this.params!;
     // Sustain off: the head plays out whatever the key does. A one-shot (伸ばさない) plays through the same way.
-    if (!params.sustainEnabled || params.sustainMode === "none") return;
+    // With 離したら止める, it ends where the key is let go instead (over the release).
+    if (!params.sustainEnabled || params.sustainMode === "none") {
+      if (params.stopOnRelease) v.env = Env.Release;
+      return;
+    }
     if (this.tailOn()) {
       // (The tail — 語尾 — was taken out of the app on 2026-10-28; the engine still plays one when asked.)
       if (v.phase === Phase.Sustain) this.jumpToTail(v);

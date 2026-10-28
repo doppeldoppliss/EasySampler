@@ -148,6 +148,7 @@ function sanitizeParams(raw: unknown): InstrumentParams {
     tune: sanitizeTune(raw.tune, d.tune),
     unvoicedFollow: typeof raw.unvoicedFollow === "boolean" ? raw.unvoicedFollow : d.unvoicedFollow,
     fixedPitch: raw.fixedPitch === true,
+    stopOnRelease: raw.stopOnRelease === true,
     levelEven: clamp(num(raw.levelEven, d.levelEven), 0, 1),
     formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
     // (Older files stored on / off.)

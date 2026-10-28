@@ -165,7 +165,6 @@ rollPanel.onPlayingChange = (playing) => {
   if (!playing) return;
   client.stopPreview();
 };
-rollPanel.onUseBpm = (bpm) => updateExport((s) => (s.bpm = Math.max(20, Math.min(400, Math.round(bpm * 10) / 10))));
 
 // A control that was just changed gives the focus back, so Space / Ctrl+Z keep working after a dropdown.
 document.addEventListener("change", (event) => {
@@ -627,9 +626,20 @@ function clampNumber(text: string, min: number, max: number, fallback: number): 
   return Number.isFinite(v) && text.trim() !== "" ? Math.max(min, Math.min(max, v)) : fallback;
 }
 
+// The song's tempo (曲 view) for the length in beats: one sound made to fit the song it is for.
+const songBpmButton = button("曲の BPM に合わせる", "small", () => {
+  const bpm = Math.max(20, Math.min(400, Math.round(rollPanel.bpm * 10) / 10));
+  updateExport((s) => {
+    s.bpm = bpm;
+    s.lengthMode = "beats";
+  });
+  songBpmButton.title = `長さの BPM を曲と同じ ${bpm} にしました(語尾の長さと拍同期のエフェクトも変わります)`;
+});
+songBpmButton.title = "打ち込み(曲の画面)の BPM を、拍で数える長さの BPM にします";
+
 const lengthBlock = el("div", { className: "length" }, [
   el("span", { className: "control-label", textContent: "長さ" }),
-  el("label", { className: "length-row" }, [lengthBeats, beatsInput, el("span", { textContent: "拍" }), el("span", { className: "fine", textContent: "BPM" }), bpmInput]),
+  el("div", { className: "length-row" }, [el("label", { className: "inline" }, [lengthBeats, beatsInput, el("span", { textContent: "拍" }), el("span", { className: "fine", textContent: "BPM" }), bpmInput]), songBpmButton]),
   el("label", { className: "length-row" }, [lengthSeconds, secondsInput, el("span", { textContent: "秒" })]),
   lengthResult,
 ]);

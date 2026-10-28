@@ -184,14 +184,8 @@ export class RollPanel {
     button("+1", "small", () => this.roll.transposeSelected(1), "半音上げる(↑)"),
     button("+12", "small", () => this.roll.transposeSelected(12), "1 オクターブ上げる(Shift+↑)"),
   ];
-  /** "この BPM を書き出しの長さに使う": the song's tempo for the sampling side's export length. */
-  onUseBpm: (bpm: number) => void = () => {};
   private readonly midiInput = el("input", { type: "file", accept: ".mid,.midi,.smf,audio/midi,audio/x-midi", className: "visually-hidden" });
   private readonly midiButton = button("MIDI を開く", "small", () => this.midiInput.click(), "MIDI ファイルのパートを、それぞれトラックとして加えます");
-  private readonly useBpmButton = button("この BPM を書き出しの長さに使う", "small", () => {
-    this.onUseBpm(this.project.bpm);
-    this.info.textContent = `書き出しの長さの BPM を ${this.project.bpm} にしました(語尾の長さと拍同期のエフェクトも変わります)。`;
-  });
   private readonly clearButton = button("このトラックの音符をすべて消す", "small", () => {
     if (!this.roll.notes.length) return;
     this.roll.setNotes([], true);
@@ -324,7 +318,7 @@ export class RollPanel {
 
     this.element = el("section", { className: "panel roll-panel" }, [
       el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "打ち込み" })]),
-      el("div", { className: "row" }, [this.midiButton, this.midiInput, this.useBpmButton]),
+      el("div", { className: "row" }, [this.midiButton, this.midiInput]),
       el("div", { className: "row roll-transport" }, [
         this.playButton,
         this.loopButton,
@@ -381,6 +375,11 @@ export class RollPanel {
       if (this.playing) this.start();
     });
     this.applyProject();
+  }
+
+  /** The song's tempo (the sampling side can take it for its export length). */
+  get bpm(): number {
+    return this.project.bpm;
   }
 
   get playing(): boolean {

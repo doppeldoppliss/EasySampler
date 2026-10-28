@@ -7,12 +7,15 @@
 // delete. Finger: tap = a note, drag on empty = scroll (or select, with
 // 範囲選択 on), drag a note or its right end as with a mouse.
 // The ruler: tap = play from there, double-tap = start playing, drag = loop range.
+// Scrolling: the bars along the right and bottom edges (drag the thumb, or
+// press the track to jump there), the wheel (Shift = sideways), a middle-
+// button drag, or a finger dragged on empty grid.
 // The velocity lane (強弱, when shown) under the notes: drag across it to set
 // each note's velocity (only the selected notes', when some are selected).
 // Keys (when the roll has the focus): Delete, Ctrl+A / C / X / V / D, arrows
 // (Shift = an octave), Ctrl+Z / Y, Space = play / stop, Esc.
 
-import { clampPitch, MIN_LENGTH, newId, shifted, snap, snapDown, sortNotes, type Note } from "../daw/model";
+import { clampPitch, MIN_LENGTH, newId, shifted, snap, snapDown, songEnd, sortNotes, type Note } from "../daw/model";
 import { cssVar } from "./dom";
 
 const KEYS_W = 44;
@@ -24,6 +27,9 @@ const EDGE_TOUCH = 14;
 const TAP_PX = COARSE ? 10 : 4;
 const DOUBLE_TAP_MS = 350;
 const HISTORY = 200;
+/** The scroll bars' thickness, and the shortest a thumb gets. */
+const SCROLLBAR = COARSE ? 14 : 10;
+const MIN_THUMB = COARSE ? 36 : 24;
 const NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const isBlack = (pitch: number) => [1, 3, 6, 8, 10].includes(((pitch % 12) + 12) % 12);
 
@@ -34,7 +40,9 @@ type Drag =
   | { kind: "move"; anchor: Note; x: number; y: number; orig: Map<number, Note>; moved: boolean; lastPitch: number }
   | { kind: "resize"; anchor: Note; orig: Map<number, Note> }
   | { kind: "ruler"; x: number; moved: boolean }
-  | { kind: "velocity"; x: number; value: number };
+  | { kind: "velocity"; x: number; value: number }
+  | { kind: "scrollH"; grab: number }
+  | { kind: "scrollV"; grab: number };
 
 export interface Loop {
   start: number;
@@ -141,6 +149,10 @@ export class PianoRoll {
     this.canvas.addEventListener("pointerup", (e) => this.up(e));
     this.canvas.addEventListener("pointercancel", () => this.cancel());
     this.canvas.addEventListener("dblclick", (e) => this.doubleClick(e));
+    // (The middle button drags the view: not the browser's own auto-scroll.)
+    this.canvas.addEventListener("mousedown", (e) => {
+      if (e.button === 1) e.preventDefault();
+    });
     this.canvas.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       const hit = this.noteAt(e.offsetX, e.offsetY);
@@ -475,6 +487,66 @@ export class PianoRoll {
     return null;
   }
 
+  /** Where the notes end at the bottom (the velocity lane, when shown, is under them). */
+  private get notesBottom(): number {
+    return this.canvas.clientHeight - this.laneH;
+  }
+
+  /** How far the song reaches sideways (beats): past the last note, the loop and the view. */
+  private contentBeats(): number {
+    return Math.max(songEnd(this.notesList) + this.beatsPerBar * 4, this.loop.end + this.beatsPerBar, this.scrollBeat + this.visibleBeats(), this.beatsPerBar * 8);
+  }
+
+  /** The sideways bar: its track (x0…x1 at y0…y1) and its thumb (a…b). */
+  private hBar(): { x0: number; x1: number; y0: number; y1: number; a: number; b: number } {
+    const x0 = this.keysW;
+    const x1 = this.width() - SCROLLBAR;
+    const y1 = this.notesBottom;
+    const track = Math.max(1, x1 - x0);
+    const total = this.contentBeats();
+    const len = Math.min(track, Math.max(MIN_THUMB, (this.visibleBeats() / total) * track));
+    const a = x0 + (this.scrollBeat / Math.max(1e-9, total - this.visibleBeats())) * (track - len);
+    return { x0, x1, y0: y1 - SCROLLBAR, y1, a: Math.min(a, x1 - len), b: Math.min(a, x1 - len) + len };
+  }
+
+  /** The up-down bar (pitches, or a drum track's rows). */
+  private vBar(): { x0: number; x1: number; y0: number; y1: number; a: number; b: number } {
+    const x1 = this.width();
+    const y0 = RULER_H;
+    const y1 = this.notesBottom - SCROLLBAR;
+    const track = Math.max(1, y1 - y0);
+    const rows = this.visibleRows();
+    const total = this.rowNames ? Math.max(rows, this.rowNames.length) : 128;
+    const first = this.rowNames ? this.scrollRow : 127 - this.topPitch;
+    const len = Math.min(track, Math.max(MIN_THUMB, (rows / total) * track));
+    const room = Math.max(1e-9, total - rows);
+    const a = y0 + (Math.max(0, Math.min(room, first)) / room) * (track - len);
+    return { x0: x1 - SCROLLBAR, x1, y0, y1, a, b: a + len };
+  }
+
+  /** Scrolls so the sideways thumb's start is at x. */
+  private scrollToH(thumbStart: number): void {
+    const bar = this.hBar();
+    const len = bar.b - bar.a;
+    const share = Math.max(0, Math.min(1, (thumbStart - bar.x0) / Math.max(1, bar.x1 - bar.x0 - len)));
+    this.scrollBeat = share * Math.max(0, this.contentBeats() - this.visibleBeats());
+    this.viewTouched = true;
+    this.clampView();
+    this.draw();
+  }
+
+  private scrollToV(thumbStart: number): void {
+    const bar = this.vBar();
+    const len = bar.b - bar.a;
+    const share = Math.max(0, Math.min(1, (thumbStart - bar.y0) / Math.max(1, bar.y1 - bar.y0 - len)));
+    const rows = this.visibleRows();
+    if (this.rowNames) this.scrollRow = share * Math.max(0, this.rowNames.length - rows);
+    else this.topPitch = 127 - share * Math.max(0, 128 - rows);
+    this.viewTouched = true;
+    this.clampView();
+    this.draw();
+  }
+
   private inLane(y: number): boolean {
     return this.laneH > 0 && y >= this.canvas.clientHeight - this.laneH;
   }
@@ -517,12 +589,32 @@ export class PianoRoll {
   }
 
   private down(e: PointerEvent): void {
-    if (e.button !== 0 && e.pointerType === "mouse") return;
+    const middle = e.pointerType === "mouse" && e.button === 1;
+    if (e.button !== 0 && e.pointerType === "mouse" && !middle) return;
     this.canvas.focus({ preventScroll: true });
     const { x, y } = this.local(e);
     const fine = e.pointerType === "mouse" || e.pointerType === "pen";
     this.canvas.setPointerCapture(e.pointerId);
     this.gestureStart = this.snapshot();
+    if (middle) {
+      // The middle button drags the view anywhere (and does not start the browser's auto-scroll).
+      e.preventDefault();
+      this.drag = { kind: "pan", x, y, beat: this.scrollBeat, top: this.rowNames ? this.scrollRow : this.topPitch };
+      return;
+    }
+    // The scroll bars: drag the thumb, or press the track to bring the thumb there.
+    const h = this.hBar();
+    if (x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1) {
+      if (x < h.a || x > h.b) this.scrollToH(x - (h.b - h.a) / 2);
+      this.drag = { kind: "scrollH", grab: x - this.hBar().a };
+      return;
+    }
+    const v = this.vBar();
+    if (x >= v.x0 && x <= v.x1 && y >= v.y0 && y <= v.y1) {
+      if (y < v.a || y > v.b) this.scrollToV(y - (v.b - v.a) / 2);
+      this.drag = { kind: "scrollV", grab: y - this.vBar().a };
+      return;
+    }
     if (y < RULER_H && x >= this.keysW) {
       this.drag = { kind: "ruler", x, moved: false };
       return;
@@ -586,7 +678,10 @@ export class PianoRoll {
     if (!d) {
       if (e.pointerType === "mouse") {
         const hit = this.noteAt(x, y);
-        this.canvas.style.cursor = y < RULER_H ? "pointer" : hit?.edge ? "ew-resize" : hit ? "move" : "default";
+        const h = this.hBar();
+        const v = this.vBar();
+        const onBar = (x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1) || (x >= v.x0 && y >= v.y0 && y <= v.y1);
+        this.canvas.style.cursor = onBar ? "default" : y < RULER_H ? "pointer" : hit?.edge ? "ew-resize" : hit ? "move" : "default";
       }
       return;
     }
@@ -654,6 +749,12 @@ export class PianoRoll {
         this.draw();
         return;
       }
+      case "scrollH":
+        this.scrollToH(x - d.grab);
+        return;
+      case "scrollV":
+        this.scrollToV(y - d.grab);
+        return;
       case "velocity": {
         d.value = this.velocityAt(y);
         this.paintVelocity(d.x, x, d.value);
@@ -704,6 +805,8 @@ export class PianoRoll {
       }
       case "box":
       case "pan":
+      case "scrollH":
+      case "scrollV":
         this.draw();
         this.onStateChange();
         return;
@@ -716,7 +819,7 @@ export class PianoRoll {
   }
 
   private cancel(): void {
-    if (this.drag && this.drag.kind !== "pan" && this.drag.kind !== "pending") this.restore(this.gestureStart);
+    if (this.drag && this.drag.kind !== "pan" && this.drag.kind !== "pending" && this.drag.kind !== "scrollH" && this.drag.kind !== "scrollV") this.restore(this.gestureStart);
     this.drag = null;
   }
 
@@ -876,6 +979,23 @@ export class PianoRoll {
       if (!rowsMode && x1 - x0 > 28 && this.rowH >= 12) {
         g.fillStyle = cssVar("--accent-text");
         g.fillText(NAMES[n.pitch % 12] + (Math.floor(n.pitch / 12) - 1), Math.max(this.keysW, x0) + 3, y + this.rowH / 2);
+      }
+    }
+
+    // The scroll bars, over the grid's right and bottom edges.
+    {
+      const thumb = cssVar("--muted");
+      for (const [bar, across] of [[this.hBar(), true], [this.vBar(), false]] as const) {
+        g.globalAlpha = 0.12;
+        g.fillStyle = thumb;
+        g.fillRect(bar.x0, bar.y0, bar.x1 - bar.x0, bar.y1 - bar.y0);
+        g.globalAlpha = this.drag?.kind === (across ? "scrollH" : "scrollV") ? 0.85 : 0.6;
+        const r = (across ? bar.y1 - bar.y0 : bar.x1 - bar.x0) / 2 - 2;
+        g.beginPath();
+        if (across) g.roundRect(bar.a, bar.y0 + 2, Math.max(4, bar.b - bar.a), bar.y1 - bar.y0 - 4, r);
+        else g.roundRect(bar.x0 + 2, bar.a, bar.x1 - bar.x0 - 4, Math.max(4, bar.b - bar.a), r);
+        g.fill();
+        g.globalAlpha = 1;
       }
     }
 

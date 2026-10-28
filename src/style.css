@@ -988,10 +988,6 @@ fieldset,
   background: var(--band-sustain);
 }
 
-.band-dot.tail {
-  background: var(--band-tail);
-}
-
 /* The keyboard pinned to the bottom of the screen (試し弾き → 画面下に固定). */
 .keys-panel.pinned {
   position: fixed;

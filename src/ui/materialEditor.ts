@@ -851,8 +851,9 @@ export class MaterialEditor {
       const parts: [number, number, string, string][] = [
         [0, layout.headSec, "--band-head", `頭部 ${ratio(layout.headSec, layout.headSrcSec)}`],
         [layout.headSec, layout.headSec + layout.sustainSec, "--band-sustain", `持続区間 ${layout.elastic ? `${ratio(layout.sustainSec, layout.sustainSrcSec)}(音の長さまで伸ばす)` : ratio(layout.sustainSec, layout.sustainSrcSec)}`],
-        [layout.headSec + layout.sustainSec, layout.totalSec, "--band-tail", `終わり ${ratio(layout.tailSec, layout.tailSrcSec)}`],
       ];
+      // A one-shot plays on past the sustain to the recording's end: one band from the head on (語尾 is no more, so no pink part).
+      if (!layout.elastic && layout.tailSec > 1e-6) parts[1] = [layout.headSec, layout.totalSec, "--band-sustain", `持続区間〜終わり ${ratio(layout.sustainSec + layout.tailSec, layout.sustainSrcSec + layout.tailSrcSec)}`];
       g.font = `${11 * dpr}px system-ui, sans-serif`;
       for (const [from, to, color, text] of parts) {
         if (to - from <= 1e-6) continue;

@@ -358,6 +358,12 @@ export class Engine {
     return false;
   }
 
+  /** Semitones a voice is moved from the recording: its key (and slide) from the root, or none with 録音した高さで鳴らす. */
+  private shiftOf(note: number, bend = 0): number {
+    const params = this.params!;
+    return params.fixedPitch ? 0 : note + bend - params.root;
+  }
+
   /** How fast the read position moves through the material here: 1 ÷ the part's stretch factor. */
   private speedAt(position: number): number {
     const params = this.params!;
@@ -454,7 +460,7 @@ export class Engine {
   private headOutputSamples(v: Voice): number {
     const params = this.params!;
     let out = this.playedBetween(v.srcTime, this.sustainStart) * Math.max(0.05, params.stretch.head);
-    if (params.pitchMode === "resample") out /= 2 ** ((v.note - params.root) / 12);
+    if (params.pitchMode === "resample") out /= 2 ** (this.shiftOf(v.note) / 12);
     return out;
   }
 
@@ -462,7 +468,7 @@ export class Engine {
   private tailOutputSamples(note: number): number {
     const params = this.params!;
     let out = this.playedBetween(Math.max(this.tailStart, this.sustainStart), this.rangeEnd) * Math.max(0.05, params.stretch.tail);
-    if (params.pitchMode === "resample") out /= 2 ** ((note - params.root) / 12);
+    if (params.pitchMode === "resample") out /= 2 ** (this.shiftOf(note) / 12);
     return Math.min(out, this.tailLimitSamples());
   }
 
@@ -763,7 +769,7 @@ export class Engine {
     }
 
     const seconds = v.nextCenter / this.sampleRate;
-    const shift = v.note + v.bend - params.root;
+    const shift = this.shiftOf(v.note, v.bend);
     const wobble = this.wobbleAt(v, seconds);
     const period = this.period[k];
     const voiced = source.voiced[k] === 1;
@@ -904,7 +910,7 @@ export class Engine {
     } else {
       return Infinity;
     }
-    if (params.pitchMode === "resample") out /= 2 ** ((v.note + v.bend - params.root) / 12);
+    if (params.pitchMode === "resample") out /= 2 ** (this.shiftOf(v.note, v.bend) / 12);
     // The tail's length limit ends it sooner.
     return Math.min(out, v.tailRemaining);
   }

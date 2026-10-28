@@ -674,3 +674,21 @@ describe("Engine: resampling presets leave the pitch shaping unused", () => {
     expect(diff).toBeLessThan(1e-6);
   });
 });
+
+describe("Engine: 録音した高さで鳴らす (fixed pitch)", () => {
+  const vowel = synthVoice({ sampleRate: SR, durationSec: 0.8, pitch: demoPhrasePitch(57, 0.8) });
+  it("plays every key at the recording's pitch, by resampling or by grains", async () => {
+    const { PRESETS } = await import("../instrument/types");
+    for (const preset of ["raw", "synth"]) {
+      const { engine, analysis } = setup(vowel);
+      const root = analysis.root!.midi;
+      const params = { ...PRESETS.find((p) => p.id === preset)!.apply({ ...DEFAULT_PARAMS, root }), fixedPitch: true };
+      engine.setInstrument(analysis.markers, params);
+      for (const key of [Math.round(root) - 12, Math.round(root) + 7]) {
+        const out = play(engine, key, 0.6, 0.3);
+        const got = rootPitch(analyzePitch(out.slice(0, Math.round(0.6 * SR)), SR))!.midi;
+        expect(Math.abs(got - root)).toBeLessThan(0.35);
+      }
+    }
+  });
+});

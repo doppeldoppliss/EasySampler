@@ -754,8 +754,19 @@ controlsRefreshers.push(() => {
     group.inert = resample;
   }
 });
+// 録音した高さで鳴らす: what it means for the keys and the files, while it is on.
+const fixedPitchNote = el("p", { className: "fine help", hidden: true, textContent: "どの鍵・どの音符でも録音したままの高さで鳴ります(書き出す単音も音名にかかわらず録音した高さ)。打ち込みでは、音符の高さは鳴らす位置の目印だけになります。" });
+controlsRefreshers.push(() => (fixedPitchNote.hidden = !params.fixedPitch));
+const fixedPitchCheck = check("鍵に関係なく、録音した高さで鳴らす(ドラム・効果音向け)", () => params.fixedPitch, (p, v) => (p.fixedPitch = v), true);
+// (Its note and the editor's output line change with it.)
+fixedPitchCheck.querySelector("input")!.addEventListener("change", () => {
+  refreshControls();
+  refreshExport();
+});
 const tunePanel = el("section", { className: "panel tune" }, [
   el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "音名" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]),
+  fixedPitchCheck,
+  fixedPitchNote,
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
   el("p", { className: "fine help", textContent: "プリセットは出発点です。つまみを動かすと「(カスタム)」になります。伸ばし方・フェードは変えません。" }),
   partsRow,
@@ -1990,7 +2001,8 @@ function refreshExport(): void {
             return transposed - params.flatten * (transposed - quantizeToScale(transposed, params.tune.scale, params.tune.key));
           }
         : null;
-    editor.setState(markers, params.root, params.flatten, note, shaper);
+    // (録音した高さで鳴らす: the output stays at the recording's own pitch, whatever the note.)
+    editor.setState(markers, params.root, params.flatten, params.fixedPitch ? params.root : note, params.fixedPitch ? null : shaper);
     refreshFadeGrips();
     editor.setLayout(
       outputLayout(markers, params, held),

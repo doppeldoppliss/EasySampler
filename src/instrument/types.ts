@@ -64,6 +64,12 @@ export interface InstrumentParams {
    */
   unvoicedFollow: boolean;
   /**
+   * 録音した高さで鳴らす: every key plays the cut at its own pitch (no shift by the
+   * key; a drum or a sound effect played from anywhere on the keyboard). Not a
+   * preset's choice: it stays as set when the preset changes.
+   */
+  fixedPitch: boolean;
+  /**
    * How much the sustain's grains are evened out in level (0 = each period as loud as it was
    * recorded, so a decaying vowel makes the random walk wander in level; 1 = every period scaled
    * to the sustain's median loudness, boost capped at ×4). The head and the tail keep their own.
@@ -176,6 +182,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   flatten: 1,
   tune: { mode: "flatten", scale: "chromatic", key: 0, retuneSec: 0 },
   unvoicedFollow: false,
+  fixedPitch: false,
   levelEven: 1,
   formantSemitones: 0,
   formantFollow: 0.5,

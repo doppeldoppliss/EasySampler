@@ -625,3 +625,33 @@ describe("Engine: the tail goes on from the note's level", () => {
     expect(after - later).toBeLessThan(13);
   });
 });
+
+describe("Engine: the raw drum preset (無加工・持続語尾なし)", () => {
+  it("plays the whole cut once as recorded, whatever the key does", async () => {
+    const { PRESETS } = await import("../instrument/types");
+    const { clampMarkers } = await import("../instrument/markers");
+    // A hit: a click of noise, then a decaying low tone, 0.5 s.
+    const n = Math.round(0.5 * SR);
+    const hit = new Float32Array(n);
+    let seed = 7;
+    for (let i = 0; i < n; i++) {
+      seed = (seed * 1103515245 + 12345) >>> 0;
+      const noise = (seed / 2 ** 32) * 2 - 1;
+      hit[i] = 0.6 * noise * Math.exp(-i / (0.01 * SR)) + 0.5 * Math.sin((2 * Math.PI * 80 * i) / SR) * Math.exp(-i / (0.12 * SR));
+    }
+    const { engine, analysis } = setup(hit);
+    const m = analysis.markers;
+    const markers = clampMarkers({ ...m, sustainStart: m.rangeEnd - 0.01, sustainEnd: m.rangeEnd, tailStart: m.rangeEnd });
+    const root = 60;
+    engine.setInstrument(markers, PRESETS.find((p) => p.id === "raw")!.apply({ ...DEFAULT_PARAMS, root, rootMode: "manual" }));
+    const out = play(engine, root, 0.03, 0.8); // let go after 30 ms
+    let end = 0;
+    for (let i = 0; i < out.length; i++) if (Math.abs(out[i]) > 1e-4) end = i;
+    const cutSec = markers.rangeEnd - markers.rangeStart;
+    expect(end / SR).toBeGreaterThan(cutSec * 0.85); // not stopped at the key-off
+    expect(end / SR).toBeLessThan(cutSec + 0.05);
+    // The loudness over time follows the recording's.
+    const at = (x: Float32Array, a: number) => rms(x, Math.round(a * SR), Math.round((a + 0.05) * SR));
+    for (const t of [0.05, 0.15, 0.3]) expect(Math.abs(20 * Math.log10(at(out, t) / at(hit, t + markers.rangeStart)))).toBeLessThan(2.5);
+  });
+});

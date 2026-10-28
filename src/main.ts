@@ -599,8 +599,19 @@ const presetSelect = el("select", { ariaLabel: "プリセット" }, [
 presetSelect.addEventListener("change", () => {
   const preset = PRESETS.find((p) => p.id === presetSelect.value);
   if (!preset) return;
+  const wasRaw = presetId === "raw";
   presetId = preset.id;
   params = preset.apply(structuredClone(params));
+  if (markers && material) {
+    if (preset.id === "raw") {
+      // 無加工・持続語尾なし: the whole cut is the head (the sustain and tail markers go to its end).
+      markers = clampMarkers({ ...markers, sustainStart: markers.rangeEnd - 0.01, sustainEnd: markers.rangeEnd, tailStart: markers.rangeEnd });
+    } else if (wasRaw) {
+      // Back from it: the sustain and tail are found again within the cut.
+      const found = suggestMarkersWithin(material.analysis.track, markers.rangeStart, markers.rangeEnd);
+      markers = clampMarkers({ ...found, rangeStart: markers.rangeStart, rangeEnd: markers.rangeEnd, ...(markers.removed ? { removed: markers.removed } : {}) });
+    }
+  }
   refreshControls();
   sendInstrument();
 });

@@ -52,12 +52,16 @@ class EngineProcessor extends AudioWorkletProcessor {
   private previewNote = -1;
   private readonly liveFx = new FxChain(sampleRate);
   private liveFxOn = false;
+  /** The keyboard through the master effects too (the 曲 view), or past them (dry). */
+  private liveMaster = false;
   private readonly master = new FxChain(sampleRate);
   private masterOn = false;
   private hold = 1;
   private bpm = 120;
   private liveL = new Float32Array(128);
   private liveR = new Float32Array(128);
+  private kitL = new Float32Array(128);
+  private kitR = new Float32Array(128);
   private quanta = 0;
   private lastVoices = -1;
 
@@ -132,6 +136,7 @@ class EngineProcessor extends AudioWorkletProcessor {
         if (this.live.instrument !== message.instrument) this.apply(this.live, message.instrument);
         this.liveFxOn = message.fx !== null;
         if (message.fx) this.liveFx.set(message.fx);
+        this.liveMaster = message.master === true;
         break;
       case "noteOn":
         if (this.liveKitOn) this.liveKit.noteOn(message.note, message.velocity);
@@ -222,21 +227,35 @@ class EngineProcessor extends AudioWorkletProcessor {
     const frames = left.length;
     // The song's tracks, mixed.
     this.song.render(currentFrame, left, right, frames);
-    // The keyboard, through its effects.
+    // The keyboard (the cut, or the kit), through its effects (a track's, in the 曲 view):
+    // before the master there, past it everywhere else.
     if (this.liveL.length < frames) {
       this.liveL = new Float32Array(frames);
       this.liveR = new Float32Array(frames);
+      this.kitL = new Float32Array(frames);
+      this.kitR = new Float32Array(frames);
     }
-    if (!this.live.idle()) {
-      this.live.render(this.liveL, this.liveR, frames);
+    const liveOn = !this.live.idle();
+    const kitOn = !this.liveKit.idle();
+    if (liveOn || kitOn || this.liveFxOn) {
+      if (liveOn) this.live.render(this.liveL, this.liveR, frames);
+      else {
+        this.liveL.fill(0, 0, frames);
+        this.liveR.fill(0, 0, frames);
+      }
+      if (kitOn) {
+        this.liveKit.render(this.kitL, this.kitR, frames);
+        for (let i = 0; i < frames; i++) {
+          this.liveL[i] += this.kitL[i];
+          this.liveR[i] += this.kitR[i];
+        }
+      }
+      // (Run on while effects ring out: a reverb-like tail after the last key.)
       if (this.liveFxOn) this.liveFx.process(this.liveL, this.liveR, frames);
-      for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
-      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
-    }
-    if (!this.liveKit.idle()) {
-      this.liveKit.render(this.liveL, this.liveR, frames);
-      for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
-      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
+      if (this.liveMaster) {
+        for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
+        if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
+      }
     }
     if (!this.samplePreview.idle()) {
       this.samplePreview.render(this.liveL, this.liveR, frames);
@@ -256,6 +275,10 @@ class EngineProcessor extends AudioWorkletProcessor {
       if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
     }
     if (this.masterOn) this.master.process(left, right, frames);
+    if (!this.liveMaster && (liveOn || kitOn || this.liveFxOn)) {
+      for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
+      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
+    }
     if (++this.quanta >= STATUS_EVERY) {
       this.quanta = 0;
       let voices = this.live.engine.activeVoices();

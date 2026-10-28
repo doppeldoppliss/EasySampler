@@ -134,12 +134,12 @@ const editor = new MaterialEditor();
 const sink = {
   noteOn: (n: number, velocity: number) => {
     client.unlock();
-    // ステップ入力: the key goes into the song as a note (and sounds on its track) instead.
-    if (rollPanel.stepNote(n, true)) return;
+    // ステップ入力: the key also goes into the song as a note; it sounds as any key does (in the 曲 view: the track, with its effects).
+    rollPanel.stepNote(n, true);
     client.noteOn(n, velocity);
   },
   noteOff: (n: number) => {
-    if (rollPanel.stepNote(n, false)) return;
+    rollPanel.stepNote(n, false);
     client.noteOff(n);
   },
 };
@@ -149,7 +149,10 @@ const pcKeys = new PcKeyboard(sink);
 const rollPanel = new RollPanel(client, () => exportSettings.bpm);
 // (Development only: a handle for checking playback where the page's animation frames do not run.)
 if (import.meta.env.DEV) Object.assign(window, { __easysampler: { client, rollPanel } });
-rollPanel.onTrackChange = () => showFxTarget();
+rollPanel.onTrackChange = () => {
+  showFxTarget();
+  routeKeyboard();
+};
 function showFxTarget(): void {
   fxTrackLabel.textContent = fxTarget === "master" ? "(マスター)" : `「${rollPanel.trackName}」`;
   fxTrackButton.textContent = `トラック「${rollPanel.trackName}」`;
@@ -1778,11 +1781,29 @@ function rebuildKit(force = false): void {
   }
 }
 
-/** The keyboard plays the kit in the kit view, the cut elsewhere. */
-function sendLiveKit(): void {
+/**
+ * Where the keyboard goes: in the 素材 view the cut being edited, dry; in the
+ * kit view the kit, dry; in the 曲 view the selected track — its cut (the
+ * cut being edited when it has none of its own) or the kit for a drum track —
+ * through the track's effects and the master, as it sounds in the song.
+ */
+function routeKeyboard(): void {
+  const editing = material && cuts[current] ? instrumentId(material.id, cuts[current].id) : null;
   const spec = rollPanel.kitSpec();
+  if (view === "song") {
+    const target = rollPanel.liveTarget();
+    client.setLive(target.instrument ?? editing, target.fx, true);
+    client.setLiveKit(target.drum, spec.samples, spec.keys);
+    return;
+  }
+  client.setLive(editing, null, false);
   client.setLiveKit(view === "kit", spec.samples, spec.keys);
 }
+/** (The kit's sounds changed: the keyboard's kit too.) */
+function sendLiveKit(): void {
+  routeKeyboard();
+}
+rollPanel.onLiveChange = routeKeyboard;
 
 /** The kit's recordings back from the store (at start). */
 async function loadKitAudio(): Promise<void> {
@@ -2251,7 +2272,7 @@ function sendInstrument(): void {
     const id = instrumentId(material.id, cuts[current].id);
     client.defineInstrument(id, material.id, markers, params);
     client.setHold(exportLengthSec(exportSettings));
-    client.setLive(id, null);
+    routeKeyboard();
     refreshInstruments();
   }
   rootLabel.textContent = pitchLabel(params.root);

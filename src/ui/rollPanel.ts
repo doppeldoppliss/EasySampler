@@ -146,6 +146,8 @@ export class RollPanel {
   onKitHit: (key: number) => void = () => {};
   /** The kit changed (a sound added, cut, removed): the page rebuilds what the engine plays. */
   onKitChange: () => void = () => {};
+  /** What the keyboard plays in the 曲 view changed (another track, its cut or its effects). */
+  onLiveChange: () => void = () => {};
   /** 「ドラムキットを開く」: the page shows the kit view. */
   onOpenKit: () => void = () => {};
   /** A drum track's rows as the roll shows them: the GM key of each (top to bottom). */
@@ -389,6 +391,13 @@ export class RollPanel {
   }
 
   /** The song's tempo (the sampling side can take it for its export length). */
+  /** The keyboard in the 曲 view: the selected track — its cut (or the kit, for a drum track) and its effects. */
+  liveTarget(): { instrument: string | null; drum: boolean; fx: FxSettings } {
+    const t = this.track;
+    const own = t.kind !== "drum" && t.instrument && t.instrument !== BACKING ? t.instrument : null;
+    return { instrument: own, drum: t.kind === "drum", fx: t.fx };
+  }
+
   get bpm(): number {
     return this.project.bpm;
   }
@@ -665,6 +674,7 @@ export class RollPanel {
           this.reload();
           this.showRoot();
           this.scheduleSave();
+          this.onLiveChange();
         });
       }
       const mute = button("M", `small toggle${t.mute ? " on" : ""}`, () => {
@@ -946,9 +956,9 @@ export class RollPanel {
     const step = this.stepBeats;
     this.roll.insertNote(this.stepChordStart, step, pitch, this.roll.defaultVelocity || DEFAULT_VELOCITY, chord);
     this.stepHistory.push({ start: this.stepChordStart, pitch });
+    // (It sounds through the keyboard itself: the page plays every key, through the track's effects in this view.)
     if (!chord || !this.stepLastChord) this.stepLastChord = { start: this.stepChordStart, pitches: [] };
     this.stepLastChord.pitches.push(pitch);
-    this.preview(pitch);
     this.stepTo(this.stepChordStart + step);
     return true;
   }
@@ -998,6 +1008,7 @@ export class RollPanel {
     t.fx = fx;
     this.client.setTrackMix(t.id, { gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, fx });
     this.scheduleSave();
+    this.onLiveChange();
   }
 
   /** The effects on the whole mix. */

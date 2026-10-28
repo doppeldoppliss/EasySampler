@@ -32,7 +32,8 @@ export type ToEngine =
   | { type: "hold"; sec: number }
   | { type: "tempo"; bpm: number }
   // The keyboard: which instrument it plays, through which effects.
-  | { type: "live"; instrument: string | null; fx: FxSettings | null }
+  // master: the keyboard goes through the master effects too (the 曲 view: heard as in the song); otherwise it bypasses them.
+  | { type: "live"; instrument: string | null; fx: FxSettings | null; master?: boolean }
   | { type: "noteOn"; note: number; velocity: number }
   | { type: "noteOff"; note: number }
   | { type: "allOff" }

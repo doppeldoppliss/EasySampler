@@ -200,10 +200,11 @@ export class EngineClient {
   private liveInstrument: string = CURRENT_INSTRUMENT;
 
   /** What the keyboard plays, and through which effects. */
-  setLive(instrument: string | null, fx: FxSettings | null): void {
+  /** What the keyboard plays, through which effects, and whether through the master too (the 曲 view). */
+  setLive(instrument: string | null, fx: FxSettings | null, master = false): void {
     if (instrument) this.liveInstrument = instrument;
     this.pending = this.pending.filter((m) => m.type !== "live");
-    this.post({ type: "live", instrument, fx });
+    this.post({ type: "live", instrument, fx, master });
   }
 
   /**

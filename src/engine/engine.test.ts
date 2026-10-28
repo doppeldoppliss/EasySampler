@@ -655,3 +655,22 @@ describe("Engine: the raw drum preset (無加工・持続語尾なし)", () => {
     for (const t of [0.05, 0.15, 0.3]) expect(Math.abs(20 * Math.log10(at(out, t) / at(hit, t + markers.rangeStart)))).toBeLessThan(2.5);
   });
 });
+
+describe("Engine: resampling presets leave the pitch shaping unused", () => {
+  it("sounds the same whatever 平坦化 / 整え方 / リチューン say", async () => {
+    const { PRESETS } = await import("../instrument/types");
+    const vowel = synthVoice({ sampleRate: SR, durationSec: 0.6, pitch: demoPhrasePitch(57, 0.6) });
+    const render = (over: Partial<InstrumentParams>) => {
+      const { engine, analysis } = setup(vowel);
+      const base = PRESETS.find((p) => p.id === "raw")!.apply({ ...DEFAULT_PARAMS, root: analysis.root!.midi });
+      engine.setInstrument(analysis.markers, { ...base, ...over });
+      return play(engine, 62, 0.3, 0.5);
+    };
+    const plain = render({});
+    const shaped = render({ flatten: 1, tune: { ...DEFAULT_PARAMS.tune, mode: "scale", retuneSec: 0.05 }, unvoicedGainDb: -20 });
+    expect(shaped.length).toBe(plain.length);
+    let diff = 0;
+    for (let i = 0; i < plain.length; i++) diff = Math.max(diff, Math.abs(plain[i] - shaped[i]));
+    expect(diff).toBeLessThan(1e-6);
+  });
+});

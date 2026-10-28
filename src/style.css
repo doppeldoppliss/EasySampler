@@ -1337,3 +1337,8 @@ details.sub.credit > summary {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Settings a preset does not use (pitch shaping when the cut is played by resampling): dimmed, out of reach. */
+.pitch-group.unused {
+  opacity: 0.4;
+}

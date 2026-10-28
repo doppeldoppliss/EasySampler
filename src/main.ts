@@ -737,6 +737,23 @@ function refreshSustainHelp(): void {
   sustainHelp.textContent = params.sustainEnabled ? (texts[params.sustainMode] ?? "") : "持続区間がオフなので、伸ばし方は使われません。";
 }
 
+// Played by resampling (無加工, ドラム・効果音…), a cut's pitch only follows the key, sped up or slowed down:
+// the pitch shaping and the voiceless-sound handling are not used, and are shown so (dimmed, out of reach).
+const pitchModeNote = el("p", { className: "fine help pitch-mode-note", hidden: true, textContent: "このプリセットは録音を早回し・遅回しして高さを変えるので、音程の調整(平坦化・整え方・リチューン)と子音・息の扱いは使われません。使うときは、ほかのプリセットを選ぶか「伸ばし方」を変えてください。" });
+const pitchGroups: HTMLElement[] = [];
+function pitchGroup(children: HTMLElement[]): HTMLElement {
+  const group = el("div", { className: "pitch-group" }, children);
+  pitchGroups.push(group);
+  return group;
+}
+controlsRefreshers.push(() => {
+  const resample = params.pitchMode === "resample";
+  pitchModeNote.hidden = !resample;
+  for (const group of pitchGroups) {
+    group.classList.toggle("unused", resample);
+    group.inert = resample;
+  }
+});
 const tunePanel = el("section", { className: "panel tune" }, [
   el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "音名" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]),
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
@@ -768,17 +785,22 @@ const tunePanel = el("section", { className: "panel tune" }, [
     (p, v) => (p.tail = { enabled: p.tail.enabled, limit: v }),
   ),
   el("p", { className: "fine help", textContent: "拍は「長さ」の BPM で数えます(打ち込みの再生中は曲の BPM)。上限に来た語尾は短くフェードして切れます。" }),
-  range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
-  select("音程の整え方", [["flatten", "判定した 1 音に寄せる"], ["scale", "音階の最寄りの音に、場所ごとに寄せる(複数の音を残す)"]], () => params.tune.mode, (p, v) => (p.tune.mode = v)),
-  tuneScaleRow,
-  range("音程を寄せる速さ(リチューン)", 0, 0.3, 0.005, () => params.tune.retuneSec, (p, v) => (p.tune.retuneSec = v), (v) => (v === 0 ? "即座(ケロケロ向き)" : ms(v))),
-  el("p", { className: "fine help", textContent: "判定した高さから音名へ寄せるときの速さ(Auto-Tune の Retune Speed)。即座だと貼り付いたように、30 ms 前後だと自然に、長いとゆっくりした狂いだけが直ります。" }),
-  el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなしでケロケロになります(プリセット「ケロケロ」)。" }),
+  pitchModeNote,
+  pitchGroup([
+    range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
+    select("音程の整え方", [["flatten", "判定した 1 音に寄せる"], ["scale", "音階の最寄りの音に、場所ごとに寄せる(複数の音を残す)"]], () => params.tune.mode, (p, v) => (p.tune.mode = v)),
+    tuneScaleRow,
+    range("音程を寄せる速さ(リチューン)", 0, 0.3, 0.005, () => params.tune.retuneSec, (p, v) => (p.tune.retuneSec = v), (v) => (v === 0 ? "即座(ケロケロ向き)" : ms(v))),
+    el("p", { className: "fine help", textContent: "判定した高さから音名へ寄せるときの速さ(Auto-Tune の Retune Speed)。即座だと貼り付いたように、30 ms 前後だと自然に、長いとゆっくりした狂いだけが直ります。" }),
+    el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなしでケロケロになります(プリセット「ケロケロ」)。" }),
+  ]),
   range("持続部の音量を揃える", 0, 1, 0.05, () => params.levelEven, (p, v) => (p.levelEven = v), pct, true),
-  range("子音・息(音程なし)の音量", -60, 12, 1, () => params.unvoicedGainDb, (p, v) => (p.unvoicedGainDb = v), (v) => (v <= -60 ? "消す" : `${v > 0 ? "+" : ""}${v} dB`), true),
   el("p", { className: "fine help", textContent: "素材の持続区間が減衰していても、伸ばした音の音量が一定になります。0% で録音どおりの強弱(頭部と語尾は常にそのまま)。" }),
-  check("子音や息(音程なし)も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v), true),
-  el("p", { className: "fine help", textContent: "子音・息・ノイズなど音程のない部分は、ふつうは移調しても元のまま鳴ります。オンにすると、その部分も音名に応じて細く / 太くなります(長さは変わりません)。音程そのものを付けたいときは、選択して「有声に」。" }),
+  pitchGroup([
+    range("子音・息(音程なし)の音量", -60, 12, 1, () => params.unvoicedGainDb, (p, v) => (p.unvoicedGainDb = v), (v) => (v <= -60 ? "消す" : `${v > 0 ? "+" : ""}${v} dB`), true),
+    check("子音や息(音程なし)も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v), true),
+    el("p", { className: "fine help", textContent: "子音・息・ノイズなど音程のない部分は、ふつうは移調しても元のまま鳴ります。オンにすると、その部分も音名に応じて細く / 太くなります(長さは変わりません)。音程そのものを付けたいときは、選択して「有声に」。" }),
+  ]),
   lengthBlock,
   vibratoPanel,
   timePanel,

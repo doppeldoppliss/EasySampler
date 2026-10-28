@@ -33,6 +33,7 @@ import type { FxSettings } from "../instrument/types";
 import { MidiParseError, parseMidi } from "../song/midi";
 import { songParts } from "../song/parts";
 import { drumRows, keyLabel, slotFor, type Kit } from "../daw/kit";
+import { arrange, type ArrangeKind } from "../daw/arrange";
 import { el } from "./dom";
 import { PianoRoll } from "./pianoRoll";
 
@@ -197,6 +198,14 @@ export class RollPanel {
   private readonly padList = el("div", { className: "pad-list" });
   private readonly playButton = button("▶ 再生", "big", () => this.toggle());
   private readonly loopButton = button("", "small", () => this.setLoopOn(!this.project.loop.on));
+  /** Whole stretches on every track (the loop range): a blank before it, deleted, or played twice. */
+  private readonly arrangeLabel = el("span", { className: "fine" });
+  private readonly insertButton = button("前に空白を挿入", "small", () => this.arrange("insert"), "ループ範囲と同じ長さの空白を、範囲の始まりに入れます(全トラック。後ろはずれます)");
+  private readonly removeRangeButton = button("削除して詰める", "small", () => this.arrange("delete"), "ループ範囲を全トラックから消し、後ろを詰めます");
+  private readonly duplicateRangeButton = button("複製(後ろに続ける)", "small", () => this.arrange("duplicate"), "ループ範囲を全トラックで、範囲のすぐ後ろにもう一度入れます。ループ範囲は複製した側へ移ります(続けて押すと、さらに後ろへ)");
+  private readonly arrangeUndoButton = button("小節の操作を取り消す", "small", () => this.undoArrange(), "直前の挿入・削除・複製の前に戻します(そのあと音符を編集すると戻せなくなります)");
+  /** The song before the last stretch operation (until a note is edited again). */
+  private arrangeUndo: string | null = null;
   private readonly bpmInput = el("input", { type: "number", min: "20", max: "400", step: "1", inputMode: "decimal", ariaLabel: "BPM" });
   private readonly gridSelect = el("select", { ariaLabel: "吸着" }, GRIDS.map(([v, label]) => el("option", { value: String(v), textContent: label })));
   private readonly selectToggle = button("", "small", () => {
@@ -369,6 +378,7 @@ export class RollPanel {
       ]),
       el("div", { className: "row roll-tools" }, [this.undoButton, this.redoButton, this.selectAllButton, this.copyButton, this.pasteButton, this.deleteButton, this.duplicateButton, ...this.nudgeButtons, ...this.transposeButtons, this.quantizeButton, this.sliceButton]),
       el("div", { className: "row roll-tools" }, [this.laneSelect, this.onionToggle, this.selectToggle, button("−", "small", () => this.roll.zoom(1 / 1.5), "縮小"), button("+", "small", () => this.roll.zoom(1.5), "拡大")]),
+      el("div", { className: "row roll-tools arrange-row" }, [this.arrangeLabel, this.insertButton, this.removeRangeButton, this.duplicateRangeButton, this.arrangeUndoButton]),
       el("div", { className: "row step-input" }, [this.stepToggle, this.stepRestButton, this.stepTieButton, this.stepBackButton, this.stepHelp]),
       this.roll.element,
       el("p", {
@@ -530,6 +540,7 @@ export class RollPanel {
   }
 
   private changed(notes: Note[]): void {
+    this.arrangeUndo = null;
     this.track.notes = this.track.kind === "drum" ? notes.map((n) => ({ ...n, pitch: this.rowKeys[n.pitch] ?? n.pitch })) : notes;
     this.closeMenu();
     this.info.textContent = "";
@@ -685,6 +696,55 @@ export class RollPanel {
 
   private sendMasterAuto(): void {
     this.client.setMasterAuto(autoToSec(this.project.masterAuto, this.project.bpm));
+  }
+
+  /** Inserts, deletes or duplicates the loop range on every track (notes and lines). */
+  private arrange(kind: ArrangeKind): void {
+    const { start, end } = this.project.loop;
+    if (kind === "delete" && !window.confirm(`${this.rangeText()}を全トラックから削除して、後ろを詰めますか?(「小節の操作を取り消す」で戻せます)`)) return;
+    const before = JSON.stringify({ tracks: this.project.tracks.map((t) => ({ id: t.id, notes: t.notes, volumeAuto: t.volumeAuto, panAuto: t.panAuto })), masterAuto: this.project.masterAuto, loop: this.project.loop });
+    arrange(this.project, kind, start, end);
+    this.afterArrange();
+    this.arrangeUndo = before;
+    this.refreshButtons();
+    this.info.textContent = kind === "insert" ? "空白を入れました。" : kind === "delete" ? "削除して詰めました。" : "複製しました(ループ範囲は複製した側へ移りました)。";
+  }
+
+  private undoArrange(): void {
+    if (!this.arrangeUndo) return;
+    const before = JSON.parse(this.arrangeUndo) as { tracks: Pick<Track, "id" | "notes" | "volumeAuto" | "panAuto">[]; masterAuto: BeatPoint[]; loop: Project["loop"] };
+    for (const t of this.project.tracks) {
+      const was = before.tracks.find((b) => b.id === t.id);
+      if (!was) continue;
+      t.notes = was.notes;
+      t.volumeAuto = was.volumeAuto;
+      t.panAuto = was.panAuto;
+    }
+    this.project.masterAuto = before.masterAuto;
+    this.project.loop = before.loop;
+    this.afterArrange();
+    this.arrangeUndo = null;
+    this.refreshButtons();
+    this.info.textContent = "小節の操作を取り消しました。";
+  }
+
+  /** Every track changed at once: the roll shows the track afresh (the tracks' undo histories no longer fit). */
+  private afterArrange(): void {
+    this.histories.clear();
+    this.shownTrack = null;
+    this.roll.setLoop(this.project.loop);
+    this.showTrackInRoll();
+    this.renderTracks();
+    this.reload();
+    this.scheduleSave();
+  }
+
+  /** The loop range in words (bars when it is on bar lines). */
+  private rangeText(): string {
+    const { loop } = this.project;
+    const bpb = this.project.beatsPerBar;
+    const onBars = loop.start % bpb === 0 && loop.end % bpb === 0;
+    return onBars ? (loop.end - loop.start === bpb ? `${loop.end / bpb} 小節目` : `${loop.start / bpb + 1}〜${loop.end / bpb} 小節`) : `${+(loop.start + 1).toFixed(2)}〜${+loop.end.toFixed(2)} 拍目`;
   }
 
   private selectTrack(index: number): void {
@@ -1303,9 +1363,9 @@ export class RollPanel {
     this.undoButton.disabled = !this.roll.canUndo;
     this.redoButton.disabled = !this.roll.canRedo;
     const { loop } = this.project;
-    const bpb = this.project.beatsPerBar;
-    const onBars = loop.start % bpb === 0 && loop.end % bpb === 0;
-    const range = onBars ? (loop.end - loop.start === bpb ? `${loop.end / bpb} 小節目` : `${loop.start / bpb + 1}〜${loop.end / bpb} 小節`) : `${+(loop.start + 1).toFixed(2)}〜${+loop.end.toFixed(2)} 拍目`;
+    const range = this.rangeText();
+    this.arrangeLabel.textContent = `範囲(${range}、目盛りをドラッグで選ぶ):`;
+    this.arrangeUndoButton.disabled = this.arrangeUndo === null;
     this.loopButton.textContent = `ループ: ${loop.on ? `オン(${range})` : "オフ"}`;
     this.loopButton.classList.toggle("on", loop.on);
     this.selectToggle.textContent = `範囲選択: ${this.roll.selectMode ? "オン" : "オフ"}`;

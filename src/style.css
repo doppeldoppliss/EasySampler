@@ -894,22 +894,26 @@ details.hint > p {
 }
 
 /* Round 3: the effects panel folds; the root nudge sits with its readout; the head pill is a label, not a switch. */
-details.fx-panel > summary {
+details.fx-panel > summary,
+details.roll-panel > summary {
   cursor: pointer;
   list-style: none;
 }
 
-details.fx-panel > summary::-webkit-details-marker {
+details.fx-panel > summary::-webkit-details-marker,
+details.roll-panel > summary::-webkit-details-marker {
   display: none;
 }
 
-details.fx-panel > summary::before {
+details.fx-panel > summary::before,
+details.roll-panel > summary::before {
   content: "▸";
   margin-right: 6px;
   color: var(--muted);
 }
 
-details.fx-panel[open] > summary::before {
+details.fx-panel[open] > summary::before,
+details.roll-panel[open] > summary::before {
   content: "▾";
 }
 

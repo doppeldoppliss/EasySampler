@@ -31,6 +31,24 @@ import { el } from "./dom";
 import { PianoRoll } from "./pianoRoll";
 
 const STORE_KEY = "project";
+/** Whether the 打ち込み panel was left open (this browser only). */
+const OPEN_KEY = "easysampler.roll.open";
+
+function remembered(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function remember(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // (private mode: not kept)
+  }
+}
 const COARSE = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 /** How far past the last note playback runs before it stops on its own (beats). */
 const END_PAD_BEATS = 2;
@@ -68,7 +86,9 @@ export interface InstrumentOption {
 }
 
 export class RollPanel {
-  readonly element: HTMLElement;
+  readonly element: HTMLDetailsElement;
+  /** What the folded panel says about the song (tracks, notes). */
+  private readonly summaryInfo = el("span", { className: "fine" });
   readonly roll = new PianoRoll();
   /** Playback started or stopped (the page stops its other players). */
   onPlayingChange: (playing: boolean) => void = () => {};
@@ -201,8 +221,10 @@ export class RollPanel {
       this.scheduleSave();
     });
 
-    this.element = el("section", { className: "panel roll-panel" }, [
-      el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "打ち込み" }), this.importButton]),
+    // Folded until opened (and as it was left): the song side is there when wanted, not always in the way.
+    this.element = el("details", { className: "panel roll-panel", open: remembered(OPEN_KEY) === "open" }, [
+      el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "打ち込み(曲を作る)" }), this.summaryInfo]),
+      el("div", { className: "row" }, [this.importButton]),
       el("div", { className: "row roll-transport" }, [
         this.playButton,
         this.loopButton,
@@ -233,6 +255,11 @@ export class RollPanel {
       ]),
       this.exportStatus,
     ]);
+    this.element.addEventListener("toggle", () => {
+      remember(OPEN_KEY, this.element.open ? "open" : "closed");
+      if (this.element.open) this.roll.draw();
+      else this.setStepMode(false);
+    });
     this.applyProject();
   }
 
@@ -430,7 +457,14 @@ export class RollPanel {
     this.scheduleSave();
   }
 
+  /** The folded panel's line: how big the song is, and whether it plays. */
+  private summarize(): void {
+    const notes = this.project.tracks.reduce((n, t) => n + t.notes.length, 0);
+    this.summaryInfo.textContent = `トラック ${this.project.tracks.length} 本・音符 ${notes} 個${this.playing ? "・再生中" : ""}`;
+  }
+
   private renderTracks(): void {
+    this.summarize();
     const rows = this.project.tracks.map((t, i) => {
       const selected = i === this.selected;
       const name = el("input", { type: "text", value: t.name, className: "track-name", ariaLabel: "トラックの名前", maxLength: 30 });
@@ -598,7 +632,7 @@ export class RollPanel {
    */
   stepNote(pitch: number, down: boolean): boolean {
     if (!down) return this.stepHeld.delete(pitch);
-    if (!this.stepMode || this.playing || this.track.kind === "drum") return false;
+    if (!this.stepMode || !this.element.open || this.playing || this.track.kind === "drum") return false;
     const chord = this.stepHeld.size > 0;
     if (!chord) this.stepChordStart = secToBeats(this.from, this.project.bpm);
     this.stepHeld.add(pitch);
@@ -751,6 +785,7 @@ export class RollPanel {
     this.sendLoop();
     this.startedAt = this.client.playSong(this.from);
     this.playButton.textContent = "■ 停止";
+    this.summarize();
     this.onPlayingChange(true);
     cancelAnimationFrame(this.frame);
     const tick = () => {
@@ -776,6 +811,7 @@ export class RollPanel {
     this.client.stopSong();
     this.client.setTempo(this.restingBpm());
     this.playButton.textContent = "▶ 再生";
+    this.summarize();
     this.roll.setPlayhead(secToBeats(this.from, this.project.bpm));
     this.showPosition(this.from);
     this.onPlayingChange(false);

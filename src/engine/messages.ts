@@ -11,8 +11,10 @@ import type { PreparedSource } from "./engine";
 
 export interface TrackSpec extends MixSettings {
   id: string;
-  /** The instrument the notes play on, "backing" for the plain backing synth, or "drum" for rendered one-shots. */
-  instrument: string | "backing" | "drum";
+  /** The instrument the notes play on, "backing" for the plain backing synth, "drum" for rendered one-shots, or "audio" for clips. */
+  instrument: string | "backing" | "drum" | "audio";
+  /** An audio track: note i plays clip i (a material's recording from an offset). */
+  clips?: { material: string; offsetSec: number }[];
   notes: SeqNote[];
   /** A drum track: the one-shot (by sample id) each row plays; a note's pitch is its row. */
   samples?: (string | null)[];

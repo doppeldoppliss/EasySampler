@@ -16,6 +16,91 @@ const CHOKE: ReadonlyMap<number, number> = new Map([
 const CHOKE_FADE = 240;
 
 /** An Engine as a track's sound, remembering which instrument and source it was set up with. */
+/** A clip of an audio track: its material's recording (looked up when it starts), from offsetSec in. */
+export interface ClipSpec {
+  material: string;
+  offsetSec: number;
+}
+
+const CLIP_FADE_SEC = 0.004;
+
+/**
+ * An audio track: note i starts clip i (its recording from its offset, as recorded); the note's
+ * end stops it. `resume` starts a clip part-way (playback that starts inside it).
+ */
+export class ClipSound implements TrackSound {
+  clips: ClipSpec[] = [];
+  private readonly sampleRate: number;
+  /** The recordings by material id (at this sample rate), or null when not loaded. */
+  private readonly lookup: (material: string) => Float32Array[] | null;
+  private voices: { clip: number; channels: Float32Array[]; pos: number; gain: number; age: number; stopping: number }[] = [];
+  private readonly fade: number;
+
+  constructor(sampleRate: number, lookup: (material: string) => Float32Array[] | null) {
+    this.sampleRate = sampleRate;
+    this.lookup = lookup;
+    this.fade = Math.max(1, Math.round(CLIP_FADE_SEC * sampleRate));
+  }
+
+  noteOn(note: number, velocity: number): void {
+    this.resume(note, 0, velocity);
+  }
+
+  /** Starts clip `note` `intoSec` seconds in. */
+  resume(note: number, intoSec: number, velocity: number): void {
+    const clip = this.clips[note];
+    const channels = clip ? this.lookup(clip.material) : null;
+    if (!clip || !channels?.length) return;
+    this.stop(note);
+    const pos = Math.round((clip.offsetSec + intoSec) * this.sampleRate);
+    if (pos >= channels[0].length) return;
+    this.voices.push({ clip: note, channels, pos, gain: velocity, age: 0, stopping: -1 });
+  }
+
+  private stop(note: number): void {
+    for (const v of this.voices) if (v.clip === note && v.stopping < 0) v.stopping = this.fade;
+  }
+
+  noteOff(note: number): void {
+    this.stop(note);
+  }
+
+  allOff(): void {
+    for (const v of this.voices) if (v.stopping < 0) v.stopping = this.fade;
+  }
+
+  render(left: Float32Array, right: Float32Array, frames: number): void {
+    left.fill(0, 0, frames);
+    right.fill(0, 0, frames);
+    for (const v of this.voices) {
+      const l = v.channels[0];
+      const r = v.channels[1] ?? l;
+      const n = l.length;
+      for (let i = 0; i < frames; i++) {
+        if (v.pos >= n || v.stopping === 0) {
+          v.stopping = 0;
+          break;
+        }
+        // Short fades where it starts (also part-way) and where it is stopped or the recording ends: no clicks.
+        let g = v.gain * Math.min(1, (v.age + 1) / this.fade, (n - v.pos) / this.fade);
+        if (v.stopping > 0) {
+          g *= v.stopping / this.fade;
+          v.stopping--;
+        }
+        left[i] += l[v.pos] * g;
+        right[i] += r[v.pos] * g;
+        v.pos++;
+        v.age++;
+      }
+    }
+    this.voices = this.voices.filter((v) => v.stopping !== 0);
+  }
+
+  idle(): boolean {
+    return this.voices.length === 0;
+  }
+}
+
 export class EngineSound implements TrackSound {
   readonly engine: Engine;
   constructor(sampleRate: number) {

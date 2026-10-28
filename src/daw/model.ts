@@ -18,17 +18,22 @@ export interface Note {
   length: number;
   /** MIDI note, 0–127. */
   pitch: number;
-  /** 0–1. */
+  /** 0–1 (an audio track's clip: its volume). */
   velocity: number;
+  /** An audio track's clip: the material it plays, from `offset` seconds into its recording (at its own speed and pitch). */
+  clip?: { material: string; offset: number };
 }
 
 export interface Track {
   /** Stable within the project (the mixer and the audio thread know a track by it). */
   id: string;
   name: string;
-  /** "melodic": one cut played at the notes' pitches. "drum": the project's drum kit, a note's pitch being its GM drum key (design.md 13.2). */
-  kind: "melodic" | "drum";
-  /** The cut it plays: "materialId/cutId" (design.md 13.1, a track = one cut), BACKING (簡易シンセ), or null when none is chosen. */
+  /**
+   * "melodic": one cut played at the notes' pitches. "drum": the project's drum kit, a note's pitch being its GM drum key (design.md 13.2).
+   * "audio": recordings placed on the timeline, each note a clip (`Note.clip`) on one row.
+   */
+  kind: "melodic" | "drum" | "audio";
+  /** The cut it plays: "materialId/cutId" (design.md 13.1, a track = one cut), BACKING (簡易シンセ), or null when none is chosen. An audio track: the material a new clip plays. */
   instrument: string | null;
   notes: Note[];
   /** The track's effects (design.md 13.1: effects are the song side's, not the cut's). */
@@ -113,6 +118,11 @@ export const BACKING = "backing";
 
 export function newTrack(name: string, instrument: string | null = null): Track {
   return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
+}
+
+/** An audio track: clips of materials on the timeline (a new clip plays `material`). */
+export function newAudioTrack(name: string, material: string | null): Track {
+  return { ...newTrack(name, material), kind: "audio" };
 }
 
 /** A drum track: it plays the project's kit, its notes on GM drum keys. */
@@ -247,6 +257,15 @@ export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false): 
   return out;
 }
 
+/** An audio track's clips as the player takes them: note i is clip i (`clips[i]`), from its start to its end (seconds). */
+export function clipsToSeq(notes: readonly Note[], tempo: Tempo): { notes: SeqNote[]; clips: { material: string; offsetSec: number }[] } {
+  const playing = notes.filter((n) => n.clip);
+  return {
+    notes: playing.map((n, i) => ({ start: beatsToSec(n.start, tempo), end: beatsToSec(n.start + n.length, tempo), note: i, velocity: n.velocity, drum: false })),
+    clips: playing.map((n) => ({ material: n.clip!.material, offsetSec: n.clip!.offset })),
+  };
+}
+
 /** A MIDI file's part as editable notes (beats as written, whatever the file's tempo). */
 export function fromSongNotes(notes: readonly SongNote[]): Note[] {
   return sortNotes(
@@ -297,13 +316,16 @@ export function sanitizeProject(raw: unknown): Project {
                 length: num(n.length, 1, MIN_LENGTH, 10_000),
                 pitch: clampPitch(oldRows ? rowKey(Math.round(num(n.pitch, 0, 0, 127))) : num(n.pitch, 60, 0, 127)),
                 velocity: num(n.velocity, DEFAULT_VELOCITY, 0.01, 1),
+                ...(tr.kind === "audio" && n.clip && typeof n.clip === "object" && typeof (n.clip as Record<string, unknown>).material === "string"
+                  ? { clip: { material: (n.clip as Record<string, unknown>).material as string, offset: num((n.clip as Record<string, unknown>).offset, 0, 0, 100_000) } }
+                  : {}),
               }))
           : [];
         return {
           id: typeof tr.id === "string" && tr.id ? tr.id : newTrackId(),
           name: typeof tr.name === "string" && tr.name ? tr.name : `トラック ${i + 1}`,
-          kind: tr.kind === "drum" ? ("drum" as const) : ("melodic" as const),
-          instrument: typeof tr.instrument === "string" && (tr.instrument.includes("/") || tr.instrument === BACKING) ? tr.instrument : null,
+          kind: tr.kind === "drum" ? ("drum" as const) : tr.kind === "audio" ? ("audio" as const) : ("melodic" as const),
+          instrument: typeof tr.instrument === "string" && (tr.instrument.includes("/") || tr.instrument === BACKING || tr.kind === "audio") ? tr.instrument : null,
           notes: sortNotes(notes),
           fx: sanitizeFx(tr.fx),
           gain: num(tr.gain, 1, 0, 4),

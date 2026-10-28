@@ -43,6 +43,8 @@ export function writeMidi(project: Project): Uint8Array<ArrayBuffer> {
   const chunks = [chunk(conductor)];
   let channel = 0;
   for (const track of project.tracks) {
+    // (An audio track's clips are recordings, not notes.)
+    if (track.kind === "audio") continue;
     const drum = track.kind === "drum";
     const ch = drum ? 9 : channel;
     if (!drum) channel = channel + 1 === 9 ? 10 : (channel + 1) % 16;

@@ -7,7 +7,7 @@ import { FxChain } from "../fx/chain";
 import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
 import { SongPlayer, type AutoPoint, type PlayerTrack, type TrackSound } from "../song/player";
-import { BackingSound, EngineSound, SampleSound } from "../song/sounds";
+import { BackingSound, ClipSound, EngineSound, SampleSound } from "../song/sounds";
 
 export interface RenderInstrument {
   source: PreparedSource;
@@ -27,6 +27,8 @@ export interface RenderTrack {
   drumKeys?: (number | null)[];
   /** A track on the plain backing synth (簡易シンセ). */
   backing?: boolean;
+  /** An audio track: note i plays clip i (a recording at this sample rate, from offsetSec in). */
+  clips?: { channels: Float32Array[] | null; offsetSec: number }[];
   notes: SeqNote[];
   /** Portamento (seconds; 0 or absent = off). */
   glide?: number;
@@ -87,6 +89,11 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
       sound = s;
     } else if (t.backing) {
       sound = new BackingSound(sr);
+    } else if (t.clips) {
+      const clips = t.clips;
+      const s = new ClipSound(sr, (material) => clips[Number(material)]?.channels ?? null);
+      s.clips = clips.map((c, i) => ({ material: String(i), offsetSec: c.offsetSec }));
+      sound = s;
     } else if (t.instrument) {
       const s = new EngineSound(sr);
       s.engine.setSource(t.instrument.source);

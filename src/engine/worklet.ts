@@ -9,7 +9,7 @@
 import { FxChain } from "../fx/chain";
 import type { InstrumentParams, Markers } from "../instrument/types";
 import { SongPlayer, type TrackSound } from "../song/player";
-import { BackingSound, EngineSound, SampleSound } from "../song/sounds";
+import { BackingSound, ClipSound, EngineSound, SampleSound } from "../song/sounds";
 import type { PreparedSource } from "./engine";
 import type { FromEngine, ToEngine, TrackSpec } from "./messages";
 
@@ -99,9 +99,18 @@ class EngineProcessor extends AudioWorkletProcessor {
     this.song.stop();
     const next = new Map<string, TrackSound>();
     for (const t of tracks) {
-      const kind = t.instrument === "backing" ? BackingSound : t.instrument === "drum" ? SampleSound : EngineSound;
+      const kind = t.instrument === "backing" ? BackingSound : t.instrument === "drum" ? SampleSound : t.instrument === "audio" ? ClipSound : EngineSound;
       let sound = this.trackSounds.get(t.id);
-      if (!(sound instanceof kind)) sound = kind === EngineSound ? new EngineSound(sampleRate) : kind === SampleSound ? new SampleSound(sampleRate) : new BackingSound(sampleRate);
+      if (!(sound instanceof kind))
+        sound =
+          kind === EngineSound
+            ? new EngineSound(sampleRate)
+            : kind === SampleSound
+              ? new SampleSound(sampleRate)
+              : kind === ClipSound
+                ? new ClipSound(sampleRate, (material) => this.sources.get(material)?.channels ?? null)
+                : new BackingSound(sampleRate);
+      if (sound instanceof ClipSound) sound.clips = t.clips ?? [];
       if (sound instanceof EngineSound && sound.instrument !== t.instrument) this.apply(sound, t.instrument);
       if (sound instanceof EngineSound) {
         sound.setGlide(t.glide ?? 0);

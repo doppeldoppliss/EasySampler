@@ -15,7 +15,9 @@ import {
   DEFAULT_VELOCITY,
   emptyProject,
   fromSongNotes,
+  newAudioTrack,
   newDrumTrack,
+  clipsToSeq,
   newTrack,
   sanitizeProject,
   secToBeats,
@@ -369,7 +371,7 @@ export class RollPanel {
       el("div", { className: "row song-seek-row" }, [this.seekBar]),
       this.tempoList,
       this.trackList,
-      el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack()), button("＋ ドラムトラックを追加", "small", () => this.addTrack(true))]),
+      el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack()), button("＋ ドラムトラックを追加", "small", () => this.addTrack("drum")), button("＋ 音声トラックを追加", "small", () => this.addTrack("audio"), "素材の録音を、高さも速さも変えずにそのまま並べるトラック(声ネタ・効果音・ループ素材)")]),
       this.padList,
       this.glideRow,
       el("div", { className: "row roll-defaults" }, [
@@ -424,7 +426,7 @@ export class RollPanel {
   /** The keyboard in the 曲 view: the selected track — its cut (or the kit, for a drum track) and its effects. */
   liveTarget(): { instrument: string | null; drum: boolean; fx: FxSettings } {
     const t = this.track;
-    const own = t.kind !== "drum" && t.instrument && t.instrument !== BACKING ? t.instrument : null;
+    const own = t.kind === "melodic" && t.instrument && t.instrument !== BACKING ? t.instrument : null;
     return { instrument: own, drum: t.kind === "drum", fx: t.fx };
   }
 
@@ -533,7 +535,7 @@ export class RollPanel {
     this.roll.setBeatsPerBar(this.project.beatsPerBar);
     this.roll.setLoop(this.project.loop);
     this.showTrackInRoll();
-    if (this.track.kind !== "drum") this.roll.frame(60);
+    if (this.track.kind === "melodic") this.roll.frame(60);
     this.sendLoop();
     this.client.setMasterFx(this.project.masterFx);
     this.renderTracks();
@@ -627,7 +629,11 @@ export class RollPanel {
     if (this.shownTrack && this.shownTrack !== t.id) {
       this.histories.set(this.shownTrack, { ...this.roll.takeHistory(), rows: this.rowKeys.join() });
     }
-    this.glideRow.hidden = t.kind === "drum";
+    this.glideRow.hidden = t.kind !== "melodic";
+    const audio = t.kind === "audio";
+    this.roll.noteFactory = audio ? (start) => this.newClip(start) : null;
+    this.roll.splitNote = audio ? (n, at) => (n.clip ? { clip: { ...n.clip, offset: n.clip.offset + beatsToSec(at, this.project) - beatsToSec(n.start, this.project) } } : {}) : null;
+    this.roll.noteLabel = audio ? (n) => (n.clip ? (this.project.materials.find((x) => x.id === n.clip!.material)?.name ?? "(なくなった素材)") : "") : null;
     this.glideSelect.value = String(GLIDES.some(([v]) => v === t.glide) ? t.glide : 0);
     this.stepHeld.clear();
     this.stepHistory.length = 0;
@@ -646,6 +652,13 @@ export class RollPanel {
         return row < 0 ? null : row;
       };
       this.roll.setNotes(t.notes.map((n) => ({ ...n, pitch: this.rowKeys.indexOf(n.pitch) })));
+    } else if (audio) {
+      // One row: the clips side by side.
+      this.rowKeys = [];
+      this.roll.pitchToKey = null;
+      this.roll.keyToPitch = null;
+      this.roll.setRows(["音声"]);
+      this.roll.setNotes(t.notes.map((n) => ({ ...n, pitch: 0 })));
     } else {
       this.roll.pitchToKey = null;
       this.roll.keyToPitch = null;
@@ -659,7 +672,7 @@ export class RollPanel {
       this.histories.delete(t.id);
       this.shownTrack = t.id;
     }
-    if (t.kind === "drum") this.roll.frame(0);
+    if (t.kind !== "melodic") this.roll.frame(0);
     this.showLane();
   }
 
@@ -758,6 +771,21 @@ export class RollPanel {
     this.scheduleSave();
   }
 
+  /** How long a material's recording is (seconds), when the page has it. */
+  materialSeconds: (id: string) => number | null = () => null;
+
+  /** A clip tapped onto an audio track: the track's material, whole, from its start. */
+  private newClip(start: number): Partial<Note> | null {
+    const material = this.track.instrument;
+    if (!material || !this.project.materials.some((m) => m.id === material)) {
+      this.info.textContent = "トラック一覧で、置く素材を選んでください。";
+      return null;
+    }
+    const sec = this.materialSeconds(material) ?? 2;
+    const from = beatsToSec(start, this.project);
+    return { pitch: 0, velocity: 1, length: Math.max(1 / 16, secToBeats(from + sec, this.project) - start), clip: { material, offset: 0 } };
+  }
+
   /** Inserts, deletes or duplicates the loop range on every track (notes and lines). */
   private arrange(kind: ArrangeKind): void {
     const { start, end } = this.project.loop;
@@ -822,9 +850,15 @@ export class RollPanel {
     this.onTrackChange();
   }
 
-  private addTrack(drum = false): void {
-    const name = drum ? `ドラム ${this.project.tracks.filter((x) => x.kind === "drum").length + 1}` : `トラック ${this.project.tracks.length + 1}`;
-    const t = drum ? newDrumTrack(name) : newTrack(name, this.editedInstrument);
+  private addTrack(kind: Track["kind"] = "melodic"): void {
+    const count = (k: Track["kind"]) => this.project.tracks.filter((x) => x.kind === k).length + 1;
+    const name = kind === "drum" ? `ドラム ${count("drum")}` : kind === "audio" ? `音声 ${count("audio")}` : `トラック ${this.project.tracks.length + 1}`;
+    const t =
+      kind === "drum"
+        ? newDrumTrack(name)
+        : kind === "audio"
+          ? newAudioTrack(name, this.project.editing ?? this.project.materials[0]?.id ?? null)
+          : newTrack(name, this.editedInstrument);
     this.project.tracks.push(t);
     this.selected = this.project.tracks.length - 1;
     this.showTrackInRoll();
@@ -875,11 +909,19 @@ export class RollPanel {
         t.name = name.value.trim() || `トラック ${i + 1}`;
         this.scheduleSave();
       });
-      const instrument: HTMLElement = t.kind === "drum" ? el("span", { className: "fine track-drum", textContent: `ドラムキット(${this.project.kit.slots.filter((x) => x.sample).length} 音)` }) : el("select", { ariaLabel: "鳴らす区間" }, [
-        el("option", { value: "", textContent: "(区間を選ぶ)" }),
-        ...this.options.map((o) => el("option", { value: o.id, textContent: o.label })),
-        el("option", { value: BACKING, textContent: "簡易シンセ(伴奏)" }),
-      ]);
+      const instrument: HTMLElement =
+        t.kind === "drum"
+          ? el("span", { className: "fine track-drum", textContent: `ドラムキット(${this.project.kit.slots.filter((x) => x.sample).length} 音)` })
+          : t.kind === "audio"
+            ? el("select", { ariaLabel: "置く素材", title: "ピアノロールをタップしたとき置く素材(置いたクリップはそのまま)" }, [
+                el("option", { value: "", textContent: "(置く素材を選ぶ)" }),
+                ...this.project.materials.map((m) => el("option", { value: m.id, textContent: `置く素材: ${m.name}` })),
+              ])
+            : el("select", { ariaLabel: "鳴らす区間" }, [
+                el("option", { value: "", textContent: "(区間を選ぶ)" }),
+                ...this.options.map((o) => el("option", { value: o.id, textContent: o.label })),
+                el("option", { value: BACKING, textContent: "簡易シンセ(伴奏)" }),
+              ]);
       if (instrument instanceof HTMLSelectElement) {
         instrument.value = t.instrument ?? "";
         instrument.addEventListener("change", () => {
@@ -914,7 +956,12 @@ export class RollPanel {
       });
       const remove = button("×", "small", () => this.removeTrack(i), "このトラックを消す");
       // A melodic track with no cut plays nothing: it says so. Effects on: an FX mark that opens them.
-      const silent = t.kind !== "drum" && !t.instrument ? el("span", { className: "warn fine", textContent: "区間を選ぶと鳴ります" }) : null;
+      const silent =
+        t.kind === "melodic" && !t.instrument
+          ? el("span", { className: "warn fine", textContent: "区間を選ぶと鳴ります" })
+          : t.kind === "audio" && !t.notes.length
+            ? el("span", { className: "fine", textContent: "ピアノロールをタップで素材を置きます" })
+            : null;
       const fxOn = Object.values(t.fx).some((g) => (g as { on?: boolean }).on);
       const fxMark = fxOn
         ? button("FX", "small toggle on fx-mark", () => {
@@ -948,7 +995,17 @@ export class RollPanel {
   /** A drum track: its rows are the kit's sounds (and the keys its notes use); they are set up in the kit view. */
   private renderPads(): void {
     const t = this.track;
-    this.padList.hidden = t.kind !== "drum";
+    this.padList.hidden = t.kind === "melodic";
+    if (t.kind === "audio") {
+      this.padList.replaceChildren(
+        el("p", {
+          className: "fine",
+          textContent:
+            "音声トラックは、素材の録音を高さも速さも変えずにそのまま並べます。空いたところをタップで「置く素材」をまるごと置き、ドラッグで動かす、右端で長さ、「スライス」で分ける(後ろ半分は続きから鳴る)、下の欄の「強弱」で音量。曲の途中から再生しても、クリップの途中から鳴ります。",
+        }),
+      );
+      return;
+    }
     if (t.kind !== "drum") {
       this.padList.replaceChildren();
       return;
@@ -1003,6 +1060,10 @@ export class RollPanel {
   /** The keys mark the note the selected track's cut is made for. */
   private showRoot(): void {
     if (this.track.kind === "drum") return;
+    if (this.track.kind === "audio") {
+      this.roll.setRoot(null);
+      return;
+    }
     const option = this.options.find((o) => o.id === this.track.instrument);
     this.roll.setRoot(option ? option.note : null);
   }
@@ -1024,7 +1085,7 @@ export class RollPanel {
   /** オニオンスキン: the other melodic tracks' notes behind this one's. */
   private refreshGhosts(): void {
     const t = this.track;
-    this.roll.setGhosts(this.onion && t.kind !== "drum" ? this.project.tracks.filter((o) => o !== t && o.kind !== "drum").flatMap((o) => o.notes) : []);
+    this.roll.setGhosts(this.onion && t.kind === "melodic" ? this.project.tracks.filter((o) => o !== t && o.kind === "melodic").flatMap((o) => o.notes) : []);
   }
 
   private slice(): void {
@@ -1057,8 +1118,8 @@ export class RollPanel {
       item("すべて選択", () => this.roll.selectAll(), this.roll.notes.length > 0),
       item("選択を解除", () => this.roll.selectNone(), sel > 0),
       el("hr"),
-      item("1 オクターブ上げる", () => this.roll.transposeSelected(12), sel > 0 && this.track.kind !== "drum"),
-      item("1 オクターブ下げる", () => this.roll.transposeSelected(-12), sel > 0 && this.track.kind !== "drum"),
+      item("1 オクターブ上げる", () => this.roll.transposeSelected(12), sel > 0 && this.track.kind === "melodic"),
+      item("1 オクターブ下げる", () => this.roll.transposeSelected(-12), sel > 0 && this.track.kind === "melodic"),
       item("クオンタイズ", () => this.quantize(), this.roll.notes.length > 0),
       item("再生位置でスライス", () => this.slice(), this.roll.notes.length > 0),
       item(`一括変更…(${sel ? `選んだ ${sel} 個` : "すべて"})`, () => this.openBatch(clientX, clientY), this.roll.notes.length > 0),
@@ -1190,7 +1251,7 @@ export class RollPanel {
    */
   stepNote(pitch: number, down: boolean): boolean {
     if (!down) return this.stepHeld.delete(pitch);
-    if (!this.stepMode || !this.visible || this.playing || this.track.kind === "drum") return false;
+    if (!this.stepMode || !this.visible || this.playing || this.track.kind !== "melodic") return false;
     const chord = this.stepHeld.size > 0;
     if (!chord) this.stepChordStart = this.stepAt;
     this.stepHeld.add(pitch);
@@ -1270,8 +1331,13 @@ export class RollPanel {
   private trackSpecs(): TrackSpec[] {
     const kit = this.kitSpec();
     return this.project.tracks
-      .filter((t) => t.kind === "drum" || t.instrument !== null)
-      .map((t) => ({
+      .filter((t) => t.kind !== "melodic" || t.instrument !== null)
+      .map((t) => {
+        if (t.kind === "audio") {
+          const seq = clipsToSeq(t.notes, this.project);
+          return { id: t.id, instrument: "audio", notes: seq.notes, clips: seq.clips, ...this.mixOf(t) };
+        }
+        return {
         id: t.id,
         instrument: t.kind === "drum" ? "drum" : t.instrument!,
         samples: t.kind === "drum" ? kit.samples : undefined,
@@ -1279,13 +1345,14 @@ export class RollPanel {
         notes: toSeqNotes(t.notes, this.project, t.kind !== "drum" && t.glide > 0),
         glide: t.kind === "drum" ? 0 : t.glide,
         ...this.mixOf(t),
-      }));
+        };
+      });
   }
 
   // ------------------------------------------------------------- playback
 
   private preview(pitch: number): void {
-    if (this.playing) return;
+    if (this.playing || this.track.kind === "audio") return;
     if (this.track.kind === "drum") {
       const key = this.rowKeys[pitch];
       if (key !== undefined) this.onKitHit(key);
@@ -1441,12 +1508,12 @@ export class RollPanel {
     for (const b of this.nudgeButtons) b.disabled = none;
     this.sliceButton.disabled = this.roll.notes.length === 0;
     this.onionToggle.classList.toggle("on", this.onion);
-    this.onionToggle.hidden = this.track.kind === "drum";
-    const drum = this.track.kind === "drum";
+    this.onionToggle.hidden = this.track.kind !== "melodic";
+    const drum = this.track.kind !== "melodic";
     this.stepToggle.textContent = `ステップ入力: ${this.stepMode && !drum ? "オン" : "オフ"}`;
     this.stepToggle.classList.toggle("on", this.stepMode && !drum);
     this.stepToggle.disabled = drum;
-    this.stepToggle.title = drum ? "ドラムトラックでは使えません(行をタップして入れてください)" : "鍵盤で弾いた音が、再生位置に音符として入ります";
+    this.stepToggle.title = drum ? "ドラム・音声のトラックでは使えません" : "鍵盤で弾いた音が、再生位置に音符として入ります";
     this.stepRestButton.hidden = this.stepBackButton.hidden = this.stepHelp.hidden = this.stepTieButton.hidden = !this.stepMode || drum;
   }
 }

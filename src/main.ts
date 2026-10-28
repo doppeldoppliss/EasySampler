@@ -52,7 +52,7 @@ import { renderSong, type RenderTrack } from "./daw/songRender";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, newSlot, renderSlot, slotFor, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
-import { autoToSec, BACKING, beatsToSec, tempoMapSec, toSeqNotes, type Tempo } from "./daw/model";
+import { autoToSec, BACKING, beatsToSec, clipsToSeq, tempoMapSec, toSeqNotes, type Tempo } from "./daw/model";
 import { autoValue, type AutoPoint } from "./song/player";
 import { zipStore, type ZipEntry } from "./export/zip";
 import { encodeWavBytes } from "./audio/wav";
@@ -1910,6 +1910,10 @@ function forgetKitAudioIfUnused(id: string | null): void {
   void rollPanel.flush().then(() => whenSaved()).then(() => forget(`audio:${id}`));
 }
 rollPanel.kitSoundReady = (key) => kitBuffers.has(key);
+rollPanel.materialSeconds = (id) => {
+  const m = library.get(id)?.material;
+  return m ? m.channels[0].length / m.sampleRate : null;
+};
 
 /** The longest a drum sound is kept (seconds): a hit, not a song. */
 const KIT_MAX_SEC = 20;
@@ -3058,6 +3062,22 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
       volumeAuto: renderLine(t.volumeAuto, project, range),
       panAuto: renderLine(t.panAuto, project, range),
     };
+    if (t.kind === "audio") {
+      // Clips: their recordings (as the page has them). A loop range starting inside a clip starts it part-way.
+      const seq = clipsToSeq(t.notes, project);
+      const clips = seq.clips.map((c) => ({ channels: library.get(c.material)?.material.source.channels ?? null, offsetSec: c.offsetSec }));
+      let notes = seq.notes;
+      if (range) {
+        notes = notes.map((n) => {
+          if (!(n.start < range.startSec && n.end > range.startSec)) return n;
+          clips[n.note] = { ...clips[n.note], offsetSec: clips[n.note].offsetSec + range.startSec - n.start };
+          return { ...n, start: range.startSec };
+        });
+        notes = loopNotes(notes, range.startSec, range.lengthSec);
+      }
+      out.push({ id: t.id, instrument: null, clips, notes, ...mix });
+      continue;
+    }
     const all = toSeqNotes(t.notes, project, t.kind !== "drum" && t.glide > 0);
     const notes = range ? loopNotes(all, range.startSec, range.lengthSec) : all;
     if (t.kind === "drum") {

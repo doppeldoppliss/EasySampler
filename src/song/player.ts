@@ -21,6 +21,8 @@ export interface TrackSound {
   idle(): boolean;
   /** The tempo (for tempo-synced settings), when the song's tempo changes. */
   setTempo?(bpm: number): void;
+  /** A sound that can start a note part-way (an audio clip): playback starting inside a note picks it up there. */
+  resume?(note: number, intoSec: number, velocity: number): void;
 }
 
 /** A point of an automation line: song seconds, and the value there (straight lines between points). */
@@ -87,6 +89,8 @@ class Lane {
   readonly fx: FxChain;
   mix: MixSettings;
   events: SongEvent[] = [];
+  /** The notes as spans (song frames), for a sound that can start one part-way. */
+  spans: { start: number; end: number; note: number; velocity: number }[] = [];
   cursor = 0;
   /** Frames of the current block already rendered into the scratch buffers. */
   done = 0;
@@ -159,6 +163,7 @@ export class SongPlayer {
       // Note-offs before note-ons at the same frame (a repeated note re-strikes).
       events.sort((a, b) => a.frame - b.frame || Number(a.on) - Number(b.on));
       lane.events = events;
+      lane.spans = t.sound.resume ? t.notes.map((n) => ({ start: Math.round(n.start * sr), end: Math.round(n.end * sr), note: n.note, velocity: n.velocity })) : [];
       return lane;
     });
     this.positioned = false;
@@ -228,6 +233,12 @@ export class SongPlayer {
     for (const lane of this.lanes) lane.sound.allOff();
   }
 
+  /** Notes already under way at song frame `at` start part-way, on a sound that can (an audio clip). */
+  private resumeAt(lane: Lane, at: number): void {
+    if (!lane.sound.resume) return;
+    for (const s of lane.spans) if (s.start < at && s.end > at) lane.sound.resume(s.note, (at - s.start) / this.sampleRate, s.velocity);
+  }
+
   /** The first event at or after song frame `songFrame`. */
   private static seek(events: readonly SongEvent[], songFrame: number): number {
     let lo = 0;
@@ -268,7 +279,10 @@ export class SongPlayer {
       if (!this.positioned && blockFrame + frames > this.startFrame) {
         // Late start (the worklet came up after the play message): begin where the song is by now.
         const at = songAt(Math.max(blockFrame, this.startFrame));
-        for (const lane of this.lanes) lane.cursor = SongPlayer.seek(lane.events, at);
+        for (const lane of this.lanes) {
+          lane.cursor = SongPlayer.seek(lane.events, at);
+          this.resumeAt(lane, at);
+        }
         this.positioned = true;
       }
       if (this.positioned) {
@@ -299,6 +313,7 @@ export class SongPlayer {
             SongPlayer.fill(lane, limit);
             lane.sound.allOff();
             lane.cursor = SongPlayer.seek(lane.events, loop.start);
+            this.resumeAt(lane, loop.start);
           }
           this.fromFrame = loop.start;
           this.startFrame = blockFrame + limit;

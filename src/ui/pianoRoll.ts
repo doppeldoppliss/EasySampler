@@ -112,6 +112,13 @@ export class PianoRoll {
   private longPress = 0;
   /** The velocity lane is shown under the notes. */
   private velocityLane = false;
+  /** What a note tapped onto empty grid is (an audio track's clip: its material and length), or null for none there. Unset: a plain note. */
+  noteFactory: ((start: number) => Partial<Note> | null) | null = null;
+  /** The right half of a note sliced at `at` (an audio clip: its recording goes on from there). */
+  splitNote: ((note: Note, at: number) => Partial<Note>) | null = null;
+  /** A label drawn in a note (an audio clip: its material's name). */
+  noteLabel: ((note: Note) => string) | null = null;
+
   /** The tempo changes, marked on the ruler. */
   private tempoMarks: { beat: number; bpm: number }[] = [];
 
@@ -219,6 +226,8 @@ export class PianoRoll {
   private scrollRow = 0;
 
   private get keysW(): number {
+    // (Short row names, e.g. an audio track's one row: a narrow column.)
+    if (this.rowNames && this.rowNames.length > 0 && this.rowNames.every((n) => n.length <= 3)) return KEYS_W + 8;
     return this.rowNames ? (COARSE ? 96 : 120) : KEYS_W;
   }
 
@@ -436,7 +445,7 @@ export class PianoRoll {
     if (!targets.length) return 0;
     this.edit(() => {
       for (const n of targets) {
-        const right: Note = { ...n, id: newId(), start: beat, length: n.start + n.length - beat };
+        const right: Note = { ...n, id: newId(), start: beat, length: n.start + n.length - beat, ...this.splitNote?.(n, beat) };
         n.length = beat - n.start;
         this.notesList.push(right);
         this.selected.add(right.id);
@@ -1084,7 +1093,9 @@ export class PianoRoll {
         if (this.rowNames && this.rowNames.length === 0) return; // a drum track with no rows yet
         // A tap on empty grid: a note there.
         const start = Math.max(0, snapDown(this.beatAt(x), this.grid));
-        const note: Note = { id: newId(), start, length: this.lastLength, pitch: this.pitchAt(y), velocity: this.defaultVelocity };
+        const made = this.noteFactory ? this.noteFactory(start) : {};
+        if (!made) return;
+        const note: Note = { id: newId(), start, length: this.lastLength, pitch: this.pitchAt(y), velocity: this.defaultVelocity, ...made };
         this.notesList.push(note);
         this.selected = new Set([note.id]);
         this.finishGesture();
@@ -1319,6 +1330,16 @@ export class PianoRoll {
       if (!rowsMode && x1 - x0 > 28 && this.rowH >= 12) {
         g.fillStyle = cssVar("--accent-text");
         g.fillText(NAMES[n.pitch % 12] + (Math.floor(n.pitch / 12) - 1), Math.max(this.keysW, x0) + 3, y + this.rowH / 2);
+      }
+      const label = this.noteLabel?.(n);
+      if (label && x1 - Math.max(this.keysW, x0) > 24) {
+        g.save();
+        g.beginPath();
+        g.rect(Math.max(this.keysW, x0), y, x1 - Math.max(this.keysW, x0), this.rowH);
+        g.clip();
+        g.fillStyle = cssVar("--accent-text");
+        g.fillText(label, Math.max(this.keysW, x0) + 3, y + this.rowH / 2);
+        g.restore();
       }
     }
 

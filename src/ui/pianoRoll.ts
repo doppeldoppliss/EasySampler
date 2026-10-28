@@ -16,11 +16,13 @@
 // button drag, or a finger dragged on empty grid.
 // The velocity lane (強弱, when shown) under the notes: drag across it to set
 // each note's velocity (only the selected notes', when some are selected).
+// Or a line (automation: volume, pan) in that lane: tap = a point there, drag
+// a point = move it, double-tap / double-click / right-click a point = remove it.
 // Keys (when the roll has the focus): Delete, Ctrl+A / C / X / V / D, arrows
 // (Shift = an octave), Ctrl+Z / Y, Space = play / stop, Esc,
 // Ctrl+PageUp / PageDown = the track before / after.
 
-import { clampPitch, DEFAULT_VELOCITY, MIN_LENGTH, newId, shifted, snap, snapDown, songEnd, sortNotes, type Note } from "../daw/model";
+import { clampPitch, DEFAULT_VELOCITY, MIN_LENGTH, newId, shifted, snap, snapDown, songEnd, sortNotes, type BeatPoint, type Note } from "../daw/model";
 import { cssVar } from "./dom";
 
 const KEYS_W = 44;
@@ -48,8 +50,20 @@ type Drag =
   | { kind: "resize"; anchor: Note; orig: Map<number, Note>; ctrl: boolean }
   | { kind: "ruler"; x: number; moved: boolean }
   | { kind: "velocity"; x: number; value: number }
+  | { kind: "point"; index: number; moved: boolean; x: number; y: number; added: boolean }
   | { kind: "scrollH"; grab: number }
   | { kind: "scrollV"; grab: number };
+
+/** A line (automation) shown in the lane in place of the velocities. */
+export interface LaneLine {
+  label: string;
+  points: BeatPoint[];
+  min: number;
+  max: number;
+  /** The value marked across the lane (the fader's level, the centre); a point dragged near it snaps to it. */
+  guide: number;
+  format: (value: number) => string;
+}
 
 export interface Loop {
   start: number;
@@ -98,19 +112,83 @@ export class PianoRoll {
   private longPress = 0;
   /** The velocity lane is shown under the notes. */
   private velocityLane = false;
+  /** A line shown in the lane instead (null: none). */
+  private line: LaneLine | null = null;
+  /** The line's points when a drag started (a cancelled drag puts them back). */
+  private lineStart: BeatPoint[] = [];
+  private lastPointTap = { at: 0, index: -1 };
+  /** A line's points changed (a point added, moved or removed). */
+  onLineChange: (points: BeatPoint[]) => void = () => {};
 
   get showVelocity(): boolean {
-    return this.velocityLane;
+    return this.velocityLane && !this.line;
   }
 
   set showVelocity(on: boolean) {
     this.velocityLane = on;
+    if (on) this.line = null;
     this.draw();
   }
 
-  /** The velocity lane's height (0 when hidden). */
+  /** Shows a line in the lane (null: the lane goes back to velocities, or away). */
+  setLine(line: LaneLine | null): void {
+    if (this.drag?.kind === "point") this.drag = null;
+    this.line = line ? { ...line, points: line.points.map((q) => ({ ...q })) } : null;
+    this.draw();
+  }
+
+  get lineShown(): boolean {
+    return this.line !== null;
+  }
+
+  /** The lane's height (0 when hidden). */
   private get laneH(): number {
+    if (this.line) return COARSE ? 96 : 80;
     return this.velocityLane ? (COARSE ? 76 : 60) : 0;
+  }
+
+  /** The lane's value range on screen: its top and bottom y. */
+  private lineBox(): { top: number; bottom: number } {
+    const ch = this.canvas.clientHeight;
+    return { top: ch - this.laneH + 10, bottom: ch - 8 };
+  }
+
+  private lineValueAt(y: number): number {
+    const line = this.line!;
+    const { top, bottom } = this.lineBox();
+    const share = Math.max(0, Math.min(1, (bottom - y) / Math.max(1, bottom - top)));
+    const v = line.min + share * (line.max - line.min);
+    // Near the guide (100 %, the centre): exactly on it.
+    return Math.abs(v - line.guide) < (line.max - line.min) * 0.03 ? line.guide : v;
+  }
+
+  private lineY(value: number): number {
+    const line = this.line!;
+    const { top, bottom } = this.lineBox();
+    return bottom - ((value - line.min) / Math.max(1e-9, line.max - line.min)) * (bottom - top);
+  }
+
+  /** The point under (x, y), or -1. */
+  private pointAt(x: number, y: number): number {
+    if (!this.line) return -1;
+    const reach = COARSE ? 18 : 9;
+    let best = -1;
+    let bestD = reach;
+    this.line.points.forEach((q, i) => {
+      const dist = Math.hypot(this.xOf(q.beat) - x, this.lineY(q.value) - y);
+      if (dist <= bestD) {
+        best = i;
+        bestD = dist;
+      }
+    });
+    return best;
+  }
+
+  private removePoint(index: number): void {
+    if (!this.line || index < 0) return;
+    this.line.points.splice(index, 1);
+    this.onLineChange(this.line.points.map((q) => ({ ...q })));
+    this.draw();
   }
 
   private notesList: Note[] = [];
@@ -186,6 +264,10 @@ export class PianoRoll {
         return;
       }
       const { x, y } = this.local(e);
+      if (this.line && this.inLane(y)) {
+        this.removePoint(this.pointAt(x, y));
+        return;
+      }
       this.menuAt(x, y, e.clientX, e.clientY);
     });
     this.canvas.addEventListener("wheel", (e) => this.wheel(e), { passive: false });
@@ -768,6 +850,27 @@ export class PianoRoll {
       this.drag = { kind: "ruler", x, moved: false };
       return;
     }
+    if (this.inLane(y) && this.line) {
+      if (x < this.keysW) {
+        this.drag = null;
+        return;
+      }
+      const line = this.line;
+      this.lineStart = line.points.map((q) => ({ ...q }));
+      let index = this.pointAt(x, y);
+      const added = index < 0;
+      if (added) {
+        // A new point where it was tapped (on the grid).
+        const beat = Math.max(0, snap(this.beatAt(x), e.altKey ? 0 : this.grid));
+        const point = { beat, value: this.lineValueAt(y) };
+        index = line.points.findIndex((q) => q.beat > beat);
+        if (index < 0) index = line.points.length;
+        line.points.splice(index, 0, point);
+      }
+      this.drag = { kind: "point", index, moved: false, x, y, added };
+      this.draw();
+      return;
+    }
     if (this.inLane(y)) {
       // (a little into the keys too: the bar of a note at the left edge starts right on it)
       if (x < this.keysW - 8) {
@@ -936,6 +1039,19 @@ export class PianoRoll {
         this.draw();
         return;
       }
+      case "point": {
+        const line = this.line;
+        if (!line) return;
+        if (!d.moved && Math.hypot(x - d.x, y - d.y) < TAP_PX) return;
+        d.moved = true;
+        // Between its neighbours (the points stay in order).
+        const prev = line.points[d.index - 1]?.beat ?? 0;
+        const next = line.points[d.index + 1]?.beat ?? Infinity;
+        const beat = Math.max(prev, Math.min(next, Math.max(0, snap(this.beatAt(x), e.altKey ? 0 : this.grid))));
+        line.points[d.index] = { beat, value: this.lineValueAt(y) };
+        this.draw();
+        return;
+      }
       case "ruler": {
         if (!d.moved && Math.abs(x - d.x) < TAP_PX) return;
         d.moved = true;
@@ -990,11 +1106,36 @@ export class PianoRoll {
       case "velocity":
         this.finishGesture();
         return;
+      case "point": {
+        if (!this.line) return;
+        // A second tap on the same point (not moved) removes it.
+        if (!d.moved && !d.added) {
+          const now = performance.now();
+          if (this.lastPointTap.index === d.index && now - this.lastPointTap.at < DOUBLE_TAP_MS) {
+            this.lastPointTap = { at: 0, index: -1 };
+            this.removePoint(d.index);
+            return;
+          }
+          this.lastPointTap = { at: now, index: d.index };
+          this.draw();
+          return;
+        }
+        this.lastPointTap = { at: 0, index: -1 };
+        this.onLineChange(this.line.points.map((q) => ({ ...q })));
+        this.draw();
+        return;
+      }
     }
   }
 
   private cancel(): void {
     this.clearLongPress();
+    if (this.drag?.kind === "point" && this.line) {
+      this.line.points = this.lineStart.map((q) => ({ ...q }));
+      this.drag = null;
+      this.draw();
+      return;
+    }
     if (this.drag && this.drag.kind !== "pan" && this.drag.kind !== "pending" && this.drag.kind !== "scrollH" && this.drag.kind !== "scrollV") this.restore(this.gestureStart);
     this.drag = null;
   }
@@ -1012,6 +1153,7 @@ export class PianoRoll {
 
   private doubleClick(e: MouseEvent): void {
     const { x, y } = this.local(e);
+    if (this.line && this.inLane(y)) return; // (a point's double-tap is seen in up())
     const hit = this.noteAt(x, y);
     if (hit && !hit.edge) this.edit(() => this.removeIds(new Set([hit.note.id])));
   }
@@ -1228,8 +1370,58 @@ export class PianoRoll {
     g.fillStyle = cssVar("--line");
     g.fillRect(this.keysW - 1, RULER_H, 1, ch - RULER_H);
 
+    // A line (automation): straight lines between its points, flat before the first and after the last.
+    if (this.line) {
+      const line = this.line;
+      g.fillStyle = cssVar("--panel");
+      g.fillRect(0, laneTop, cw, this.laneH);
+      g.fillStyle = cssVar("--line");
+      g.fillRect(0, laneTop, cw, 1);
+      g.fillStyle = cssVar("--muted");
+      g.font = `${COARSE ? 12 : 11}px system-ui, sans-serif`;
+      g.fillText(line.label, 4, laneTop + 14);
+      const { top, bottom } = this.lineBox();
+      // The guide (100 %, the centre).
+      const gy = Math.round(this.lineY(line.guide));
+      g.fillStyle = cssVar("--grid");
+      for (let x = this.keysW; x < cw; x += 6) g.fillRect(x, gy, 3, 1);
+      g.fillText(line.format(line.guide), 4, gy + 4);
+      if (line.points.length) {
+        g.save();
+        g.beginPath();
+        g.rect(this.keysW, laneTop, cw - this.keysW, this.laneH);
+        g.clip();
+        g.strokeStyle = accent;
+        g.lineWidth = 2;
+        g.beginPath();
+        const pts = line.points;
+        g.moveTo(this.keysW, this.lineY(pts[0].value));
+        for (const q of pts) g.lineTo(this.xOf(q.beat), this.lineY(q.value));
+        g.lineTo(cw, this.lineY(pts[pts.length - 1].value));
+        g.stroke();
+        const radius = COARSE ? 6 : 4;
+        pts.forEach((q, i) => {
+          const px = this.xOf(q.beat);
+          if (px < this.keysW - radius || px > cw + radius) return;
+          g.fillStyle = d?.kind === "point" && d.index === i ? selectedColor : accent;
+          g.beginPath();
+          g.arc(px, this.lineY(q.value), radius, 0, Math.PI * 2);
+          g.fill();
+        });
+        g.restore();
+        if (d?.kind === "point" && pts[d.index]) {
+          g.fillStyle = text;
+          const q = pts[d.index];
+          g.fillText(line.format(q.value), Math.min(cw - 50, this.xOf(q.beat) + 10), Math.max(top + 10, this.lineY(q.value) - 8));
+        }
+      } else {
+        g.fillStyle = cssVar("--muted");
+        g.fillText("タップで点を置き、点をドラッグして動かします(点をダブルタップ・右クリックで消す)", this.keysW + 8, (top + bottom) / 2 + 4);
+      }
+    }
+
     // The velocity lane: a bar per note, as high as it is strong.
-    if (this.laneH > 0) {
+    if (this.laneH > 0 && !this.line) {
       g.fillStyle = cssVar("--panel");
       g.fillRect(0, laneTop, cw, this.laneH);
       g.fillStyle = cssVar("--line");

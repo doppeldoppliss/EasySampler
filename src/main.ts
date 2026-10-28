@@ -52,7 +52,8 @@ import { renderSong, type RenderTrack } from "./daw/songRender";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, newSlot, renderSlot, slotFor, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
-import { BACKING, beatsToSec, toSeqNotes } from "./daw/model";
+import { autoToSec, BACKING, beatsToSec, toSeqNotes } from "./daw/model";
+import { autoValue, type AutoPoint } from "./song/player";
 import { zipStore, type ZipEntry } from "./export/zip";
 import { encodeWavBytes } from "./audio/wav";
 
@@ -3028,13 +3029,35 @@ function loopNotes(notes: ReturnType<typeof toSeqNotes>, startSec: number, lengt
   return [...inside, ...inside.map((n) => ({ ...n, start: n.start + lengthSec, end: n.end + lengthSec }))];
 }
 
+/** A line over the loop range, as `loopNotes` gives the notes: from the range's start, twice in a row. */
+function loopLine(points: AutoPoint[], startSec: number, lengthSec: number): AutoPoint[] {
+  if (!points.length) return points;
+  const inside = points.filter((q) => q.sec > startSec && q.sec < startSec + lengthSec).map((q) => ({ sec: q.sec - startSec, value: q.value }));
+  const once = [{ sec: 0, value: autoValue(points, startSec, 1) }, ...inside, { sec: lengthSec - 1e-6, value: autoValue(points, startSec + lengthSec, 1) }];
+  return [...once, ...once.map((q) => ({ sec: q.sec + lengthSec, value: q.value }))];
+}
+
+/** A line as the render takes it (seconds; over the loop range, if one is given). */
+function renderLine(points: ReturnType<typeof rollPanel.snapshot>["masterAuto"], bpm: number, range: { startSec: number; lengthSec: number } | null): AutoPoint[] {
+  const sec = autoToSec(points, bpm);
+  return range ? loopLine(sec, range.startSec, range.lengthSec) : sec;
+}
+
 function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string | null, range: { startSec: number; lengthSec: number } | null = null): RenderTrack[] {
   rebuildKit();
   const kit = rollPanel.kitSpec();
   const out: RenderTrack[] = [];
   for (const t of project.tracks) {
     if (only !== null && t.id !== only) continue;
-    const mix = { fx: t.fx, gain: t.gain, pan: t.pan, mute: only === null ? t.mute : false, solo: only === null ? t.solo : false };
+    const mix = {
+      fx: t.fx,
+      gain: t.gain,
+      pan: t.pan,
+      mute: only === null ? t.mute : false,
+      solo: only === null ? t.solo : false,
+      volumeAuto: renderLine(t.volumeAuto, project.bpm, range),
+      panAuto: renderLine(t.panAuto, project.bpm, range),
+    };
     const all = toSeqNotes(t.notes, project.bpm, t.kind !== "drum" && t.glide > 0);
     const notes = range ? loopNotes(all, range.startSec, range.lengthSec) : all;
     if (t.kind === "drum") {
@@ -3100,7 +3123,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
       } else if (kind === "wav") {
         say("作成中…");
         await yieldToScreen();
-        const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, window }, progress);
+        const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project.bpm, range), window }, progress);
         const fileName = `${stamp}.wav`;
         const lowered = song.gain < 1 ? `。音割れしないよう全体を ${(20 * Math.log10(song.gain)).toFixed(1)} dB 下げました` : "";
         built = { key, blob: new Blob([encodeWavBytes(song.channels, song.sampleRate, { ISFT: "EasySampler" })], { type: "audio/wav" }), fileName, summary: `${(song.channels[0].length / song.sampleRate).toFixed(1)} 秒、${song.sampleRate / 1000} kHz${lowered}` };

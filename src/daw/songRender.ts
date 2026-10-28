@@ -6,7 +6,7 @@ import type { PreparedSource } from "../engine/engine";
 import { FxChain } from "../fx/chain";
 import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
-import { SongPlayer, type PlayerTrack, type TrackSound } from "../song/player";
+import { SongPlayer, type AutoPoint, type PlayerTrack, type TrackSound } from "../song/player";
 import { BackingSound, EngineSound, SampleSound } from "../song/sounds";
 
 export interface RenderInstrument {
@@ -37,6 +37,9 @@ export interface RenderTrack {
   pan: number;
   mute: boolean;
   solo: boolean;
+  /** The volume / pan lines (song seconds). */
+  volumeAuto?: AutoPoint[];
+  panAuto?: AutoPoint[];
 }
 
 export interface SongRenderInput {
@@ -44,6 +47,8 @@ export interface SongRenderInput {
   bpm: number;
   tracks: RenderTrack[];
   masterFx: FxSettings | null;
+  /** The master volume line (song seconds; after the master effects). */
+  masterAuto?: AutoPoint[];
   /**
    * Only this stretch of the output, exactly (no ring-out, no silence trimmed): for a loop, the notes are
    * given twice and the second pass is kept, so what rings past the loop's end is heard at its start.
@@ -92,11 +97,12 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
     }
     if (!sound) continue;
     sounds.push(sound);
-    tracks.push({ id: t.id, sound, notes: t.notes, fx: t.fx, gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo });
+    tracks.push({ id: t.id, sound, notes: t.notes, fx: t.fx, gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, volumeAuto: t.volumeAuto, panAuto: t.panAuto });
   }
   const player = new SongPlayer(sr);
   player.setTracks(tracks);
   player.setTempo(input.bpm);
+  player.setMasterAuto(input.masterAuto ?? []);
   player.play(0, 0);
   const master = new FxChain(sr);
   if (input.masterFx) master.set(input.masterFx);
@@ -120,6 +126,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
   for (let block = 0; at < hardEnd; block++) {
     player.render(at, l, r, BLOCK);
     if (masterOn) master.process(l, r, BLOCK);
+    player.applyMaster(l, r, BLOCK);
     if (at + BLOCK > left.length) {
       const grow = (x: Float32Array) => {
         const y = new Float32Array(Math.max(at + BLOCK, Math.ceil(x.length * 1.5)));

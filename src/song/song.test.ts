@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MidiParseError, parseMidi } from "./midi";
 import { BackingSynth } from "./backing";
 import { backingNotes, materialNotes, songParts, type SeqNote } from "./parts";
-import { SongPlayer, type PlayerTrack, type TrackSound } from "./player";
+import { autoValue, SongPlayer, type PlayerTrack, type TrackSound } from "./player";
 
 // ------------------------------------------------------------ a tiny SMF writer
 
@@ -254,13 +254,14 @@ describe("SongPlayer", () => {
     // a: 0.5 both sides; b panned hard left: 1 left, 0 right.
     expect(out.l[10]).toBeCloseTo(1.5);
     expect(out.r[10]).toBeCloseTo(0.5);
+    // (A change ramps over one block: read at the block end.)
     player.setMix("b", { ...mix, pan: -1, mute: true });
     out = run(player, 128, 1);
-    expect(out.l[10]).toBeCloseTo(0.5);
+    expect(out.l[127]).toBeCloseTo(0.5, 1);
     player.setMix("b", { ...mix, solo: true });
     out = run(player, 256, 1);
-    expect(out.l[10]).toBeCloseTo(1);
-    expect(out.r[10]).toBeCloseTo(1);
+    expect(out.l[127]).toBeCloseTo(1, 1);
+    expect(out.r[127]).toBeCloseTo(1, 1);
   });
 
   it("makes sound for the backing", () => {
@@ -287,6 +288,50 @@ describe("SongPlayer", () => {
       for (const v of l) energy += v * v;
     }
     expect(energy).toBeGreaterThan(0.01);
+  });
+
+  it("follows the volume and pan lines and the master line as the song plays (and not when stopped)", () => {
+    const player = new SongPlayer(SR);
+    const log: string[] = [];
+    // A note held for 4 s; the volume line falls from 1 to 0 over 0–2 s; the pan goes hard right from 1.2 s.
+    player.setTracks([
+      track("a", fakeSound(log, "", 1), [n(0, 4, 60)], {
+        volumeAuto: [{ sec: 0, value: 1 }, { sec: 2, value: 0 }],
+        panAuto: [{ sec: 1.2, value: 0 }, { sec: 1.201, value: 1 }],
+      }),
+    ]);
+    player.play(0, 0);
+    const l = new Float32Array(128);
+    const r = new Float32Array(128);
+    const at = (sec: number) => {
+      const blocks = Math.round((sec * SR) / 128);
+      for (let b = 0; b < blocks; b++) player.render(b * 128, l, r, 128);
+      return { l: l[127], r: r[127] };
+    };
+    const half = at(1);
+    // At 1 s: half way down, centred.
+    expect(half.l).toBeCloseTo(0.5, 1);
+    expect(half.r).toBeCloseTo(0.5, 1);
+    player.play(0, 0);
+    const later = at(1.5);
+    // At 1.5 s: a quarter, all on the right.
+    expect(later.l).toBeCloseTo(0, 2);
+    expect(later.r).toBeCloseTo(0.25, 1);
+    // The master line: a factor after everything.
+    player.setMasterAuto([{ sec: 0, value: 0.5 }]);
+    player.play(0, 0);
+    const out = at(0.5);
+    player.applyMaster(l, r, 128);
+    expect(r[127]).toBeCloseTo(out.r * 0.5, 2);
+  });
+
+  it("reads a line between its points, flat outside them", () => {
+    const line = [{ sec: 1, value: 0 }, { sec: 3, value: 1 }, { sec: 4, value: 0.5 }];
+    expect(autoValue(line, 0, 9)).toBe(0);
+    expect(autoValue(line, 2, 9)).toBeCloseTo(0.5);
+    expect(autoValue(line, 3.5, 9)).toBeCloseTo(0.75);
+    expect(autoValue(line, 10, 9)).toBe(0.5);
+    expect(autoValue([], 1, 9)).toBe(9);
   });
 });
 

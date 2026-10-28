@@ -6,7 +6,7 @@
 
 import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
-import type { MixSettings } from "../song/player";
+import type { AutoPoint, MixSettings } from "../song/player";
 import type { PreparedSource } from "./engine";
 
 export interface TrackSpec extends MixSettings {
@@ -51,6 +51,8 @@ export type ToEngine =
   | { type: "song"; tracks: TrackSpec[] }
   | { type: "songMix"; id: string; mix: MixSettings }
   | { type: "master"; fx: FxSettings | null }
+  // The master volume line (song seconds; empty = none).
+  | { type: "masterAuto"; points: AutoPoint[] }
   | { type: "songPlay"; atFrame: number; fromSec: number }
   | { type: "songStop" }
   | { type: "songLoop"; loop: { startSec: number; endSec: number } | null };

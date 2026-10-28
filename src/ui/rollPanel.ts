@@ -9,6 +9,7 @@ import type { EngineClient } from "../audio/engineClient";
 import { keep, kept } from "../audio/store";
 import type { TrackSpec } from "../engine/messages";
 import {
+  autoToSec,
   BACKING,
   beatsToSec,
   DEFAULT_VELOCITY,
@@ -24,7 +25,10 @@ import {
   type Project,
   type ProjectMaterial,
   type Track,
+  VOLUME_AUTO_MAX,
+  type BeatPoint,
 } from "../daw/model";
+import type { MixSettings } from "../song/player";
 import type { FxSettings } from "../instrument/types";
 import { MidiParseError, parseMidi } from "../song/midi";
 import { songParts } from "../song/parts";
@@ -218,10 +222,14 @@ export class RollPanel {
     this.info.textContent = "すべて消しました。「元に戻す」で戻せます。";
   });
   private readonly quantizeButton = button("クオンタイズ", "small", () => this.quantize(), "選んだ音符(選んでいなければ全部)の始まりと終わりを吸着の線に合わせます");
-  private readonly velocityToggle = button("強弱", "small toggle", () => {
-    this.roll.showVelocity = !this.roll.showVelocity;
-    this.refreshButtons();
-  }, "ピアノロールの下に強弱(ベロシティ)の欄を出します。棒を上下にドラッグして変えます");
+  /** What the lane under the roll shows: nothing, the velocities, or a line (automation). */
+  private readonly laneSelect = el("select", { ariaLabel: "ピアノロールの下の欄", title: "ピアノロールの下に出す欄。強弱 = 音符ごとのベロシティ。音量・パン・マスター音量 = 曲の進みに合わせて動かす線(オートメーション)" }, [
+    el("option", { value: "none", textContent: "下の欄: なし" }),
+    el("option", { value: "velocity", textContent: "強弱" }),
+    el("option", { value: "volume", textContent: "音量の線" }),
+    el("option", { value: "pan", textContent: "パンの線" }),
+    el("option", { value: "master", textContent: "マスター音量の線" }),
+  ]);
   private readonly glideSelect = el("select", { ariaLabel: "ポルタメント" }, GLIDES.map(([v, label]) => el("option", { value: String(v), textContent: label })));
   private readonly glideRow = el("div", { className: "track-options" }, [
     el("div", { className: "row" }, [
@@ -323,6 +331,8 @@ export class RollPanel {
       this.reload();
       this.scheduleSave();
     });
+    this.laneSelect.addEventListener("change", () => this.showLane());
+    this.roll.onLineChange = (points) => this.lineChanged(points);
     this.gridSelect.value = String(this.roll.grid);
     this.gridSelect.addEventListener("change", () => {
       this.roll.grid = Number(this.gridSelect.value);
@@ -358,7 +368,7 @@ export class RollPanel {
         el("span", { className: "fine", textContent: "(音符を右クリック / 長押しで、その音符の値を拾えます)" }),
       ]),
       el("div", { className: "row roll-tools" }, [this.undoButton, this.redoButton, this.selectAllButton, this.copyButton, this.pasteButton, this.deleteButton, this.duplicateButton, ...this.nudgeButtons, ...this.transposeButtons, this.quantizeButton, this.sliceButton]),
-      el("div", { className: "row roll-tools" }, [this.velocityToggle, this.onionToggle, this.selectToggle, button("−", "small", () => this.roll.zoom(1 / 1.5), "縮小"), button("+", "small", () => this.roll.zoom(1.5), "拡大")]),
+      el("div", { className: "row roll-tools" }, [this.laneSelect, this.onionToggle, this.selectToggle, button("−", "small", () => this.roll.zoom(1 / 1.5), "縮小"), button("+", "small", () => this.roll.zoom(1.5), "拡大")]),
       el("div", { className: "row step-input" }, [this.stepToggle, this.stepRestButton, this.stepTieButton, this.stepBackButton, this.stepHelp]),
       this.roll.element,
       el("p", {
@@ -635,6 +645,46 @@ export class RollPanel {
       this.shownTrack = t.id;
     }
     if (t.kind === "drum") this.roll.frame(0);
+    this.showLane();
+  }
+
+  /** The lane under the roll, as chosen: the velocities, or the selected track's (or the master's) line. */
+  private showLane(): void {
+    const mode = this.laneSelect.value;
+    const pct = (v: number) => `${Math.round(v * 100)}%`;
+    const pan = (v: number) => (Math.abs(v) < 0.005 ? "中央" : `${v < 0 ? "左" : "右"} ${Math.round(Math.abs(v) * 100)}`);
+    if (mode === "volume") this.roll.setLine({ label: "音量", points: this.track.volumeAuto, min: 0, max: VOLUME_AUTO_MAX, guide: 1, format: pct });
+    else if (mode === "pan") this.roll.setLine({ label: "パン", points: this.track.panAuto, min: -1, max: 1, guide: 0, format: pan });
+    else if (mode === "master") this.roll.setLine({ label: "マスター", points: this.project.masterAuto, min: 0, max: VOLUME_AUTO_MAX, guide: 1, format: pct });
+    else {
+      this.roll.setLine(null);
+      this.roll.showVelocity = mode === "velocity";
+    }
+  }
+
+  /** A line in the lane was edited: kept, and heard at once. */
+  private lineChanged(points: BeatPoint[]): void {
+    const mode = this.laneSelect.value;
+    if (mode === "master") {
+      this.project.masterAuto = points;
+      this.sendMasterAuto();
+    } else if (mode === "volume" || mode === "pan") {
+      const t = this.track;
+      if (mode === "volume") t.volumeAuto = points;
+      else t.panAuto = points;
+      this.client.setTrackMix(t.id, this.mixOf(t));
+    }
+    this.scheduleSave();
+  }
+
+  /** What the mixer gets for a track: volume, pan, mute, solo, effects and its lines (in seconds). */
+  private mixOf(t: Track, fx: FxSettings = t.fx): MixSettings {
+    const bpm = this.project.bpm;
+    return { gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, fx, volumeAuto: autoToSec(t.volumeAuto, bpm), panAuto: autoToSec(t.panAuto, bpm) };
+  }
+
+  private sendMasterAuto(): void {
+    this.client.setMasterAuto(autoToSec(this.project.masterAuto, this.project.bpm));
   }
 
   private selectTrack(index: number): void {
@@ -680,7 +730,7 @@ export class RollPanel {
   /** Volume, pan, mute, solo of a track: heard at once, kept. */
   private mix(t: Track, change: (t: Track) => void): void {
     change(t);
-    this.client.setTrackMix(t.id, { gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, fx: t.fx });
+    this.client.setTrackMix(t.id, this.mixOf(t));
     this.scheduleSave();
   }
 
@@ -1073,7 +1123,7 @@ export class RollPanel {
     const fx = structuredClone(t.fx);
     change(fx);
     t.fx = fx;
-    this.client.setTrackMix(t.id, { gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, fx });
+    this.client.setTrackMix(t.id, this.mixOf(t, fx));
     this.scheduleSave();
     this.onLiveChange();
     const on = Object.values(fx).some((g) => (g as { on?: boolean }).on);
@@ -1104,11 +1154,7 @@ export class RollPanel {
         drumKeys: t.kind === "drum" ? kit.keys : undefined,
         notes: toSeqNotes(t.notes, this.project.bpm, t.kind !== "drum" && t.glide > 0),
         glide: t.kind === "drum" ? 0 : t.glide,
-        fx: t.fx,
-        gain: t.gain,
-        pan: t.pan,
-        mute: t.mute,
-        solo: t.solo,
+        ...this.mixOf(t),
       }));
   }
 
@@ -1125,6 +1171,8 @@ export class RollPanel {
   }
 
   private sendLoop(): void {
+    // (The master line's seconds follow the tempo too: it goes wherever the loop does.)
+    this.sendMasterAuto();
     const { loop, bpm } = this.project;
     this.client.setSongLoop(loop.on ? { startSec: beatsToSec(loop.start, bpm), endSec: beatsToSec(loop.end, bpm) } : null);
   }
@@ -1270,7 +1318,6 @@ export class RollPanel {
     this.sliceButton.disabled = this.roll.notes.length === 0;
     this.onionToggle.classList.toggle("on", this.onion);
     this.onionToggle.hidden = this.track.kind === "drum";
-    this.velocityToggle.classList.toggle("on", this.roll.showVelocity);
     const drum = this.track.kind === "drum";
     this.stepToggle.textContent = `ステップ入力: ${this.stepMode && !drum ? "オン" : "オフ"}`;
     this.stepToggle.classList.toggle("on", this.stepMode && !drum);

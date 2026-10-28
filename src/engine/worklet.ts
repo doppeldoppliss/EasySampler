@@ -212,6 +212,9 @@ class EngineProcessor extends AudioWorkletProcessor {
         this.masterOn = message.fx !== null;
         if (message.fx) this.master.set(message.fx);
         break;
+      case "masterAuto":
+        this.song.setMasterAuto(message.points);
+        break;
       case "songPlay":
         this.song.play(message.atFrame, message.fromSec);
         this.master.reset();
@@ -282,6 +285,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.kitR[i];
     }
     if (this.masterOn) this.master.process(left, right, frames);
+    this.song.applyMaster(left, right, frames);
     if (!this.liveMaster && (liveOn || kitOn || this.liveFxOn)) {
       for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
       if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];

@@ -1,6 +1,7 @@
 // Playing a song inside the audio thread (or a test): the mixer of design.md
 // 13.1. Each track has its own sound (an Engine playing one cut, or the plain
-// backing), its own notes, effects, volume, pan, mute and solo. Note events
+// backing), its own notes, effects, volume, pan, mute and solo, and lines
+// (automation) that move its volume and pan through the song. Note events
 // land on their exact sample: a render block is split at every event, per
 // track, and at the loop's end. The page says when (an AudioContext frame) and
 // from where (song seconds).
@@ -20,6 +21,30 @@ export interface TrackSound {
   idle(): boolean;
 }
 
+/** A point of an automation line: song seconds, and the value there (straight lines between points). */
+export interface AutoPoint {
+  sec: number;
+  value: number;
+}
+
+/** The line's value at `sec`: before the first point the first's value, after the last the last's. */
+export function autoValue(points: readonly AutoPoint[], sec: number, fallback: number): number {
+  if (!points.length) return fallback;
+  if (sec <= points[0].sec) return points[0].value;
+  const last = points[points.length - 1];
+  if (sec >= last.sec) return last.value;
+  let lo = 0;
+  let hi = points.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].sec <= sec) lo = mid;
+    else hi = mid;
+  }
+  const a = points[lo];
+  const b = points[hi];
+  return b.sec > a.sec ? a.value + ((b.value - a.value) * (sec - a.sec)) / (b.sec - a.sec) : b.value;
+}
+
 export interface MixSettings {
   /** Linear gain (1 = as is). */
   gain: number;
@@ -28,6 +53,10 @@ export interface MixSettings {
   mute: boolean;
   solo: boolean;
   fx: FxSettings | null;
+  /** The volume line: a factor on `gain` (0–2) through the song, while it plays (none = 1). */
+  volumeAuto?: AutoPoint[];
+  /** The pan line: −1…1 in place of `pan`, while the song plays (none = `pan`). */
+  panAuto?: AutoPoint[];
 }
 
 export interface PlayerTrack extends MixSettings {
@@ -60,6 +89,9 @@ class Lane {
   /** Frames of the current block already rendered into the scratch buffers. */
   done = 0;
   idleFrames = 0;
+  /** The left / right gains at the end of the last block (the next block ramps from them); NaN before the first. */
+  gl = NaN;
+  gr = NaN;
   l = new Float32Array(128);
   r = new Float32Array(128);
 
@@ -90,6 +122,10 @@ export class SongPlayer {
   /** A loop in song frames: playing across its end jumps back to its start. */
   private loop: { start: number; end: number } | null = null;
   private bpm = 120;
+  /** The master volume line (a factor, 0–2), and its gain at the start and end of the last block. */
+  private masterAuto: AutoPoint[] = [];
+  private masterFrom = 1;
+  private masterTo = 1;
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
@@ -127,6 +163,27 @@ export class SongPlayer {
   /** Volume, pan, mute, solo and effects of tracks by id (the notes stay; playback goes on). */
   setMix(id: string, mix: MixSettings): void {
     this.lanes.find((l) => l.id === id)?.setMix(mix);
+  }
+
+  /** The master volume line (song seconds; empty = none). Applied by `applyMaster`, after the master effects. */
+  setMasterAuto(points: readonly AutoPoint[]): void {
+    this.masterAuto = points.map((q) => ({ ...q }));
+  }
+
+  /** The master volume over the block just rendered (a ramp from its start to its end). */
+  applyMaster(left: Float32Array, right: Float32Array, frames: number): void {
+    const a = this.masterFrom;
+    const b = this.masterTo;
+    if (a === 1 && b === 1) return;
+    const step = (b - a) / frames;
+    for (let i = 0; i < frames; i++) left[i] *= a + step * i;
+    if (right !== left) for (let i = 0; i < frames; i++) right[i] *= a + step * i;
+  }
+
+  /** Where the song is (seconds) at context frame `contextFrame`, or null when it does not play. */
+  private songSecAt(contextFrame: number): number | null {
+    if (this.startFrame === null) return null;
+    return Math.max(this.fromFrame, this.fromFrame + (contextFrame - this.startFrame)) / this.sampleRate;
   }
 
   setTempo(bpm: number): void {
@@ -237,9 +294,24 @@ export class SongPlayer {
         }
       }
     }
-    // The rest of the block, the effects, and the mix.
+    // The rest of the block, the effects, and the mix. The lines (automation) are read at the block's end;
+    // the gains ramp to there from the last block's (so a jump never clicks).
+    const endSec = this.songSecAt(blockFrame + frames);
+    this.masterFrom = this.masterTo;
+    this.masterTo = endSec !== null && this.masterAuto.length ? autoValue(this.masterAuto, endSec, 1) : 1;
     const anySolo = this.lanes.some((l) => l.mix.solo);
     for (const lane of this.lanes) {
+      const { gain, mute, solo } = lane.mix;
+      // (Muted, or another track soloed: down to 0, ramped like any change.)
+      const level = mute || (anySolo && !solo) ? 0 : gain * (endSec !== null && lane.mix.volumeAuto?.length ? autoValue(lane.mix.volumeAuto, endSec, 1) : 1);
+      const pan = endSec !== null && lane.mix.panAuto?.length ? autoValue(lane.mix.panAuto, endSec, 0) : lane.mix.pan;
+      // Balance pan: the centre is unity on both sides.
+      const gl1 = level * Math.min(1, 1 - pan);
+      const gr1 = level * Math.min(1, 1 + pan);
+      const gl0 = Number.isNaN(lane.gl) ? gl1 : lane.gl;
+      const gr0 = Number.isNaN(lane.gr) ? gr1 : lane.gr;
+      lane.gl = gl1;
+      lane.gr = gr1;
       const quiet = lane.sound.idle();
       lane.idleFrames = quiet && !fired ? lane.idleFrames + frames : 0;
       // Silent, its effects died away (a delay or a reverb may ring on longer): nothing to do.
@@ -247,18 +319,16 @@ export class SongPlayer {
       if (lane.idleFrames > idleLimit && lane.done === 0) continue;
       SongPlayer.fill(lane, frames);
       if (lane.fxOn) lane.fx.process(lane.l, lane.r, frames);
-      const { gain, pan, mute, solo } = lane.mix;
-      if (mute || (anySolo && !solo) || gain <= 0) continue;
-      // Balance pan: the centre is unity on both sides.
-      const gl = gain * Math.min(1, 1 - pan);
-      const gr = gain * Math.min(1, 1 + pan);
+      if (gl0 <= 0 && gl1 <= 0 && gr0 <= 0 && gr1 <= 0) continue;
       const l = lane.l;
       const r = lane.r;
-      if (outR === outL) for (let i = 0; i < frames; i++) outL[i] += (l[i] * gl + r[i] * gr) * 0.5;
+      const sl = (gl1 - gl0) / frames;
+      const sr = (gr1 - gr0) / frames;
+      if (outR === outL) for (let i = 0; i < frames; i++) outL[i] += (l[i] * (gl0 + sl * i) + r[i] * (gr0 + sr * i)) * 0.5;
       else
         for (let i = 0; i < frames; i++) {
-          outL[i] += l[i] * gl;
-          outR[i] += r[i] * gr;
+          outL[i] += l[i] * (gl0 + sl * i);
+          outR[i] += r[i] * (gr0 + sr * i);
         }
     }
   }

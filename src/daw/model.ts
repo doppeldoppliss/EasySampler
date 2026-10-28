@@ -7,6 +7,7 @@ import { emptyKit, sanitizeKit, type Kit } from "./kit";
 import { DEFAULT_FX, type FxSettings } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
 import type { SongNote } from "../song/midi";
+import type { AutoPoint } from "../song/player";
 
 export interface Note {
   /** Unique within its track (for selection; not saved meaningfully across sessions). */
@@ -43,13 +44,30 @@ export interface Track {
   /** What a note placed on this track gets: its length (beats) and velocity (0–1) (Domino's default Gate / Velocity). */
   noteLength: number;
   noteVelocity: number;
+  /** The volume line (a factor on `gain`, 0–2) and the pan line (−1…1, in place of `pan`); empty = none. */
+  volumeAuto: BeatPoint[];
+  panAuto: BeatPoint[];
+}
+
+/** A point of an automation line, in beats (straight lines between points, sorted by beat). */
+export interface BeatPoint {
+  beat: number;
+  value: number;
+}
+
+/** What a volume line point may be (a factor: 1 = the fader's level, 2 = +6 dB). */
+export const VOLUME_AUTO_MAX = 2;
+
+/** A line as the player takes it (seconds). */
+export function autoToSec(points: readonly BeatPoint[], bpm: number): AutoPoint[] {
+  return points.map((q) => ({ sec: beatsToSec(q.beat, bpm), value: q.value }));
 }
 
 /** A track that plays the plain backing synth (簡易シンセ) instead of a cut: what a MIDI file's parts start on. */
 export const BACKING = "backing";
 
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, noteLength: 1, noteVelocity: DEFAULT_VELOCITY };
+  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
 }
 
 /** A drum track: it plays the project's kit, its notes on GM drum keys. */
@@ -81,6 +99,8 @@ export interface Project {
   loop: { start: number; end: number; on: boolean };
   /** Effects on the whole mix. */
   masterFx: FxSettings;
+  /** The master volume line (a factor, 0–2, after the master effects); empty = none. */
+  masterAuto: BeatPoint[];
   /** The drum kit the drum tracks and the kit view's keyboard play (design.md 13.2). */
   kit: Kit;
 }
@@ -91,7 +111,7 @@ export const DEFAULT_VELOCITY = 0.8;
 const LEGATO_OVERLAP_SEC = 0.002;
 
 export function emptyProject(): Project {
-  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, masterFx: structuredClone(DEFAULT_FX), kit: emptyKit() };
+  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, masterFx: structuredClone(DEFAULT_FX), masterAuto: [], kit: emptyKit() };
 }
 
 let nextId = 1;
@@ -182,6 +202,13 @@ export function sanitizeProject(raw: unknown): Project {
   if (!raw || typeof raw !== "object") return d;
   const r = raw as Record<string, unknown>;
   const num = (v: unknown, fallback: number, lo: number, hi: number) => (typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback);
+  const line = (v: unknown, lo: number, hi: number): BeatPoint[] =>
+    Array.isArray(v)
+      ? v
+          .filter((q): q is Record<string, unknown> => !!q && typeof q === "object")
+          .map((q) => ({ beat: num(q.beat, 0, 0, 100_000), value: num(q.value, (lo + hi) / 2, lo, hi) }))
+          .sort((a, b) => a.beat - b.beat)
+      : [];
   const tracks = Array.isArray(r.tracks)
     ? r.tracks.map((t, i) => {
         const tr = (t && typeof t === "object" ? t : {}) as Record<string, unknown>;
@@ -217,6 +244,8 @@ export function sanitizeProject(raw: unknown): Project {
           glide: num(tr.glide, 0, 0, 2),
           noteLength: num(tr.noteLength, 1, MIN_LENGTH, 64),
           noteVelocity: num(tr.noteVelocity, DEFAULT_VELOCITY, 0.01, 1),
+          volumeAuto: line(tr.volumeAuto, 0, VOLUME_AUTO_MAX),
+          panAuto: line(tr.panAuto, -1, 1),
         };
       })
     : d.tracks;
@@ -236,6 +265,7 @@ export function sanitizeProject(raw: unknown): Project {
     editing: typeof r.editing === "string" ? r.editing : null,
     loop: end > start ? { start, end, on: loop.on === true } : d.loop,
     masterFx: sanitizeFx(r.masterFx),
+    masterAuto: line(r.masterAuto, 0, VOLUME_AUTO_MAX),
     kit: sanitizeKit(r.kit),
   };
 }

@@ -12,6 +12,7 @@ import type { FromEngine, ToEngine, TrackSpec } from "../engine/messages";
 import type { MaterialAnalysis } from "../engine/prepare";
 import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
+import type { AutoPoint, MixSettings } from "../song/player";
 import type { AnalysisRequest, AnalysisResponse } from "../workers/analysis.worker";
 import workletUrl from "../engine/worklet.ts?worker&url";
 
@@ -255,10 +256,16 @@ export class EngineClient {
   }
 
   /** Volume, pan, mute, solo and effects of one track, while it plays. */
-  setTrackMix(id: string, mix: { gain: number; pan: number; mute: boolean; solo: boolean; fx: FxSettings | null }): void {
+  setTrackMix(id: string, mix: MixSettings): void {
     this.songTracks = this.songTracks.map((t) => (t.id === id ? { ...t, ...mix } : t));
     this.pending = this.pending.filter((m) => !(m.type === "songMix" && m.id === id));
-    this.post({ type: "songMix", id, mix: { gain: mix.gain, pan: mix.pan, mute: mix.mute, solo: mix.solo, fx: mix.fx } });
+    this.post({ type: "songMix", id, mix: { gain: mix.gain, pan: mix.pan, mute: mix.mute, solo: mix.solo, fx: mix.fx, volumeAuto: mix.volumeAuto, panAuto: mix.panAuto } });
+  }
+
+  /** The master volume line (song seconds; empty = none). */
+  setMasterAuto(points: AutoPoint[]): void {
+    this.pending = this.pending.filter((m) => m.type !== "masterAuto");
+    this.post({ type: "masterAuto", points });
   }
 
   setMasterFx(fx: FxSettings | null): void {

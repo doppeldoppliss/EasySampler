@@ -150,9 +150,9 @@ export class EngineClient {
   voiceCap = Infinity;
 
   /** An instrument: a cut (markers and voice settings) of a material. Engines on it follow at once. */
-  defineInstrument(id: string, material: string, markers: Markers, params: InstrumentParams): void {
+  defineInstrument(id: string, material: string, markers: Markers, params: InstrumentParams, hold?: number): void {
     const capped = params.maxVoices > this.voiceCap ? { ...params, maxVoices: this.voiceCap } : params;
-    const message = { type: "instrument" as const, id, material, markers, params: capped };
+    const message = { type: "instrument" as const, id, material, markers, params: capped, hold };
     this.instruments.set(id, message);
     this.pending = this.pending.filter((m) => !(m.type === "instrument" && m.id === id));
     this.post(message);

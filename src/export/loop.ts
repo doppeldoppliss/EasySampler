@@ -29,7 +29,9 @@ const MIN_LOOP_SEC = 0.2;
  * to loop — a one-shot, or a very short hold.
  */
 export function applyLoop(rendered: Rendered, params: InstrumentParams): Loop | null {
-  if (params.sustainMode === "none") return null;
+  // Nothing held to loop: a one-shot, the sustain switched off, or a level dying away (減衰) — a loop there
+  // would jump back up in level on every pass.
+  if (params.sustainMode === "none" || !params.sustainEnabled || params.amp.sustain < 0.05) return null;
   const rate = rendered.sampleRate;
   const frames = rendered.channels[0].length;
   const settle = Math.max(SETTLE_SEC, params.amp.attack + params.amp.decay);

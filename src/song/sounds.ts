@@ -76,8 +76,9 @@ export class SampleSound implements TrackSound {
   noteOff(): void {
     // a one-shot plays to its end
   }
+  /** Everything fades out over a few ms (a loop's wrap, a stop): no click. */
   allOff(): void {
-    this.voices = [];
+    for (const v of this.voices) if (v.fade === 0) v.fade = CHOKE_FADE;
     this.synth?.allOff();
   }
   render(left: Float32Array, right: Float32Array, frames: number): void {

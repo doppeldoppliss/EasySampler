@@ -85,6 +85,12 @@ export class PianoRoll {
   lastLength = 1;
   /** Velocity of the next note placed (0–1). */
   defaultVelocity = DEFAULT_VELOCITY;
+  /**
+   * A drum track's rows ↔ GM keys (set by the panel; null for a melodic track): the clipboard keeps
+   * keys, so notes pasted into another track land on the same drums (or pitches), or not at all.
+   */
+  pitchToKey: ((pitch: number) => number) | null = null;
+  keyToPitch: ((key: number) => number | null) | null = null;
   /** Other tracks' notes, drawn faintly behind (オニオンスキン), or none. */
   private ghosts: readonly { start: number; length: number; pitch: number }[] = [];
   /** A right-click that cancelled a drag: no menu for it. */
@@ -458,7 +464,7 @@ export class PianoRoll {
   copy(cut = false): void {
     const sel = this.selection();
     if (!sel.length) return;
-    this.clipboard = sel.map((n) => ({ ...n }));
+    this.clipboard = sel.map((n) => ({ ...n, pitch: this.pitchToKey ? this.pitchToKey(n.pitch) : n.pitch }));
     if (cut) this.deleteSelected();
   }
 
@@ -467,8 +473,14 @@ export class PianoRoll {
     if (!this.clipboard.length) return;
     const from = Math.min(...this.clipboard.map((n) => n.start));
     const at = snap(this.playhead ?? this.scrollBeat, this.grid);
+    // Keys back to this track's rows (or pitches); a drum this track has no row for is left out.
+    const here = this.clipboard
+      .map((n) => ({ ...n, pitch: this.keyToPitch ? this.keyToPitch(n.pitch) : n.pitch }))
+      .filter((n): n is Note => n.pitch !== null)
+      .map((n) => ({ ...n, pitch: this.clampP(n.pitch) }));
+    if (!here.length) return;
     this.edit(() => {
-      const copies = shifted(this.clipboard, at - from, 0);
+      const copies = shifted(here, at - from, 0).map((n) => ({ ...n, pitch: this.clampP(n.pitch) }));
       this.notesList.push(...copies);
       this.selected = new Set(copies.map((n) => n.id));
     });

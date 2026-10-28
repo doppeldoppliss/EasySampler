@@ -26,7 +26,8 @@ export interface TrackSpec extends MixSettings {
 
 export type ToEngine =
   | { type: "source"; material: string; source: PreparedSource | null }
-  | { type: "instrument"; id: string; material: string; markers: Markers; params: InstrumentParams }
+  // hold: the note length a "stretch" sustain fills for this instrument (its material's export length).
+  | { type: "instrument"; id: string; material: string; markers: Markers; params: InstrumentParams; hold?: number }
   | { type: "dropInstrument"; id: string }
   // The note length the "stretch" sustain fills (the export length, in seconds).
   | { type: "hold"; sec: number }

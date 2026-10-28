@@ -100,8 +100,14 @@ export class BackingSynth {
     for (const v of this.voices) if (v.active && !v.drum && !v.released && v.note === note) v.released = true;
   }
 
+  /** Everything fades out over a few ms (a loop's wrap, a stop): no click. */
   allOff(): void {
-    for (const v of this.voices) v.active = false;
+    const quick = Math.exp(Math.log(0.001) / (0.006 * this.sampleRate));
+    for (const v of this.voices) {
+      if (!v.active) continue;
+      v.released = true;
+      v.decay = Math.min(v.decay, quick);
+    }
   }
 
   /** Nothing sounding. */

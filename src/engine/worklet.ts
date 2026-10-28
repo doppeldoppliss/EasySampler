@@ -29,6 +29,8 @@ interface Instrument {
   material: string;
   markers: Markers;
   params: InstrumentParams;
+  /** Its material's export length (what a "stretch" sustain fills), when known. */
+  hold?: number;
 }
 
 class EngineProcessor extends AudioWorkletProcessor {
@@ -82,7 +84,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     }
     if (inst && source) {
       sound.engine.setInstrument(inst.markers, inst.params);
-      sound.engine.setHold(this.hold);
+      sound.engine.setHold(inst.hold ?? this.hold);
       sound.engine.setTempo(this.bpm);
     }
   }
@@ -125,7 +127,7 @@ class EngineProcessor extends AudioWorkletProcessor {
         this.refresh((id) => this.instruments.get(id)?.material === message.material);
         break;
       case "instrument":
-        this.instruments.set(message.id, { material: message.material, markers: message.markers, params: message.params });
+        this.instruments.set(message.id, { material: message.material, markers: message.markers, params: message.params, hold: message.hold });
         this.refresh((id) => id === message.id);
         break;
       case "dropInstrument":
@@ -186,7 +188,10 @@ class EngineProcessor extends AudioWorkletProcessor {
         break;
       case "hold":
         this.hold = message.sec;
-        for (const sound of [this.live, this.preview, ...this.trackSounds.values()]) if (sound instanceof EngineSound) sound.engine.setHold(message.sec);
+        // (An instrument that knows its own length keeps it.)
+        for (const sound of [this.live, this.preview, ...this.trackSounds.values()]) {
+          if (sound instanceof EngineSound) sound.engine.setHold((sound.instrument ? this.instruments.get(sound.instrument)?.hold : undefined) ?? message.sec);
+        }
         break;
       case "tempo":
         this.bpm = message.bpm;

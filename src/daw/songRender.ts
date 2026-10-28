@@ -71,6 +71,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
       const s = new SampleSound(sr);
       s.rows = t.samples;
       s.keys = t.drumKeys ?? [];
+      s.chokes = true;
       sound = s;
     } else if (t.backing) {
       sound = new BackingSound(sr);

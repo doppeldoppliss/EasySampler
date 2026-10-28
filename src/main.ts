@@ -192,7 +192,24 @@ for (const type of ["pointerdown", "pointerup", "touchend", "click", "keydown"])
 // (iOS "interrupts" the audio when another app takes over; unlock() on the next gesture resumes it.)
 
 /** The material was prepared before the audio started (at a guessed rate): redo it at the real one. */
+/** A material just analysed: if the audio already runs at another rate than the one guessed, prepare it again. */
+function checkEngineRate(id: string): void {
+  if (client.started && !client.sourceMatchesRate(id)) void matchEngineRate();
+}
+
+let matchingRate: Promise<void> | null = null;
 async function matchEngineRate(): Promise<void> {
+  // (One pass at a time; a call during one waits for it, then checks again.)
+  while (matchingRate) await matchingRate;
+  matchingRate = matchEngineRateOnce();
+  try {
+    await matchingRate;
+  } finally {
+    matchingRate = null;
+  }
+}
+
+async function matchEngineRateOnce(): Promise<void> {
   for (const { material: m } of library.values()) {
     if (client.sourceMatchesRate(m.id)) continue;
     const { source } = await client.analyze(m.channels, m.sampleRate, undefined, m.analysis.track);
@@ -1628,7 +1645,21 @@ async function switchProject(id: string): Promise<void> {
 }
 
 /** The open project as one file (.easysampler): every material's samples and settings, and the song. */
+/** A project file made but not yet shared (iPhone home-screen app: the share sheet needs a fresh tap). */
+let projectFileReady: { blob: Blob; fileName: string; at: number } | null = null;
+
 async function saveProjectFile(): Promise<void> {
+  if (SHARE_ONLY && projectFileReady && Date.now() - projectFileReady.at < 60_000) {
+    const ready = projectFileReady;
+    projectFileReady = null;
+    try {
+      await shareFile(ready.blob, ready.fileName, ready.fileName);
+      status.textContent = `「${ready.fileName}」を共有しました。`;
+    } catch (error) {
+      status.textContent = `共有できませんでした: ${error instanceof Error ? error.message : error}`;
+    }
+    return;
+  }
   await flushAll();
   const name = currentProject()?.name ?? "プロジェクト";
   const materials = [...library.values()].map(({ material: m, settings }) => ({
@@ -1645,8 +1676,22 @@ async function saveProjectFile(): Promise<void> {
   }
   const bytes = buildProjectFile({ name, project: rollPanel.snapshot(), materials });
   const fileName = `${safeBaseName(name)}${PROJECT_FILE_EXTENSION}`;
-  downloadFile(new Blob([bytes], { type: "application/octet-stream" }), fileName);
-  status.textContent = `「${fileName}」に保存しました(素材 ${materials.length} 個、${(bytes.byteLength / 1048576).toFixed(1)} MB)。`;
+  const blob = new Blob([bytes], { type: "application/octet-stream" });
+  const size = `素材 ${materials.length} 個、${(bytes.byteLength / 1048576).toFixed(1)} MB`;
+  if (SHARE_ONLY && canShareFiles()) {
+    try {
+      await shareFile(blob, fileName, fileName);
+      status.textContent = `「${fileName}」を共有しました(${size})。`;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotAllowedError") {
+        projectFileReady = { blob, fileName, at: Date.now() };
+        status.textContent = `できました(${size})。もう一度「ファイルに保存」を押すと共有シートが開きます。`;
+      } else status.textContent = `共有できませんでした: ${error instanceof Error ? error.message : error}`;
+    }
+    return;
+  }
+  downloadFile(blob, fileName);
+  status.textContent = `「${fileName}」に保存しました(${size})。`;
 }
 
 /** A project file becomes a new project in the browser (its materials under new ids), and opens. */
@@ -2270,7 +2315,7 @@ function sendInstrument(): void {
   built = null;
   if (material && cuts[current]) {
     const id = instrumentId(material.id, cuts[current].id);
-    client.defineInstrument(id, material.id, markers, params);
+    client.defineInstrument(id, material.id, markers, params, exportLengthSec(exportSettings));
     client.setHold(exportLengthSec(exportSettings));
     routeKeyboard();
     refreshInstruments();
@@ -2703,6 +2748,7 @@ async function setCorrections(corrections: PitchCorrection[]): Promise<void> {
     target.source = source;
     target.exportSources = new Map([[source.sampleRate, source]]);
     client.setSource(source, target.id);
+    checkEngineRate(target.id);
     editor.setMaterial({ mono: target.mono, sampleRate: target.sampleRate, track: analysis.track });
     editor.setSelection(selection);
     for (const cut of cuts) {
@@ -2810,7 +2856,11 @@ window.addEventListener("pagehide", () => {
   void rollPanel.flush();
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") flushSave();
+  // (A phone may end a page in the background without pagehide: what waits to be saved goes now.)
+  if (document.visibilityState === "hidden") {
+    flushSave();
+    void rollPanel.flush();
+  }
 });
 
 /** Puts a settings file into effect for the loaded material. */
@@ -2903,7 +2953,7 @@ function stashMaterial(): void {
 function defineMaterialCuts(): void {
   if (!material) return;
   syncCut();
-  for (const cut of cuts) client.defineInstrument(instrumentId(material.id, cut.id), material.id, cut.markers, cut.params);
+  for (const cut of cuts) client.defineInstrument(instrumentId(material.id, cut.id), material.id, cut.markers, cut.params, exportLengthSec(exportSettings));
   refreshInstruments();
 }
 
@@ -3064,7 +3114,8 @@ async function loadInBackground(id: string, name: string, channels: Float32Array
   const m: Material = { id, name, channels, sampleRate, mono: mixToMono(channels), analysis, original: plain, corrections: settings?.corrections ?? [], pitchRange: settings?.pitchRange ?? null, source, exportSources: new Map([[source.sampleRate, source]]) };
   library.set(id, { material: m, settings });
   client.setSource(source, id);
-  for (const cut of settings?.cuts ?? []) client.defineInstrument(instrumentId(id, cut.id), id, cut.markers, { ...cut.params, maxVoices: DEFAULT_PARAMS.maxVoices });
+  checkEngineRate(id);
+  for (const cut of settings?.cuts ?? []) client.defineInstrument(instrumentId(id, cut.id), id, cut.markers, { ...cut.params, maxVoices: DEFAULT_PARAMS.maxVoices }, exportLengthSec(settings?.export ?? DEFAULT_EXPORT));
 }
 
 /** Shows another material of the project in the editor. */
@@ -3174,6 +3225,7 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
     editor.setMaterial({ mono: material.mono, sampleRate, track: analysis.track });
     refreshFixBar();
     client.setSource(source, id);
+    checkEngineRate(id);
     emptyState.hidden = true;
     workspace.hidden = false;
     // A material opened or added by hand: its view comes up.

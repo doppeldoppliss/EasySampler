@@ -592,8 +592,15 @@ export class RollPanel {
       // The roll works in rows; the song keeps GM keys (changed() maps them back).
       this.rowKeys = drumRows(this.project.kit, t.notes);
       this.roll.setRows(this.rowKeys.map((k) => keyLabel(this.project.kit, k)));
+      this.roll.pitchToKey = (row) => this.rowKeys[row] ?? row;
+      this.roll.keyToPitch = (key) => {
+        const row = this.rowKeys.indexOf(key);
+        return row < 0 ? null : row;
+      };
       this.roll.setNotes(t.notes.map((n) => ({ ...n, pitch: this.rowKeys.indexOf(n.pitch) })));
     } else {
+      this.roll.pitchToKey = null;
+      this.roll.keyToPitch = null;
       this.roll.setRows(null);
       this.roll.setNotes(t.notes);
     }
@@ -604,7 +611,8 @@ export class RollPanel {
     if (index === this.selected || !this.project.tracks[index]) return;
     this.selected = index;
     this.showTrackInRoll();
-    this.renderTracks();
+    [...this.trackList.children].forEach((row, i) => row.classList.toggle("selected", i === index));
+    this.renderPads();
     this.showRoot();
     this.refreshButtons();
     this.onTrackChange();
@@ -883,14 +891,20 @@ export class RollPanel {
     const close = (e: Event) => {
       if (e instanceof KeyboardEvent ? e.key === "Escape" : !menu.contains(e.target as Node)) this.closeMenu();
     };
+    // A scroll elsewhere (the page) closes it; scrolling the menu itself does not.
+    const onScroll = (e: Event) => {
+      if (!(e.target instanceof Node && menu.contains(e.target))) this.closeMenu();
+    };
     setTimeout(() => {
+      if (this.menu !== menu) return;
       document.addEventListener("pointerdown", close, true);
       document.addEventListener("keydown", close, true);
-      window.addEventListener("scroll", () => this.closeMenu(), { once: true, capture: true });
+      window.addEventListener("scroll", onScroll, true);
     });
     this.menuCleanup = () => {
       document.removeEventListener("pointerdown", close, true);
       document.removeEventListener("keydown", close, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }
 

@@ -16,6 +16,8 @@ import {
   emptyProject,
   fromSongNotes,
   newAudioTrack,
+  newId,
+  sortNotes,
   newDrumTrack,
   clipsToSeq,
   newTrack,
@@ -91,6 +93,9 @@ const NOTE_LENGTHS: [number, string][] = [
   [4, "4 拍(全音符)"],
 ];
 const ONION_KEY = "easysampler.roll.onion";
+const METRONOME_KEY = "easysampler.roll.metronome";
+/** The metronome's lane id (a lane starting with "__" is not muted by a solo). */
+const METRONOME = "__metronome";
 
 /**
  * 一括変更: "240"-style input after Domino, in this app's units. A plain
@@ -203,6 +208,17 @@ export class RollPanel {
   /** A drum track: where its rows come from (the kit), and the way to it. */
   private readonly padList = el("div", { className: "pad-list" });
   private readonly playButton = button("▶ 再生", "big", () => this.toggle());
+  /** Clicks on every beat while the song plays (always while recording, with a bar of count-in). */
+  private metronome = remembered(METRONOME_KEY) === "on";
+  private readonly metronomeToggle = button("メトロノーム", "small toggle", () => {
+    this.metronome = !this.metronome;
+    remember(METRONOME_KEY, this.metronome ? "on" : "off");
+    this.metronomeToggle.classList.toggle("on", this.metronome);
+    if (this.playing && !this.recording) this.reload();
+  }, "再生中、拍ごとにクリックを鳴らします(録音中は常に鳴ります)");
+  private readonly recordButton = button("● 録音", "small", () => this.toggleRecording(), "選んでいるトラックに、鍵盤(画面・PC キーボード・MIDI キーボード)で弾いた音符をそのまま入れます。1 小節のカウントのあと、再生位置から始まります");
+  /** A recording under way: where it starts (beats), the keys held (their start and strength), and the notes so far. */
+  private recording: { startBeat: number; held: Map<number, { start: number; velocity: number }>; notes: Note[] } | null = null;
   private readonly loopButton = button("", "small", () => this.setLoopOn(!this.project.loop.on));
   /** Whole stretches on every track (the loop range): a blank before it, deleted, or played twice. */
   private readonly arrangeLabel = el("span", { className: "fine" });
@@ -363,6 +379,8 @@ export class RollPanel {
       el("div", { className: "row" }, [this.midiButton, this.midiInput]),
       el("div", { className: "row roll-transport" }, [
         this.playButton,
+        this.recordButton,
+        this.metronomeToggle,
         this.loopButton,
         el("label", { className: "inline" }, ["BPM ", this.bpmInput]),
         el("label", { className: "inline" }, ["吸着 ", this.gridSelect]),
@@ -1328,6 +1346,12 @@ export class RollPanel {
     this.scheduleSave();
   }
 
+  /** The tracks as played: with the metronome when it sounds. */
+  private playSpecs(): TrackSpec[] {
+    const click = this.metronomeSpec();
+    return click ? [...this.trackSpecs(), click] : this.trackSpecs();
+  }
+
   private trackSpecs(): TrackSpec[] {
     const kit = this.kitSpec();
     return this.project.tracks
@@ -1379,7 +1403,7 @@ export class RollPanel {
   /** The tracks to the engine again; a song playing goes on from where it is. */
   private reload(): void {
     const position = this.currentSec();
-    this.client.loadTracks(this.trackSpecs());
+    this.client.loadTracks(this.startedAt !== null ? this.playSpecs() : this.trackSpecs());
     this.sendLoop();
     if (this.startedAt !== null) {
       this.from = position;
@@ -1411,6 +1435,15 @@ export class RollPanel {
 
   toggle(): void {
     if (this.playing) {
+      const rec = this.recording;
+      if (rec) {
+        // Back to where the recording started, to hear it.
+        this.stop();
+        this.from = beatsToSec(rec.startBeat, this.project);
+        this.showPosition(this.from);
+        this.roll.setPlayhead(rec.startBeat);
+        return;
+      }
       this.from = this.currentSec();
       this.stop();
       return;
@@ -1422,7 +1455,7 @@ export class RollPanel {
 
   private start(): void {
     this.client.setTempo(this.project.bpm);
-    this.client.loadTracks(this.trackSpecs());
+    this.client.loadTracks(this.playSpecs());
     this.sendLoop();
     this.startedAt = this.client.playSong(this.from);
     this.playButton.textContent = "■ 停止";
@@ -1432,7 +1465,8 @@ export class RollPanel {
     const tick = () => {
       if (this.startedAt === null) return;
       const beat = this.currentBeat();
-      if (!this.project.loop.on && beat > this.lastBeat() + END_PAD_BEATS) {
+      // (A recording goes on past the last note.)
+      if (!this.recording && !this.project.loop.on && beat > this.lastBeat() + END_PAD_BEATS) {
         this.from = 0;
         this.stop();
         return;
@@ -1442,6 +1476,106 @@ export class RollPanel {
       this.frame = requestAnimationFrame(tick);
     };
     this.frame = requestAnimationFrame(tick);
+  }
+
+  // ------------------------------------------------------------- recording (design.md 13)
+
+  get isRecording(): boolean {
+    return this.recording !== null;
+  }
+
+  private toggleRecording(): void {
+    if (this.recording) {
+      this.toggle();
+      return;
+    }
+    if (this.track.kind === "audio") {
+      this.info.textContent = "音声トラックには録音できません。音符を入れるトラック(区間のトラックかドラムトラック)を選んでください。";
+      return;
+    }
+    if (this.playing) this.stop();
+    const startBeat = Math.max(0, secToBeats(this.from, this.project));
+    this.recording = { startBeat, held: new Map(), notes: [] };
+    // One bar of count-in before it.
+    this.from = beatsToSec(startBeat - this.project.beatsPerBar, this.project);
+    this.recordButton.textContent = "■ 録音を止める";
+    this.recordButton.classList.add("recording");
+    this.info.textContent = `録音: 1 小節のカウントのあと、「${this.track.name}」に入ります。`;
+    this.start();
+  }
+
+  /** A key pressed or let go while recording: kept as a note where the song is (as heard). Whether it was taken. */
+  recordNote(pitch: number, down: boolean, velocity = DEFAULT_VELOCITY): boolean {
+    const rec = this.recording;
+    if (!rec || this.startedAt === null) return false;
+    // Where the player was when what is heard now was made.
+    const beat = secToBeats(this.currentSec() - this.client.outputLatency, this.project);
+    if (down) {
+      // (A little early on the first beat counts as on it; earlier is the count-in.)
+      if (beat < rec.startBeat - 0.5) return true;
+      rec.held.set(pitch, { start: Math.max(rec.startBeat, beat), velocity });
+      return true;
+    }
+    const held = rec.held.get(pitch);
+    if (!held) return false;
+    rec.held.delete(pitch);
+    this.keepRecorded(rec, pitch, held, beat);
+    return true;
+  }
+
+  private keepRecorded(rec: { notes: Note[] }, pitch: number, held: { start: number; velocity: number }, end: number): void {
+    const { loop } = this.project;
+    // Let go after the loop wrapped: it ends at the loop's end.
+    if (end <= held.start) end = loop.on && held.start < loop.end ? loop.end : held.start + 1 / 16;
+    rec.notes.push({ id: newId(), start: held.start, length: Math.max(1 / 64, end - held.start), pitch, velocity: Math.max(0.05, Math.min(1, held.velocity)) });
+    this.info.textContent = `録音中… ${rec.notes.length} 音`;
+  }
+
+  /** The recording has ended (playback stopped, keys still held let go at `end`): its notes join the track, as one step to undo. */
+  private finishRecording(rec: NonNullable<RollPanel["recording"]>, end: number): void {
+    this.recordButton.textContent = "● 録音";
+    this.recordButton.classList.remove("recording");
+    for (const [pitch, held] of rec.held) this.keepRecorded(rec, pitch, held, end);
+    if (!rec.notes.length) {
+      this.info.textContent = "録音した音符はありません。";
+      return;
+    }
+    const t = this.track;
+    if (t.kind === "drum") {
+      const merged = [...t.notes, ...rec.notes];
+      const rows = drumRows(this.project.kit, merged);
+      if (rows.join() === this.rowKeys.join()) {
+        this.roll.setNotes(merged.map((n) => ({ ...n, pitch: rows.indexOf(n.pitch) })), true);
+        this.changed(this.roll.notes);
+      } else {
+        // New rows: the roll is drawn again (its undo starts afresh).
+        t.notes = sortNotes(merged);
+        this.showTrackInRoll();
+        this.reload();
+        this.renderTracks();
+        this.scheduleSave();
+      }
+    } else {
+      this.roll.setNotes([...this.roll.notes, ...rec.notes], true);
+      this.changed(this.roll.notes);
+    }
+    this.refreshButtons();
+    this.info.textContent = `${rec.notes.length} 音を録音しました(「元に戻す」で取り消せます。ずれはクオンタイズで整えられます)。`;
+  }
+
+  /** The metronome's clicks (beats from a bar before `fromBeat` to past the song), when it sounds. */
+  private metronomeSpec(): TrackSpec | null {
+    if (!(this.metronome || this.recording)) return null;
+    const bpb = this.project.beatsPerBar;
+    const fromBeat = Math.floor(secToBeats(this.from, this.project)) - bpb;
+    const last = Math.max(this.lastBeat(), this.project.loop.on ? this.project.loop.end : 0, secToBeats(this.from, this.project)) + bpb * 64;
+    const notes = [];
+    for (let beat = Math.max(-bpb, fromBeat); beat < last; beat++) {
+      const start = beatsToSec(beat, this.project);
+      const down = ((beat % bpb) + bpb) % bpb === 0;
+      notes.push({ start, end: start + 0.03, note: down ? 76 : 77, velocity: down ? 1 : 0.55, drum: true });
+    }
+    return { id: METRONOME, instrument: "backing", notes, gain: 0.9, pan: 0, mute: false, solo: false, fx: null };
   }
 
   /** Stops playback keeping the position where it is now (leaving the 曲 view). */
@@ -1455,6 +1589,10 @@ export class RollPanel {
   stop(): void {
     cancelAnimationFrame(this.frame);
     if (this.startedAt === null) return;
+    // A recording ends here: where the keys still held are let go, before the clock stops.
+    const rec = this.recording;
+    const recEnd = rec ? secToBeats(this.currentSec() - this.client.outputLatency, this.project) : 0;
+    this.recording = null;
     this.startedAt = null;
     this.client.stopSong();
     this.client.setTempo(this.restingBpm());
@@ -1463,6 +1601,8 @@ export class RollPanel {
     this.roll.setPlayhead(secToBeats(this.from, this.project));
     this.showPosition(this.from);
     this.onPlayingChange(false);
+    // (After playback has stopped: adding the notes reloads the tracks, which must not start it again.)
+    if (rec) this.finishRecording(rec, recEnd);
   }
 
   // ------------------------------------------------------------- the screen
@@ -1475,7 +1615,7 @@ export class RollPanel {
     }
     const bpb = this.project.beatsPerBar;
     const bar = Math.floor(beat / bpb + 1e-9);
-    this.position.textContent = `${bar + 1} 小節 ${Math.floor(beat - bar * bpb + 1e-9) + 1} 拍`;
+    this.position.textContent = this.recording && beat < this.recording.startBeat ? `カウント ${Math.ceil(this.recording.startBeat - beat)}` : `${bar + 1} 小節 ${Math.floor(beat - bar * bpb + 1e-9) + 1} 拍`;
     if (!this.playing) this.roll.setPlayhead(beat);
   }
 
@@ -1508,6 +1648,7 @@ export class RollPanel {
     for (const b of this.nudgeButtons) b.disabled = none;
     this.sliceButton.disabled = this.roll.notes.length === 0;
     this.onionToggle.classList.toggle("on", this.onion);
+    this.metronomeToggle.classList.toggle("on", this.metronome);
     this.onionToggle.hidden = this.track.kind !== "melodic";
     const drum = this.track.kind !== "melodic";
     this.stepToggle.textContent = `ステップ入力: ${this.stepMode && !drum ? "オン" : "オフ"}`;

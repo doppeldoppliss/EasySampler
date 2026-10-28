@@ -1411,3 +1411,6 @@ details.sub.credit > summary {
 .tempo-list { gap: 6px; align-items: center; flex-wrap: wrap; }
 .tempo-item { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; }
 .tempo-bpm { width: 4.5em; }
+
+/* Recording under way. */
+button.recording { background: var(--warn); color: var(--accent-text); border-color: var(--warn); }

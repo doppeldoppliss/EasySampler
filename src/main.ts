@@ -52,6 +52,8 @@ import { renderSong, type RenderTrack } from "./daw/songRender";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, newSlot, renderSlot, slotFor, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
+import { MicRecorder } from "./audio/micRecorder";
+import { MidiInput } from "./audio/midiInput";
 import { autoToSec, BACKING, beatsToSec, clipsToSeq, tempoMapSec, toSeqNotes, type Tempo } from "./daw/model";
 import { autoValue, type AutoPoint } from "./song/player";
 import { zipStore, type ZipEntry } from "./export/zip";
@@ -137,10 +139,12 @@ const sink = {
     client.unlock();
     // ステップ入力: the key also goes into the song as a note; it sounds as any key does (in the 曲 view: the track, with its effects).
     rollPanel.stepNote(n, true);
+    rollPanel.recordNote(n, true, velocity);
     client.noteOn(n, velocity);
   },
   noteOff: (n: number) => {
     rollPanel.stepNote(n, false);
+    rollPanel.recordNote(n, false);
     client.noteOff(n);
   },
 };
@@ -302,6 +306,46 @@ function safeStorage(key: string, value?: string | null): string | null {
 const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json,.mid,.midi,.easysampler", multiple: true, className: "visually-hidden", id: "file" });
 const openButton = el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" });
 const pianoButton = button("＋ 内蔵ピアノ", "", () => void addPiano());
+// A material recorded from the microphone (opened like a file when it stops).
+const mic = new MicRecorder();
+let micTimer = 0;
+const micButton = button("● マイクで録音", "", () => void toggleMic());
+micButton.title = "マイクで録った声や音を、新しい素材にします(もう一度押すと止めて開きます)";
+micButton.hidden = !MicRecorder.supported;
+
+async function toggleMic(): Promise<void> {
+  if (mic.recording) {
+    clearInterval(micTimer);
+    micButton.textContent = "● マイクで録音";
+    micButton.classList.remove("recording");
+    const d = new Date();
+    const p = (x: number) => String(x).padStart(2, "0");
+    try {
+      const file = await mic.stop(`録音_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`);
+      await openFile(file);
+    } catch (error) {
+      status.textContent = `録音を開けませんでした: ${error instanceof Error ? error.message : error}`;
+    }
+    return;
+  }
+  try {
+    await mic.start();
+  } catch (error) {
+    const denied = error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "SecurityError");
+    status.textContent = denied ? "マイクを使えませんでした。ブラウザのマイクの許可を確かめてください。" : `マイクを使えませんでした: ${error instanceof Error ? error.message : error}`;
+    return;
+  }
+  micButton.classList.add("recording");
+  const show = () => {
+    const s = Math.floor(mic.elapsed);
+    micButton.textContent = `■ 録音を止める ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    // (Past the longest a material may be: it stops by itself.)
+    if (mic.elapsed > MAX_MATERIAL_SEC) void toggleMic();
+  };
+  show();
+  micTimer = window.setInterval(show, 250);
+  status.textContent = "マイクで録音しています。止めると素材として開きます。";
+}
 const status = el("p", { className: "status", role: "status" });
 
 // The listening volume (this browser only; the files are written as they are), kept for the next visit.
@@ -870,8 +914,27 @@ function showPinned(): void {
 /** The keyboard's title and note: what the keys play in the view on screen. */
 const keysTitle = el("span", { className: "control-label", textContent: "試し弾き" });
 const keysNote = el("p", { className: "fine", textContent: "●の付いた鍵が、選んだ音名(書き出す高さ)です。" });
+// A MIDI keyboard: its keys go where the on-screen ones do.
+const midi = new MidiInput(sink);
+const midiState = el("span", { className: "fine" });
+const midiButton = button("MIDI キーボード", "small", () => void connectMidi());
+midiButton.title = "つないだ MIDI キーボードで弾けるようにします(録音・ステップ入力にも入ります)";
+midiButton.hidden = !MidiInput.supported;
+const showMidi = (names: string[]) => {
+  midiState.textContent = names.length ? `MIDI: ${names.join("、")}` : "MIDI: つながっている機器がありません";
+  midiButton.classList.toggle("on", names.length > 0);
+};
+midi.onChange = showMidi;
+async function connectMidi(): Promise<void> {
+  try {
+    showMidi(await midi.connect());
+  } catch {
+    midiState.textContent = "MIDI を使えませんでした(ブラウザの許可を確かめてください)";
+  }
+}
+
 const keysPanel = el("section", { className: "panel keys-panel" }, [
-  el("div", { className: "row" }, [keysTitle, octaveDown, octaveUp, pinToggle, pcToggle, pcState, el("span", { className: "fine" }, ["同時発音 ", voiceCount])]),
+  el("div", { className: "row" }, [keysTitle, octaveDown, octaveUp, pinToggle, pcToggle, pcState, midiButton, midiState, el("span", { className: "fine" }, ["同時発音 ", voiceCount])]),
   imeWarning,
   piano.element,
   keysNote,
@@ -2226,7 +2289,7 @@ const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs
 setView(view);
 
 document.getElementById("app")!.append(
-  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, projectButton, saveState, rePickButton, openButton, pianoButton])]),
+  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, projectButton, saveState, rePickButton, openButton, micButton, pianoButton])]),
   fileInput,
   projectDialog,
   status,

@@ -217,7 +217,8 @@ export class SongPlayer {
   /** Starts at context frame `atFrame`, from `fromSec` into the song. */
   play(atFrame: number, fromSec: number): void {
     this.startFrame = atFrame;
-    this.fromFrame = Math.max(0, Math.round(fromSec * this.sampleRate));
+    // (It may start before the song's start: a recording's count-in.)
+    this.fromFrame = Math.round(fromSec * this.sampleRate);
     this.positioned = false;
     // The LFOs start with the song.
     for (const lane of this.lanes) lane.fx.reset();
@@ -331,11 +332,12 @@ export class SongPlayer {
     }
     this.masterFrom = this.masterTo;
     this.masterTo = endSec !== null && this.masterAuto.length ? autoValue(this.masterAuto, endSec, 1) : 1;
-    const anySolo = this.lanes.some((l) => l.mix.solo);
+    // (A lane whose id starts with "__", the metronome, is never muted by another's solo.)
+    const anySolo = this.lanes.some((l) => l.mix.solo && !l.id.startsWith("__"));
     for (const lane of this.lanes) {
       const { gain, mute, solo } = lane.mix;
       // (Muted, or another track soloed: down to 0, ramped like any change.)
-      const level = mute || (anySolo && !solo) ? 0 : gain * (endSec !== null && lane.mix.volumeAuto?.length ? autoValue(lane.mix.volumeAuto, endSec, 1) : 1);
+      const level = mute || (anySolo && !solo && !lane.id.startsWith("__")) ? 0 : gain * (endSec !== null && lane.mix.volumeAuto?.length ? autoValue(lane.mix.volumeAuto, endSec, 1) : 1);
       const pan = endSec !== null && lane.mix.panAuto?.length ? autoValue(lane.mix.panAuto, endSec, 0) : lane.mix.pan;
       // Balance pan: the centre is unity on both sides.
       const gl1 = level * Math.min(1, 1 - pan);

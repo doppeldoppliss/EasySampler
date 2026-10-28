@@ -262,6 +262,12 @@ export class EngineClient {
     this.post({ type: "songMix", id, mix: { gain: mix.gain, pan: mix.pan, mute: mix.mute, solo: mix.solo, fx: mix.fx, volumeAuto: mix.volumeAuto, panAuto: mix.panAuto } });
   }
 
+  /** How long after a sample's time it is heard (the output's latency, seconds; 0 before the audio starts). */
+  get outputLatency(): number {
+    const ctx = this.context as (AudioContext & { outputLatency?: number }) | null;
+    return ctx ? (ctx.baseLatency ?? 0) + (ctx.outputLatency ?? 0) : 0;
+  }
+
   /** The song's tempo map (seconds), for its tempo-synced effects. */
   setTempoMap(points: { sec: number; bpm: number }[]): void {
     this.pending = this.pending.filter((m) => m.type !== "tempoMap");

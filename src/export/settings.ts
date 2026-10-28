@@ -135,6 +135,18 @@ function sanitizeCut(raw: unknown, index: number): CutSettings | null {
 }
 
 function sanitizeParams(raw: unknown): InstrumentParams {
+  const p = readParams(raw);
+  // The sustain switched off while drawn out (before 作り方): a one-shot of the head, its 伸ばし方 kept for 伸ばす.
+  if (!p.sustainEnabled && p.sustainMode !== "none") {
+    p.heldSustainMode = p.sustainMode;
+    p.sustainMode = "none";
+  }
+  return p;
+}
+
+const HELD_MODES = ["pool", "loop", "wavetable", "stretch"] as const;
+
+function readParams(raw: unknown): InstrumentParams {
   const d = DEFAULT_PARAMS;
   if (!isRecord(raw)) return structuredClone(d);
   const tail = isRecord(raw.tail) ? raw.tail : {};
@@ -156,6 +168,8 @@ function sanitizeParams(raw: unknown): InstrumentParams {
     unvoicedGainDb: clamp(num(raw.unvoicedGainDb, d.unvoicedGainDb), -60, 12),
     sustainEnabled: typeof raw.sustainEnabled === "boolean" ? raw.sustainEnabled : d.sustainEnabled,
     sustainMode: raw.sustainMode === "loop" || raw.sustainMode === "none" || raw.sustainMode === "wavetable" || raw.sustainMode === "stretch" ? raw.sustainMode : "pool",
+    heldSustainMode: HELD_MODES.find((m) => m === raw.heldSustainMode) ?? (HELD_MODES.find((m) => m === raw.sustainMode) ?? d.heldSustainMode),
+    heldPitchMode: raw.heldPitchMode === "resample" ? "resample" : raw.heldPitchMode === "preserve-length" ? "preserve-length" : raw.sustainMode === "none" ? d.heldPitchMode : raw.pitchMode === "resample" ? "resample" : "preserve-length",
     wavetableCycles: clamp(Math.round(num(raw.wavetableCycles, d.wavetableCycles)), 1, 16),
     stretch: {
       head: clamp(num(isRecord(raw.stretch) ? raw.stretch.head : undefined, d.stretch.head), 0.25, 4),

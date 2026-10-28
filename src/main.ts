@@ -27,7 +27,10 @@ import {
   DEFAULT_EXPORT,
   DEFAULT_FX,
   DEFAULT_PARAMS,
-  PRESETS, oneShotParams,
+  PRESETS,
+  makeModeOf,
+  withMakeMode,
+  type MakeMode,
   destinationRate,
   exportLengthSec,
   type Credit,
@@ -672,10 +675,20 @@ function setNote(n: number, mode: "auto" | "manual"): void {
   refreshExport();
 }
 
-const presetSelect = el("select", { ariaLabel: "プリセット" }, [
-  el("option", { value: "", textContent: "(カスタム)" }),
-  ...PRESETS.map((p) => el("option", { value: p.id, textContent: p.label })),
-]);
+// The presets of the current 作り方 only (rebuilt when it changes).
+const presetSelect = el("select", { ariaLabel: "プリセット" });
+let presetOptionsMode: MakeMode | null = null;
+function refreshPresetOptions(): void {
+  const mode = makeModeOf(params);
+  if (mode !== presetOptionsMode) {
+    presetOptionsMode = mode;
+    presetSelect.replaceChildren(
+      el("option", { value: "", textContent: "(カスタム)" }),
+      ...PRESETS.filter((p) => p.mode === mode).map((p) => el("option", { value: p.id, textContent: p.label })),
+    );
+  }
+  presetSelect.value = presetId;
+}
 presetSelect.addEventListener("change", () => {
   const preset = PRESETS.find((p) => p.id === presetSelect.value);
   if (!preset) return;
@@ -737,12 +750,11 @@ const lengthBlock = el("div", { className: "length" }, [
 
 // Speeds (VocalShifter's TIME, as one factor per part) and the vibrato (VIB), in the open where they are reached for.
 const stretchFormat = (v: number) => `×${v.toFixed(2)}`;
-const sustainStretchRow = range("持続区間 ×(ワンショットのとき)", 0.25, 8, 0.05, () => params.stretch.sustain, (p, v) => (p.stretch.sustain = v), stretchFormat);
+const sustainStretchRow = range("持続区間から後の長さ ×(×2 = 2 倍ゆっくり)", 0.25, 8, 0.05, () => params.stretch.sustain, (p, v) => (p.stretch.sustain = v), stretchFormat);
 const timePanel = el("details", { className: "sub" }, [
-  el("summary", { textContent: "各部分の長さ(倍率。×2 = 2 倍ゆっくり)" }),
-  el("p", { className: "fine", textContent: "各部分の長さの倍率。1.00 が録音のまま。持続区間は普段「音の長さまで伸ばす」ので、倍率が効くのはワンショット(伸ばさない)のときだけです。" }),
+  el("summary", { textContent: "頭部の長さ(倍率。×2 = 2 倍ゆっくり)" }),
+  el("p", { className: "fine", textContent: "1.00 が録音のまま。伸ばす作り方では、持続区間の長さは押している長さ(音符の長さ)で決まります。" }),
   range("頭部 ×", 0.25, 4, 0.05, () => params.stretch.head, (p, v) => (p.stretch.head = v), stretchFormat),
-  sustainStretchRow,
 ]);
 // 音階: the key and the scale (shown in "scale" mode).
 const tuneScaleRow = el("div", { className: "row tight" }, [
@@ -762,76 +774,88 @@ const vibratoPanel = el("details", { className: "sub" }, [
   range("素材自身の揺れをならす(平滑化)", 0, 0.3, 0.005, () => params.wobble.smoothSec, (p, v) => (p.wobble.smoothSec = v), (v) => (v === 0 ? "なし" : ms(v))),
 ]);
 
-// Which parts of the material play: switches in the colours of the editor's bands.
-// (The head always plays; switching a part keeps the preset.)
-function partSwitch(label: string, band: string, get: () => boolean, set: (p: InstrumentParams, on: boolean) => void): HTMLButtonElement {
-  const b = el("button", { type: "button", className: "part-switch" });
-  b.style.setProperty("--part", `var(${band})`);
-  b.setAttribute("role", "switch");
-  const refresh = () => {
-    const on = get();
-    b.setAttribute("aria-checked", String(on));
-    b.replaceChildren(el("span", { className: "part-name", textContent: label }), el("span", { className: "part-state", textContent: on ? "オン" : "オフ" }));
-  };
-  b.addEventListener("click", () => {
-    update((p) => set(p, !get()), true);
-    refresh();
-    refreshPartsHelp();
-  });
-  controlsRefreshers.push(refresh);
-  return b;
-}
-const partsHelp = el("p", { className: "fine help" });
-function refreshPartsHelp(): void {
-  partsHelp.textContent = !params.sustainEnabled
-    ? "頭部だけ鳴って終わります(押している長さに関係なく)。"
-    : params.sustainMode === "none"
-      ? "録音の終わりまで 1 回鳴らします(押している長さに関係なく)。"
-      : "押している間は持続区間で伸ばし、離すと「離したあとの消え方」の長さで消えます。";
-}
-controlsRefreshers.push(refreshPartsHelp);
-const partsRow = el("div", { className: "parts-row" }, [
-  el("span", { className: "control-label", textContent: "鳴らす部分" }),
-  el("span", { className: "part-fixed", textContent: "頭部" }),
-  partSwitch("持続区間", "--band-sustain", () => params.sustainEnabled, (p, on) => (p.sustainEnabled = on)),
+// 作り方: the first choice, deciding which settings below are shown (design.md 4.5).
+const makeSelect = el("select", { ariaLabel: "作り方" }, [
+  el("option", { value: "hold", textContent: "伸ばす(シンセ化。押している間伸びる)" }),
+  el("option", { value: "oneshot", textContent: "そのまま 1 回(ワンショット。長さはそのまま音程だけ変える)" }),
+  el("option", { value: "speed", textContent: "早回し(効果音・ドラム。高さとともに速さも変わる)" }),
 ]);
+makeSelect.addEventListener("change", () => {
+  update((p) => Object.assign(p, withMakeMode(p, makeSelect.value as MakeMode)));
+  refreshControls();
+});
+controlsRefreshers.push(() => (makeSelect.value = makeModeOf(params)));
+const makeHelp = el("p", { className: "fine help" });
+// A one-shot: the whole recording, or the head only (the sustain switched off).
+const playRangeRow = select(
+  "鳴らす範囲",
+  [
+    ["full", "録音の終わりまで"],
+    ["head", "頭部だけ(持続区間の手前で終わる)"],
+  ],
+  () => (params.sustainEnabled ? "full" : "head"),
+  (p, v) => (p.sustainEnabled = v === "full"),
+  true,
+);
 
-/** What the chosen 伸ばし方 does (or that it is unused with the sustain off). */
+/** What the chosen 伸ばし方 does. */
 const sustainHelp = el("p", { className: "fine help" });
 // 離したら止める: only where letting go would otherwise do nothing (伸ばさない, or the sustain off).
 const stopOnReleaseRow = el("div", {}, [
   check("鍵を離したらそこで止める(頭部や録音の途中でも)", () => params.stopOnRelease, (p, v) => (p.stopOnRelease = v), true),
-  el("p", { className: "fine help", textContent: "オフ: 短く押しても録音の最後まで鳴ります。オン: 離した所から「リリース」の長さで消えます(打ち込みでは音符の長さで切れます)。書き出す単音の WAV は最後まで入ります。" }),
+  el("p", { className: "fine help", textContent: "打ち込みでは音符の長さで切れます。書き出す単音の WAV は最後まで入ります。" }),
 ]);
-function refreshSustainHelp(): void {
+// Shown for 伸ばす only / for the one-shots only (marked where they are placed).
+const holdOnly: HTMLElement[] = [];
+const oneShotOnly: HTMLElement[] = [];
+const held = (e: HTMLElement) => (holdOnly.push(e), e);
+const oneShot = (e: HTMLElement) => (oneShotOnly.push(e), e);
+let wavetableRow: HTMLElement;
+let releaseRow: HTMLElement;
+/** The 作り方 → which settings are shown, and what the chosen ones do. */
+function refreshMakeMode(): void {
+  const mode = makeModeOf(params);
+  const hold = mode === "hold";
+  refreshPresetOptions();
+  for (const e of holdOnly) e.hidden = !hold;
+  for (const e of oneShotOnly) e.hidden = hold;
+  wavetableRow.hidden = !hold || params.sustainMode !== "wavetable";
+  // (A one-shot only fades where it is let go with 離したら止める.)
+  releaseRow.hidden = !hold && !params.stopOnRelease;
+  sustainStretchRow.hidden = hold || !params.sustainEnabled;
   const texts: Record<string, string> = {
     pool: "持続区間の安定した周期をつなぎ合わせて、押している間いくらでも伸ばします(自然)。",
     stretch: "持続区間全体を「長さ」に収まるようゆっくり鳴らします(VocalShifter の TIME のように、声の変化が残る)。長さを超えて押すと持続区間の終わりから「自然」で続きます。",
     loop: "持続区間をそのまま繰り返します。",
     wavetable: "持続区間の 1〜数周期だけを繰り返します(無機質)。",
-    none: "伸ばしません。持続区間から録音の終わりまで、そのまま 1 回鳴らします(長さの倍率は効きます)。",
   };
-  sustainHelp.textContent = params.sustainEnabled ? (texts[params.sustainMode] ?? "") : "持続区間がオフなので、伸ばし方は使われません。";
-  stopOnReleaseRow.hidden = params.sustainEnabled && params.sustainMode !== "none";
+  sustainHelp.textContent = texts[params.sustainMode] ?? "";
+  const end = params.stopOnRelease ? "離した所から「リリース」の長さで消えます。" : "押している長さに関係なく最後まで鳴ります。";
+  makeHelp.textContent = hold
+    ? "押している間は持続区間で伸ばし、離すと「リリース」の長さで消えます。"
+    : mode === "oneshot"
+      ? `録音を 1 回、長さを変えずに音名の高さで鳴らします。${end}`
+      : `録音を早回し・遅回しして高さを変えます(高いほど短く)。${end}`;
+  // 早回し: the pitch is the speed, so the pitch shaping, the formant and the voiceless handling are not there at all;
+  // 伸ばす with 速度連動 chosen in 細かい設定 shows them dimmed, with a note.
+  const resample = params.pitchMode === "resample";
+  pitchModeNote.hidden = !(hold && resample);
+  for (const group of pitchGroups) {
+    group.hidden = mode === "speed";
+    group.classList.toggle("unused", resample);
+    group.inert = resample;
+  }
 }
 
 // Played by resampling (無加工, ドラム・効果音…), a cut's pitch only follows the key, sped up or slowed down:
 // the pitch shaping and the voiceless-sound handling are not used, and are shown so (dimmed, out of reach).
-const pitchModeNote = el("p", { className: "fine help pitch-mode-note", hidden: true, textContent: "「ピッチの変え方」が速度連動(録音を早回し・遅回しして高さを変える)なので、音程の調整(平坦化・整え方・リチューン)と子音・息の扱いは使われません。使うときは、細かい設定の「ピッチの変え方」を「長さ保持」にしてください。" });
+const pitchModeNote = el("p", { className: "fine help pitch-mode-note", hidden: true, textContent: "「ピッチの変え方」が速度連動(録音を早回し・遅回しして高さを変える)なので、音程の調整(平坦化・整え方・リチューン・揺れの残し方)・フォルマント・子音・息の扱いは使われません。使うときは、細かい設定の「ピッチの変え方」を「長さ保持」にしてください。" });
 const pitchGroups: HTMLElement[] = [];
 function pitchGroup(children: HTMLElement[]): HTMLElement {
   const group = el("div", { className: "pitch-group" }, children);
   pitchGroups.push(group);
   return group;
 }
-controlsRefreshers.push(() => {
-  const resample = params.pitchMode === "resample";
-  pitchModeNote.hidden = !resample;
-  for (const group of pitchGroups) {
-    group.classList.toggle("unused", resample);
-    group.inert = resample;
-  }
-});
 // 録音した高さで鳴らす: what it means for the keys and the files, while it is on.
 const fixedPitchNote = el("p", { className: "fine help", hidden: true, textContent: "どの鍵・どの音符でも録音したままの高さで鳴ります(書き出す単音も音名にかかわらず録音した高さ)。打ち込みでは、音符の高さは鳴らす位置の目印だけになります。" });
 controlsRefreshers.push(() => (fixedPitchNote.hidden = !params.fixedPitch));
@@ -845,27 +869,30 @@ const tunePanel = el("section", { className: "panel tune" }, [
   el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "音名" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]),
   fixedPitchCheck,
   fixedPitchNote,
+  el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "作り方" }), makeSelect]),
+  makeHelp,
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
-  el("p", { className: "fine help", textContent: "プリセットは出発点です。選ぶと音の設定がそのプリセットの形に戻ります(音名・入りと終わりのフェード・ベロシティ感度・フォルマント・「録音した高さで鳴らす」「鍵を離したらそこで止める」はそのまま)。つまみを動かすと「(カスタム)」になります。" }),
-  partsRow,
-  partsHelp,
-  select(
-    "持続区間の伸ばし方",
-    [
-      ["pool", "自然(周期をつなぎ合わせて伸ばす)"],
-      ["stretch", "引き延ばし(ゆっくり通して鳴らす)"],
-      ["loop", "ループ"],
-      ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"],
-      ["none", "伸ばさない(ワンショット)"],
-    ],
-    () => params.sustainMode,
-    (p, v) => (p.sustainMode = v),
+  el("p", { className: "fine help", textContent: "作り方ごとの出発点です。選ぶと音の設定がそのプリセットの形に戻ります(音名・入りと終わりのフェード・ベロシティ感度・フォルマント・「録音した高さで鳴らす」「鍵を離したらそこで止める」はそのまま)。つまみを動かすと「(カスタム)」になります。作り方を切り替えても、ほかの設定はそのまま残ります。" }),
+  held(
+    select(
+      "持続区間の伸ばし方",
+      [
+        ["pool", "自然(周期をつなぎ合わせて伸ばす)"],
+        ["stretch", "引き延ばし(ゆっくり通して鳴らす)"],
+        ["loop", "ループ"],
+        ["wavetable", "ウェーブテーブル(1〜数周期の繰り返し、無機質)"],
+      ],
+      () => (params.sustainMode === "none" ? params.heldSustainMode : params.sustainMode),
+      (p, v) => (p.sustainMode = v),
+    ),
   ),
-  sustainHelp,
-  range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`),
+  held(sustainHelp),
+  (wavetableRow = range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`)),
+  oneShot(playRangeRow),
+  sustainStretchRow,
+  oneShot(stopOnReleaseRow),
   // How a held note ends (語尾 was taken out: this is it).
-  range("離したあとの消え方(リリース)", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms),
-  stopOnReleaseRow,
+  (releaseRow = range("離したあとの消え方(リリース)", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms)),
   pitchModeNote,
   pitchGroup([
     range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
@@ -875,8 +902,8 @@ const tunePanel = el("section", { className: "panel tune" }, [
     el("p", { className: "fine help", textContent: "判定した高さから音名へ寄せるときの速さ(Auto-Tune の Retune Speed)。即座だと貼り付いたように、30 ms 前後だと自然に、長いとゆっくりした狂いだけが直ります。" }),
     el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなし・リチューン即座でケロケロになります。" }),
   ]),
-  range("持続部の音量を揃える", 0, 1, 0.05, () => params.levelEven, (p, v) => (p.levelEven = v), pct, true),
-  el("p", { className: "fine help", textContent: "素材の持続区間が減衰していても、伸ばした音の音量が一定になります。0% で録音どおりの強弱(頭部は常にそのまま)。" }),
+  held(range("持続部の音量を揃える", 0, 1, 0.05, () => params.levelEven, (p, v) => (p.levelEven = v), pct, true)),
+  held(el("p", { className: "fine help", textContent: "素材の持続区間が減衰していても、伸ばした音の音量が一定になります。0% で録音どおりの強弱(頭部は常にそのまま)。" })),
   pitchGroup([
     range("子音・息(音程なし)の音量", -60, 12, 1, () => params.unvoicedGainDb, (p, v) => (p.unvoicedGainDb = v), (v) => (v <= -60 ? "消す" : `${v > 0 ? "+" : ""}${v} dB`), true),
     check("子音や息(音程なし)も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v), true),
@@ -1373,18 +1400,23 @@ const detailsPanel = el("details", { className: "panel params" }, [
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "鳴らし方" }),
-      select("ピッチの変え方", [["preserve-length", "長さ保持(PSOLA)"], ["resample", "速度連動(昔ながら)"]], () => params.pitchMode, (p, v) => (p.pitchMode = v)),
-      range("フォルマント", -6, 6, 0.1, () => params.formantSemitones, (p, v) => (p.formantSemitones = v), semis),
-      range("±7 半音を超える移調で声質を追従させる", 0, 1, 0.05, () => params.formantFollow, (p, v) => (p.formantFollow = v), pct),
-      el("p", { className: "fine help", textContent: "0% で声の性格を保ち(Melodyne のフォルマント補正 100%)、100% で早回し / 遅回しのように変わります。" }),
+      // (The one-shots set it by their 作り方.)
+      held(select("ピッチの変え方", [["preserve-length", "長さ保持(PSOLA)"], ["resample", "速度連動(昔ながら)"]], () => params.pitchMode, (p, v) => (p.pitchMode = v))),
+      pitchGroup([
+        range("フォルマント", -6, 6, 0.1, () => params.formantSemitones, (p, v) => (p.formantSemitones = v), semis),
+        range("±7 半音を超える移調で声質を追従させる", 0, 1, 0.05, () => params.formantFollow, (p, v) => (p.formantFollow = v), pct),
+        el("p", { className: "fine help", textContent: "0% で声の性格を保ち(Melodyne のフォルマント補正 100%)、100% で早回し / 遅回しのように変わります。" }),
+      ]),
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "揺らぎ(ビブラートは上の「ビブラート」で)" }),
-      range("素材のゆっくりした揺れ(ドリフト)を残す", -1, 1, 0.05, () => params.wobble.keepDrift, (p, v) => (p.wobble.keepDrift = v), (v) => (v < 0 ? `反転 ${Math.round(-v * 100)}%` : pct(v))),
-      range("素材の速い揺れ(ビブラート)を残す", -1, 1, 0.05, () => params.wobble.keepModulation, (p, v) => (p.wobble.keepModulation = v), (v) => (v < 0 ? `反転 ${Math.round(-v * 100)}%` : pct(v))),
-      el("p", { className: "fine help", textContent: "Melodyne のピッチドリフト / ピッチモジュレーションにあたります。平坦化が 100% だとどちらも消えるので、平坦化を下げてから効かせます。マイナスで揺れが逆向きになります。" }),
+      pitchGroup([
+        range("素材のゆっくりした揺れ(ドリフト)を残す", -1, 1, 0.05, () => params.wobble.keepDrift, (p, v) => (p.wobble.keepDrift = v), (v) => (v < 0 ? `反転 ${Math.round(-v * 100)}%` : pct(v))),
+        range("素材の速い揺れ(ビブラート)を残す", -1, 1, 0.05, () => params.wobble.keepModulation, (p, v) => (p.wobble.keepModulation = v), (v) => (v < 0 ? `反転 ${Math.round(-v * 100)}%` : pct(v))),
+        el("p", { className: "fine help", textContent: "Melodyne のピッチドリフト / ピッチモジュレーションにあたります。平坦化が 100% だとどちらも消えるので、平坦化を下げてから効かせます。マイナスで揺れが逆向きになります。" }),
+      ]),
       range("足すゆっくりした揺れ", 0, 30, 1, () => params.wobble.driftCents, (p, v) => (p.wobble.driftCents = v), (v) => `${v}¢`),
-      check("細かい揺れ(平坦でも機械的にしない)", () => params.wobble.micro, (p, v) => (p.wobble.micro = v)),
+      pitchGroup([check("細かい揺れ(平坦でも機械的にしない)", () => params.wobble.micro, (p, v) => (p.wobble.micro = v))]),
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "エンベロープ" }),
@@ -2329,8 +2361,8 @@ function cutFor(track: PitchTrack | null, m: Markers, name: string, base: Instru
     // Nothing pitched (a hit, a noise), or a one-shot by request: plays as recorded, from its own pitch (C4 when there is none).
     p.root = root?.midi ?? 60;
     p.rootMode = root ? "auto" : "manual";
-    Object.assign(p, oneShotParams(p));
-    preset = "";
+    Object.assign(p, PRESETS.find((x) => x.id === "sfx")!.apply(p));
+    preset = "sfx";
   }
   return { id: newCutId(), name, markers: m, params: p, note: Math.max(24, Math.min(96, Math.round(p.root))), noteMode: "auto", presetId: preset, detectedRoot: root?.midi ?? null };
 }
@@ -2455,7 +2487,7 @@ function refreshExport(): void {
   client.setHold(exportLengthSec(exportSettings));
   refreshInstruments();
   tuneScaleRow.hidden = params.tune.mode !== "scale";
-  refreshSustainHelp();
+  refreshMakeMode();
   if (noteMode === "auto") note = Math.max(24, Math.min(96, Math.round(params.root)));
   noteSelect.value = String(note);
   noteAutoButton.hidden = noteMode === "auto";
@@ -2477,7 +2509,9 @@ function refreshExport(): void {
   const oneShot = params.sustainMode === "none";
   const held = exportLengthSec(exportSettings);
   const wavetable = exportSettings.format === "wavetable" && !oneShot;
-  lengthBlock.classList.toggle("disabled", oneShot || wavetable);
+  // (A one-shot plays its own length: the held length is not there.)
+  lengthBlock.hidden = oneShot;
+  lengthBlock.classList.toggle("disabled", wavetable);
   lengthResult.textContent = oneShot
     ? "ワンショット: 素材の長さのまま"
     : wavetable
@@ -2518,7 +2552,6 @@ function refreshExport(): void {
       },
     );
   }
-  sustainStretchRow.classList.toggle("disabled", !oneShot);
   refreshFixBar();
   piano.setRoot(note);
   syncCut();

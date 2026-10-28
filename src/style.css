@@ -757,59 +757,6 @@ details.sub.fx > summary.on {
   color: var(--accent);
 }
 
-/* 鳴らす部分: the head (always on) and switches for the sustain and the tail, in their band colours. */
-.parts-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0;
-}
-
-.part-fixed {
-  padding: 6px 12px;
-  border-radius: 999px;
-  border: 2px solid var(--band-head);
-  background: var(--band-head);
-  color: var(--band-text);
-  font-weight: 600;
-}
-
-.part-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 4px 6px 4px 12px;
-  border-radius: 999px;
-  border: 2px solid var(--part);
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.part-switch[aria-checked="true"] {
-  background: var(--part);
-  color: var(--band-text);
-}
-
-.part-state {
-  min-width: 2.6em;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--panel) 85%, transparent);
-  color: var(--text);
-  font-size: 12px;
-  text-align: center;
-}
-
-.part-switch[aria-checked="false"] .part-name {
-  text-decoration: line-through;
-  opacity: 0.7;
-}
-
 /* エフェクト: sections in the order the rack applies them, and a line of what is on. */
 .fx-head {
   margin: 14px 0 2px;

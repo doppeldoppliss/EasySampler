@@ -11,7 +11,13 @@ import type { ScaleId } from "./scale";
 export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
 export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
-export type PresetId = "synth" | "short" | "transpose" | "decay";
+export type PresetId = "synth" | "short" | "transpose" | "decay" | "sfx";
+/**
+ * 作り方: the first choice for a cut, deciding which settings mean anything (and are shown).
+ * hold = drawn out while held (シンセ化); oneshot = the recording once, moved to the note keeping its length;
+ * speed = the recording once, sped up or slowed down to the note (効果音・ドラム).
+ */
+export type MakeMode = "hold" | "oneshot" | "speed";
 
 /** Seconds within the material, [start, end). */
 export interface TimeRange {
@@ -87,9 +93,15 @@ export interface InstrumentParams {
   formantFollow: number;
   /** The unvoiced part's level (consonants, breath, noise), in dB; −60 = gone (Melodyne's sibilant balance). */
   unvoicedGainDb: number;
-  /** Whether the sustain plays at all; off: the head goes straight on to the tail (or the note ends). */
+  /**
+   * Whether the sustain plays at all; off: the head goes straight on to the tail (or the note ends).
+   * Only off when nothing is held (sustainMode "none"): a one-shot's 鳴らす範囲 = 頭部だけ.
+   */
   sustainEnabled: boolean;
   sustainMode: SustainMode;
+  /** The 伸ばし方 and ピッチの変え方 of 伸ばす, kept while the cut is a one-shot so that going back finds them. */
+  heldSustainMode: Exclude<SustainMode, "none">;
+  heldPitchMode: PitchMode;
   /** Wavetable sustain: how many consecutive periods are cycled (1 = one period over and over). */
   wavetableCycles: number;
   /**
@@ -208,6 +220,8 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   unvoicedGainDb: 0,
   sustainEnabled: true,
   sustainMode: "pool",
+  heldSustainMode: "pool",
+  heldPitchMode: "preserve-length",
   wavetableCycles: 1,
   stretch: { head: 1, sustain: 1, tail: 1 },
   // 語尾 is no more (2026-10-28): a held note ends with the release; a one-shot plays its recording out.
@@ -227,8 +241,32 @@ export function oneShotParams(p: InstrumentParams): InstrumentParams {
   return { ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, amp: { ...p.amp, attack: 0.001, sustain: 1, release: 0.03 } };
 }
 
+/** The 作り方 a cut's settings amount to. */
+export function makeModeOf(p: InstrumentParams): MakeMode {
+  if (p.sustainMode !== "none" && p.sustainEnabled) return "hold";
+  return p.pitchMode === "resample" ? "speed" : "oneshot";
+}
+
+/**
+ * Another 作り方, everything else kept: leaving 伸ばす remembers its 伸ばし方 and ピッチの変え方,
+ * coming back puts them back. (A one-shot's 鳴らす範囲 is kept between one-shot and 早回し.)
+ */
+export function withMakeMode(p: InstrumentParams, mode: MakeMode): InstrumentParams {
+  const from = makeModeOf(p);
+  if (from === mode) return p;
+  const q = { ...p };
+  if (from === "hold") {
+    if (p.sustainMode !== "none") q.heldSustainMode = p.sustainMode;
+    q.heldPitchMode = p.pitchMode;
+  }
+  if (mode === "hold") return { ...q, sustainEnabled: true, sustainMode: q.heldSustainMode, pitchMode: q.heldPitchMode };
+  return { ...q, sustainEnabled: from === "hold" ? true : q.sustainEnabled, sustainMode: "none", pitchMode: mode === "speed" ? "resample" : "preserve-length" };
+}
+
 export interface Preset {
   id: PresetId;
+  /** The 作り方 it belongs to (the preset menu lists only the current one's). */
+  mode: MakeMode;
   label: string;
   apply: (params: InstrumentParams) => InstrumentParams;
 }
@@ -251,6 +289,8 @@ function presetBase(p: InstrumentParams): InstrumentParams {
     unvoicedGainDb: d.unvoicedGainDb,
     sustainEnabled: true,
     sustainMode: "pool",
+    heldSustainMode: "pool",
+    heldPitchMode: "preserve-length",
     stretch: { ...d.stretch },
     wobble: { ...d.wobble },
     amp: { ...d.amp, attack: p.amp.attack, fadeOut: p.amp.fadeOut, velocitySens: p.amp.velocitySens },
@@ -260,15 +300,17 @@ function presetBase(p: InstrumentParams): InstrumentParams {
 /** Starting points (design.md 4.5); the root and markers stay as they are. */
 export const PRESETS: Preset[] = [
   // Synthesis: flat on the note, the vowel drawn out while held.
-  { id: "synth", label: "シンセ化(平坦)", apply: (p) => presetBase(p) },
+  { id: "synth", mode: "hold", label: "シンセ化(平坦)", apply: (p) => presetBase(p) },
   // Not synth-ified at all: the whole cut plays through once, as recorded, moved up or down to the key pressed
   // (a pitch shift that keeps the length and the voice's colour; nothing is held or evened out).
-  { id: "transpose", label: "移調のみ(シンセ化せず全体を上げ下げ)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", levelEven: 0, wobble: { ...DEFAULT_PARAMS.wobble, micro: false } }) },
+  { id: "transpose", mode: "oneshot", label: "移調のみ(シンセ化せず全体を上げ下げ)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", levelEven: 0, wobble: { ...DEFAULT_PARAMS.wobble, micro: false } }) },
   // Short material (a shout, a word): played through once at the note, nothing stretched — the 音MAD staple.
-  { id: "short", label: "短い素材(長さ保持・そのまま音程だけ)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", unvoicedFollow: true }) },
+  { id: "short", mode: "oneshot", label: "短い素材(子音・息も音程に合わせる)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", unvoicedFollow: true }) },
   // A struck, piano-like sound from any material: synthesized (flat, the vowel drawn out) and dying away while held —
   // the level falls toward nothing (decay ~1.2 s, sustain 0) — and stopped quickly when let go, as a damper does.
-  { id: "decay", label: "減衰(伸ばしながら消える・ピアノ風)", apply: (p) => { const b = presetBase(p); return { ...b, amp: { ...b.amp, decay: 1.2, sustain: 0, release: 0.25 } }; } },
+  { id: "decay", mode: "hold", label: "減衰(伸ばしながら消える・ピアノ風)", apply: (p) => { const b = presetBase(p); return { ...b, amp: { ...b.amp, decay: 1.2, sustain: 0, release: 0.25 } }; } },
+  // A hit or a noise: read faster or slower with the key, nothing flattened or wobbled (the fade-in stays the user's).
+  { id: "sfx", mode: "speed", label: "効果音・ドラム", apply: (p) => { const b = presetBase(p); const o = oneShotParams(b); return { ...o, amp: { ...o.amp, attack: b.amp.attack } }; } },
 ];
 
 // ---------------------------------------------------------------- export

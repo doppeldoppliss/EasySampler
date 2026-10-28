@@ -1189,3 +1189,11 @@ details.sub.credit > summary {
   min-width: 2.5em;
   text-align: right;
 }
+
+/* 打ち込み: the seek bar, across the panel. */
+.song-seek-row {
+  margin: 4px 0 8px;
+}
+.song-seek {
+  width: 100%;
+}

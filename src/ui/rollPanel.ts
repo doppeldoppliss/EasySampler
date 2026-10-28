@@ -180,6 +180,10 @@ export class RollPanel {
   private readonly stepBackButton = button("1 つ戻す", "small", () => this.stepBack(), "最後に入れた音符を消して、位置を戻します");
   private readonly stepHelp = el("span", { className: "fine", textContent: "画面の鍵盤か PC キーボードで弾くと、再生位置に音符が入り、吸着の幅だけ進みます。和音は同時に押します。" });
   private readonly position = el("span", { className: "fine num" });
+  /** The seek bar: the song from its start to a little past its last note (or the loop's end), in beats. */
+  private readonly seekBar = el("input", { type: "range", min: "0", max: "16", step: "any", value: "0", className: "song-seek", ariaLabel: "再生位置" });
+  private seeking = false;
+  private seekTimer = 0;
   private readonly info = el("p", { className: "fine", role: "status" });
 
   constructor(client: EngineClient, restingBpm: () => number) {
@@ -246,6 +250,7 @@ export class RollPanel {
         el("label", { className: "inline" }, ["吸着 ", this.gridSelect]),
         this.position,
       ]),
+      el("div", { className: "row song-seek-row" }, [this.seekBar]),
       this.trackList,
       el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack()), button("＋ ドラムトラックを追加", "small", () => this.addTrack(true))]),
       this.padList,
@@ -269,6 +274,23 @@ export class RollPanel {
       ]),
       this.exportStatus,
     ]);
+    // The seek bar moves the position (and the roll's playhead, scrolling to it); while playing, the song jumps there.
+    this.seekBar.addEventListener("input", () => {
+      this.seeking = true;
+      const beat = Number(this.seekBar.value);
+      this.from = beatsToSec(beat, this.project.bpm);
+      this.roll.setPlayhead(beat, true);
+      this.showPosition(this.from);
+      if (this.playing) {
+        clearTimeout(this.seekTimer);
+        this.seekTimer = window.setTimeout(() => this.start(), 120);
+      }
+    });
+    this.seekBar.addEventListener("change", () => {
+      this.seeking = false;
+      clearTimeout(this.seekTimer);
+      if (this.playing) this.start();
+    });
     this.element.addEventListener("toggle", () => {
       remember(OPEN_KEY, this.element.open ? "open" : "closed");
       if (this.element.open) this.roll.draw();
@@ -531,6 +553,7 @@ export class RollPanel {
 
   private renderTracks(): void {
     this.summarize();
+    this.refreshSeekRange(secToBeats(this.from, this.project.bpm));
     const rows = this.project.tracks.map((t, i) => {
       const selected = i === this.selected;
       const name = el("input", { type: "text", value: t.name, className: "track-name", ariaLabel: "トラックの名前", maxLength: 30 });
@@ -894,10 +917,21 @@ export class RollPanel {
 
   private showPosition(sec: number): void {
     const beat = secToBeats(sec, this.project.bpm);
+    if (!this.seeking) {
+      this.refreshSeekRange(beat);
+      this.seekBar.value = String(beat);
+    }
     const bpb = this.project.beatsPerBar;
     const bar = Math.floor(beat / bpb + 1e-9);
     this.position.textContent = `${bar + 1} 小節 ${Math.floor(beat - bar * bpb + 1e-9) + 1} 拍`;
     if (!this.playing) this.roll.setPlayhead(beat);
+  }
+
+  /** The seek bar reaches a bar past the last note (at least 4 bars, and past the loop and the position). */
+  private refreshSeekRange(at = 0): void {
+    const bpb = this.project.beatsPerBar;
+    const end = Math.max(this.lastBeat() + bpb, this.project.loop.on ? this.project.loop.end : 0, at, bpb * 4);
+    this.seekBar.max = String(Math.ceil(end / bpb) * bpb);
   }
 
   private refreshButtons(): void {

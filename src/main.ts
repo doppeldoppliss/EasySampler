@@ -27,7 +27,7 @@ import {
   DEFAULT_EXPORT,
   DEFAULT_FX,
   DEFAULT_PARAMS,
-  PRESETS,
+  PRESETS, oneShotParams,
   destinationRate,
   exportLengthSec,
   type Credit,
@@ -615,14 +615,12 @@ const presetSelect = el("select", { ariaLabel: "プリセット" }, [
 presetSelect.addEventListener("change", () => {
   const preset = PRESETS.find((p) => p.id === presetSelect.value);
   if (!preset) return;
-  const wasRaw = presetId === "raw";
+  // (A cut saved with the former 無加工 preset had its sustain and tail moved to its end: they are found again.)
+  const wasRaw = (presetId as string) === "raw";
   presetId = preset.id;
   params = preset.apply(structuredClone(params));
   if (markers && material) {
-    if (preset.id === "raw") {
-      // 無加工・持続語尾なし: the whole cut is the head (the sustain and tail markers go to its end).
-      markers = clampMarkers({ ...markers, sustainStart: markers.rangeEnd - 0.01, sustainEnd: markers.rangeEnd, tailStart: markers.rangeEnd });
-    } else if (wasRaw) {
+    if (wasRaw) {
       // Back from it: the sustain and tail are found again within the cut.
       const found = suggestMarkersWithin(material.analysis.track, markers.rangeStart, markers.rangeEnd);
       markers = clampMarkers({ ...found, rangeStart: markers.rangeStart, rangeEnd: markers.rangeEnd, ...(markers.removed ? { removed: markers.removed } : {}) });
@@ -773,7 +771,7 @@ controlsRefreshers.push(() => {
 // 録音した高さで鳴らす: what it means for the keys and the files, while it is on.
 const fixedPitchNote = el("p", { className: "fine help", hidden: true, textContent: "どの鍵・どの音符でも録音したままの高さで鳴ります(書き出す単音も音名にかかわらず録音した高さ)。打ち込みでは、音符の高さは鳴らす位置の目印だけになります。" });
 controlsRefreshers.push(() => (fixedPitchNote.hidden = !params.fixedPitch));
-const fixedPitchCheck = check("鍵に関係なく、録音した高さで鳴らす(ドラム・効果音向け)", () => params.fixedPitch, (p, v) => (p.fixedPitch = v), true);
+const fixedPitchCheck = check("鍵に関係なく、録音した高さで鳴らす(効果音向け)", () => params.fixedPitch, (p, v) => (p.fixedPitch = v), true);
 // (Its note and the editor's output line change with it.)
 fixedPitchCheck.querySelector("input")!.addEventListener("change", () => {
   refreshControls();
@@ -2153,10 +2151,6 @@ function cutFor(track: PitchTrack | null, m: Markers, name: string, base: Instru
   if (root && !forceOneShot) {
     p.root = root.midi;
     p.rootMode = "auto";
-    if (preset === "drum") {
-      Object.assign(p, PRESETS.find((x) => x.id === "synth")!.apply(p));
-      preset = "synth";
-    }
     // Short material with hardly anything steady to sustain: play it through as it is, at the note.
     if (preset === "synth" && isShortMaterial(m)) {
       Object.assign(p, PRESETS.find((x) => x.id === "short")!.apply(p));
@@ -2166,8 +2160,8 @@ function cutFor(track: PitchTrack | null, m: Markers, name: string, base: Instru
     // Nothing pitched (a hit, a noise), or a one-shot by request: plays as recorded, from its own pitch (C4 when there is none).
     p.root = root?.midi ?? 60;
     p.rootMode = root ? "auto" : "manual";
-    Object.assign(p, PRESETS.find((x) => x.id === "drum")!.apply(p));
-    preset = "drum";
+    Object.assign(p, oneShotParams(p));
+    preset = "";
   }
   return { id: newCutId(), name, markers: m, params: p, note: Math.max(24, Math.min(96, Math.round(p.root))), noteMode: "auto", presetId: preset, detectedRoot: root?.midi ?? null };
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { analyzePitch } from "../analysis/pyin";
 import { rootPitch } from "../analysis/rootPitch";
 import { analyzeMaterial, prepareSource } from "../engine/prepare";
-import { DEFAULT_EXPORT, DEFAULT_FX, DEFAULT_PARAMS, PRESETS, exportLengthSec, type InstrumentParams } from "../instrument/types";
+import { DEFAULT_EXPORT, DEFAULT_FX, DEFAULT_PARAMS, exportLengthSec, type InstrumentParams, oneShotParams } from "../instrument/types";
 import { demoSyllable } from "../testsignals/synthVoice";
 import { exportFileName, renderNote, safeBaseName, stripExtension } from "./render";
 
@@ -56,7 +56,7 @@ describe("renderNote (the exported file)", () => {
 
   it("a one-shot plays the material out and ignores the length", () => {
     const { analysis, source, params } = setup();
-    const drum = PRESETS.find((p) => p.id === "drum")!.apply(params);
+    const drum = oneShotParams(params);
     const out = renderNote(source, analysis.markers, drum, Math.round(params.root), 5).channels[0];
     const range = analysis.markers.rangeEnd - analysis.markers.rangeStart;
     expect(out.length / SR).toBeGreaterThan(range * 0.8);

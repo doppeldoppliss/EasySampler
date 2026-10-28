@@ -4,7 +4,7 @@ import { rootPitch } from "../analysis/rootPitch";
 import { readWavChunks } from "../audio/wav";
 import { analyzeMaterial, prepareSource } from "../engine/prepare";
 import { suggestMarkersWithin } from "../instrument/markers";
-import { DEFAULT_EXPORT, DEFAULT_PARAMS, PRESETS } from "../instrument/types";
+import { DEFAULT_EXPORT, DEFAULT_PARAMS, oneShotParams } from "../instrument/types";
 import { demoSyllable } from "../testsignals/synthVoice";
 import { buildBatch, buildKit, buildOne } from "./build";
 import { applyLoop } from "./loop";
@@ -57,7 +57,7 @@ describe("applyLoop", () => {
 
   it("gives up on a one-shot", () => {
     const { source, cut } = setup();
-    const drum = PRESETS.find((p) => p.id === "drum")!.apply(cut.params);
+    const drum = oneShotParams(cut.params);
     const rendered = renderNote(source, cut.markers, drum, 62, 2);
     expect(applyLoop(rendered, drum)).toBeNull();
   });
@@ -224,7 +224,7 @@ describe("suggestMarkersWithin", () => {
 describe("buildKit", () => {
   it("puts every sample on its own key from the first key up, as one-shots, with unique file names", async () => {
     const { source, cut, credit } = setup();
-    const drum = { ...cut, params: PRESETS.find((p) => p.id === "drum")!.apply(cut.params) };
+    const drum = { ...cut, params: oneShotParams(cut.params) };
     const inputs = [
       { baseName: "kick", source, cut: drum, settings: DEFAULT_EXPORT, credit },
       { baseName: "kick", source, cut: drum, settings: DEFAULT_EXPORT, credit }, // a duplicate name

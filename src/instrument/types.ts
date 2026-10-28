@@ -11,7 +11,7 @@ import type { ScaleId } from "./scale";
 export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
 export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
-export type PresetId = "synth" | "synth-lead" | "stretch" | "kerokero" | "wavetable" | "bass" | "jinriki" | "original" | "transpose" | "short" | "short-resample" | "drum" | "decay" | "raw";
+export type PresetId = "synth" | "synth-lead" | "stretch" | "kerokero" | "wavetable" | "bass" | "jinriki" | "original" | "transpose" | "short" | "short-resample" | "decay";
 
 /** Seconds within the material, [start, end). */
 export interface TimeRange {
@@ -197,6 +197,16 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   maxVoices: 24,
 };
 
+/**
+ * A hit or a noise as a one-shot (drums live in the drum kit now, design.md
+ * 13.2; this is for a material with no pitch, and the material list's
+ * ワンショット): played through once, read faster or slower with the key,
+ * nothing flattened or wobbled.
+ */
+export function oneShotParams(p: InstrumentParams): InstrumentParams {
+  return { ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, amp: { ...p.amp, attack: 0.001, sustain: 1, release: 0.03 } };
+}
+
 export interface Preset {
   id: PresetId;
   label: string;
@@ -219,12 +229,8 @@ export const PRESETS: Preset[] = [
   // Short material (a shout, a word): played through once at the note, nothing stretched — the 音MAD staple.
   { id: "short", label: "短い素材(長さ保持・そのまま音程だけ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: true }, unvoicedFollow: true, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, retuneSec: 0 } }) },
   { id: "short-resample", label: "短い素材(速度連動・早回し質感)", apply: (p) => ({ ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: true }, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false } }) },
-  // A hit as recorded: nothing evened out, shifted or stretched, no sustain and no tail (the whole cut is the head;
-  // the page moves the sustain and tail markers to the cut's end), played through once whatever the key does.
-  { id: "raw", label: "ドラム・効果音(無加工・持続語尾なし)", apply: (p) => ({ ...p, pitchMode: "resample", flatten: 0, sustainEnabled: false, sustainMode: "none", tail: { ...p.tail, enabled: false }, unvoicedFollow: false, levelEven: 0, formantSemitones: 0, formantFollow: 0, unvoicedGainDb: 0, stretch: { head: 1, sustain: 1, tail: 1 }, wobble: { ...p.wobble, vibratoCents: 0, tremoloDepth: 0, driftCents: 0, micro: false, smoothSec: 0, keepDrift: 1, keepModulation: 1 }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 }, amp: { ...p.amp, attack: 0.001, sustain: 1, fadeOut: 0 } }) },
   // A struck or plucked sound (a piano, a pluck, a bell): it rings down on its own and stops soon after the key is let go, like a damper.
   { id: "decay", label: "減衰する楽器(ピアノ・撥弦など)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: false }, unvoicedFollow: true, levelEven: 0, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false, smoothSec: 0 }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 }, amp: { ...p.amp, attack: 0.001, decay: 0.1, sustain: 1, release: 0.25 } }) },
-  { id: "drum", label: "ドラム・効果音(ワンショット)", apply: (p) => ({ ...p, pitchMode: "resample", flatten: 0, sustainMode: "none", wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, amp: { ...p.amp, attack: 0.001, sustain: 1, release: 0.03 } }) },
 ];
 
 // ---------------------------------------------------------------- export

@@ -4,7 +4,7 @@ import { rootPitch } from "../analysis/rootPitch";
 import { readWavChunks } from "../audio/wav";
 import { Engine } from "../engine/engine";
 import { analyzeMaterial, prepareSource } from "../engine/prepare";
-import { DEFAULT_EXPORT, DEFAULT_PARAMS, PRESETS } from "../instrument/types";
+import { DEFAULT_EXPORT, DEFAULT_PARAMS } from "../instrument/types";
 import { demoSyllable, synthVoice } from "../testsignals/synthVoice";
 import { buildOne } from "./build";
 import { buildWavetable, FRAME_SIZE } from "./wavetable";
@@ -97,7 +97,8 @@ describe("wavetable sustain (engine)", () => {
     const { analysis, source } = setup();
     const engine = new Engine(SR);
     engine.setSource(source);
-    const params = PRESETS.find((p) => p.id === "wavetable")!.apply({ ...DEFAULT_PARAMS, root: analysis.root!.midi });
+    // (What the former ウェーブテーブル preset set: flat, one period repeated, nothing wobbling.)
+    const params = { ...DEFAULT_PARAMS, root: analysis.root!.midi, pitchMode: "preserve-length" as const, flatten: 1, sustainMode: "wavetable" as const, wavetableCycles: 1, wobble: { ...DEFAULT_PARAMS.wobble, vibratoCents: 0, driftCents: 0, micro: false } };
     engine.setInstrument(analysis.markers, params);
     const out = new Float32Array(2 * SR);
     const l = new Float32Array(128);

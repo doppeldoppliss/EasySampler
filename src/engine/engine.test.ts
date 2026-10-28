@@ -632,7 +632,7 @@ describe("Engine: resampling presets leave the pitch shaping unused", () => {
     const vowel = synthVoice({ sampleRate: SR, durationSec: 0.6, pitch: demoPhrasePitch(57, 0.6) });
     const render = (over: Partial<InstrumentParams>) => {
       const { engine, analysis } = setup(vowel);
-      const base = PRESETS.find((p) => p.id === "short-resample")!.apply({ ...DEFAULT_PARAMS, root: analysis.root!.midi });
+      const base: InstrumentParams = { ...PRESETS.find((p) => p.id === "short")!.apply({ ...DEFAULT_PARAMS, root: analysis.root!.midi }), pitchMode: "resample" };
       engine.setInstrument(analysis.markers, { ...base, ...over });
       return play(engine, 62, 0.3, 0.5);
     };
@@ -649,10 +649,10 @@ describe("Engine: 録音した高さで鳴らす (fixed pitch)", () => {
   const vowel = synthVoice({ sampleRate: SR, durationSec: 0.8, pitch: demoPhrasePitch(57, 0.8) });
   it("plays every key at the recording's pitch, by resampling or by grains", async () => {
     const { PRESETS } = await import("../instrument/types");
-    for (const preset of ["short-resample", "synth"]) {
+    for (const [preset, pitchMode] of [["short", "resample"], ["synth", "preserve-length"]] as const) {
       const { engine, analysis } = setup(vowel);
       const root = analysis.root!.midi;
-      const params = { ...PRESETS.find((p) => p.id === preset)!.apply({ ...DEFAULT_PARAMS, root }), fixedPitch: true };
+      const params: InstrumentParams = { ...PRESETS.find((p) => p.id === preset)!.apply({ ...DEFAULT_PARAMS, root }), pitchMode, fixedPitch: true };
       engine.setInstrument(analysis.markers, params);
       for (const key of [Math.round(root) - 12, Math.round(root) + 7]) {
         const out = play(engine, key, 0.6, 0.3);

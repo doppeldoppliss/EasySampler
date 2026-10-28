@@ -1388,3 +1388,13 @@ details.sub.credit > summary {
 .workspace[data-view="kit"] > .axis-song {
   display: none;
 }
+
+/* A kit sound's waveform: drag for where it starts (and ends). */
+.kit-wave {
+  width: min(320px, 100%);
+  height: 40px;
+  border-radius: 6px;
+  cursor: ew-resize;
+  touch-action: none;
+  flex-basis: 100%;
+}

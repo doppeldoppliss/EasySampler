@@ -41,7 +41,7 @@ import {
   type PresetId,
 } from "./instrument/types";
 import { PIANO_NAME, PIANO_SECONDS, synthPiano } from "./testsignals/piano";
-import { el, isTypingTarget } from "./ui/dom";
+import { cssVar, el, isTypingTarget } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 import { clock, RangePicker } from "./ui/rangePicker";
@@ -50,7 +50,7 @@ import { isMidiFile } from "./song/midi";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 import { renderSong, type RenderTrack } from "./daw/songRender";
 import { writeMidi } from "./daw/midiWrite";
-import { COMMON_KEYS, guessKey, newSlot, renderSlot, slotFor } from "./daw/kit";
+import { COMMON_KEYS, detectOnset, guessKey, newSlot, renderSlot, slotFor, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
 import { BACKING, toSeqNotes } from "./daw/model";
 import { zipStore, type ZipEntry } from "./export/zip";
@@ -1818,10 +1818,12 @@ async function addKitSound(key: number, name: string, channels: Float32Array[], 
   kitAudio.set(id, { name, sampleRate, channels });
   await keep(`audio:${id}`, { name, sampleRate, channels });
   const old = slotFor(rollPanel.kit, key)?.sample ?? null;
+  // It starts where the hit does (leading silence skipped; the waveform's handle moves it).
+  const fresh = { ...newSlot(key, id, name), start: detectOnset(channels, sampleRate) };
   rollPanel.updateKit((kit) => {
     const slot = slotFor(kit, key);
-    if (slot) Object.assign(slot, newSlot(key, id, name));
-    else kit.slots.push(newSlot(key, id, name));
+    if (slot) Object.assign(slot, fresh);
+    else kit.slots.push(fresh);
   });
   forgetKitAudioIfUnused(old);
 }
@@ -1874,6 +1876,91 @@ const kitList = el("div", { className: "kit-list" });
 const kitAddKey = el("select", { ariaLabel: "鍵を追加" });
 const GM_RANGE = Array.from({ length: 47 }, (_, i) => 35 + i);
 
+/**
+ * A kit sound's waveform with where it starts and ends: drag to move the start
+ * (or the end, when grabbed near it); let go and the hit sounds as it now is.
+ */
+function kitWave(key: number, slot: KitSlot, audio: { sampleRate: number; channels: Float32Array[] }): HTMLElement {
+  const canvas = el("canvas", { className: "kit-wave", ariaLabel: "波形(ドラッグで始まりと終わり)" });
+  const total = audio.channels[0].length / audio.sampleRate;
+  let start = slot.start;
+  let end = slot.end > slot.start ? slot.end : total;
+  const draw = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || 240;
+    const h = canvas.clientHeight || 40;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const g = canvas.getContext("2d");
+    if (!g) return;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.fillStyle = cssVar("--outside");
+    g.fillRect(0, 0, w, h);
+    const x = audio.channels[0];
+    const per = x.length / w;
+    g.fillStyle = cssVar("--accent");
+    for (let px = 0; px < w; px++) {
+      let peak = 0;
+      const a = Math.floor(px * per);
+      const b = Math.min(x.length, Math.floor((px + 1) * per) + 1);
+      for (let i = a; i < b; i++) peak = Math.max(peak, Math.abs(x[i]));
+      const bar = Math.max(1, peak * h);
+      g.fillRect(px, (h - bar) / 2, 1, bar);
+    }
+    // What is not played, dimmed; the start and the end as lines.
+    const xs = (start / total) * w;
+    const xe = (end / total) * w;
+    g.fillStyle = cssVar("--bg");
+    g.globalAlpha = 0.65;
+    g.fillRect(0, 0, xs, h);
+    g.fillRect(xe, 0, w - xe, h);
+    g.globalAlpha = 1;
+    g.fillStyle = cssVar("--warn");
+    g.fillRect(Math.round(xs) - 1, 0, 2, h);
+    g.fillStyle = cssVar("--muted");
+    g.fillRect(Math.round(xe) - 1, 0, 2, h);
+  };
+  let grab: "start" | "end" | null = null;
+  const secAt = (e: PointerEvent) => {
+    const box = canvas.getBoundingClientRect();
+    return Math.max(0, Math.min(total, ((e.clientX - box.left) / Math.max(1, box.width)) * total));
+  };
+  canvas.addEventListener("pointerdown", (e) => {
+    const sec = secAt(e);
+    const box = canvas.getBoundingClientRect();
+    const px = (sec / total) * box.width;
+    const ePx = (end / total) * box.width;
+    grab = Math.abs(px - ePx) < 10 && Math.abs(px - ePx) < Math.abs(px - (start / total) * box.width) ? "end" : "start";
+    canvas.setPointerCapture(e.pointerId);
+    if (grab === "start") start = Math.min(sec, end - 0.005);
+    else end = Math.max(sec, start + 0.005);
+    draw();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!grab) return;
+    const sec = secAt(e);
+    if (grab === "start") start = Math.min(sec, end - 0.005);
+    else end = Math.max(sec, start + 0.005);
+    draw();
+  });
+  const done = () => {
+    if (!grab) return;
+    grab = null;
+    rollPanel.updateKit((k) => {
+      const target = slotFor(k, key);
+      if (!target) return;
+      target.start = start;
+      target.end = end >= total - 1e-6 ? 0 : end;
+    });
+    client.kitHit(key);
+  };
+  canvas.addEventListener("pointerup", done);
+  canvas.addEventListener("pointercancel", done);
+  requestAnimationFrame(draw);
+  new ResizeObserver(draw).observe(canvas);
+  return canvas;
+}
+
 function renderKitPanel(): void {
   const kit = rollPanel.kit;
   const keys = [...new Set([...COMMON_KEYS, ...kit.slots.map((s) => s.key)])].sort((a, b) => a - b);
@@ -1904,11 +1991,16 @@ function renderKitPanel(): void {
       play,
       choose,
     ];
-    if (slot?.sample) {
+    if (slot?.sample && audio) {
       const gain = el("input", { type: "range", min: "0", max: "2", step: "0.05", value: String(slot.gain), ariaLabel: "音量" });
       gain.addEventListener("change", () => edit((s) => (s.gain = Number(gain.value))));
       gain.addEventListener("dblclick", () => edit((s) => (s.gain = 1)));
       parts.push(
+        kitWave(key, slot, audio!),
+        button("頭を合わせる", "small", () => {
+          edit((s) => (s.start = detectOnset(audio!.channels, audio!.sampleRate)));
+          client.kitHit(key);
+        }),
         number("始まり ms", slot.start, (s, v) => (s.start = Math.min(v, lengthSec)), "録音のどこから鳴らすか"),
         number("終わり ms", slot.end, (s, v) => (s.end = v), "どこまで鳴らすか(0 = 最後まで)"),
         number("フェード ms", slot.fade, (s, v) => (s.fade = v), "終わりを何ミリ秒かけて消すか"),

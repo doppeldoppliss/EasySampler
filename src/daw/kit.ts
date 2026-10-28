@@ -130,3 +130,21 @@ export function renderSlot(slot: KitSlot, channels: readonly Float32Array[], sam
     return x;
   });
 }
+
+/**
+ * Where a hit begins (seconds): the first moment it rises above a small share
+ * of its peak, a hair earlier so its attack is whole. 0 for silence.
+ */
+export function detectOnset(channels: readonly Float32Array[], sampleRate: number): number {
+  const n = channels[0]?.length ?? 0;
+  let peak = 0;
+  for (const ch of channels) for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(ch[i]));
+  if (peak < 1e-4) return 0;
+  const threshold = Math.max(peak * 0.05, 1e-3);
+  for (let i = 0; i < n; i++) {
+    for (const ch of channels) {
+      if (Math.abs(ch[i]) >= threshold) return Math.max(0, i - Math.round(0.002 * sampleRate)) / sampleRate;
+    }
+  }
+  return 0;
+}

@@ -47,3 +47,17 @@ describe("drum kit", () => {
     expect(out.kit.slots.map((s) => s.sample)).toEqual(["k2", null]);
   });
 });
+
+describe("drum kit: where a hit begins", async () => {
+  const { detectOnset } = await import("./kit");
+  it("finds the hit after leading silence, a hair early; 0 for silence or a hit at the start", () => {
+    const sr = 10000;
+    const x = new Float32Array(sr);
+    for (let i = 3000; i < 4000; i++) x[i] = 0.5 * Math.exp(-(i - 3000) / 300);
+    for (let i = 0; i < 3000; i++) x[i] = 0.0005; // a little noise floor
+    expect(detectOnset([x], sr)).toBeCloseTo(0.298, 3);
+    expect(detectOnset([new Float32Array(100)], sr)).toBe(0);
+    const y = new Float32Array(100).fill(0.3);
+    expect(detectOnset([y], sr)).toBe(0);
+  });
+});

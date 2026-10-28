@@ -26,7 +26,7 @@ export interface Track {
   name: string;
   /** "melodic": one cut played at the notes' pitches. "drum": one row per pad, each pad a cut played as recorded. */
   kind: "melodic" | "drum";
-  /** The cut it plays: "materialId/cutId" (design.md 13.1, a track = one cut), or null when none is chosen. */
+  /** The cut it plays: "materialId/cutId" (design.md 13.1, a track = one cut), BACKING (簡易シンセ), or null when none is chosen. */
   instrument: string | null;
   /** A drum track's rows, top to bottom; a note's pitch is its row's index. */
   pads: Pad[];
@@ -46,9 +46,14 @@ export interface Track {
 }
 
 export interface Pad {
-  /** The cut the row plays (as recorded, once per note), or null. */
+  /** The cut the row plays (as recorded, once per note), BACKING for the plain drum sound, or null. */
   instrument: string | null;
+  /** The GM drum key the row stands for (its plain drum sound, and its key in a MIDI file). */
+  key?: number;
 }
+
+/** A track or a drum row that plays the plain backing synth (簡易シンセ) instead of a cut: what a MIDI file's parts start on. */
+export const BACKING = "backing";
 
 export function newTrack(name: string, instrument: string | null = null): Track {
   return { id: newTrackId(), name, kind: "melodic", instrument, pads: [], notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, tailFit: false };
@@ -206,11 +211,12 @@ export function sanitizeProject(raw: unknown): Project {
           id: typeof tr.id === "string" && tr.id ? tr.id : newTrackId(),
           name: typeof tr.name === "string" && tr.name ? tr.name : `トラック ${i + 1}`,
           kind: tr.kind === "drum" ? ("drum" as const) : ("melodic" as const),
-          instrument: typeof tr.instrument === "string" && tr.instrument.includes("/") ? tr.instrument : null,
+          instrument: typeof tr.instrument === "string" && (tr.instrument.includes("/") || tr.instrument === BACKING) ? tr.instrument : null,
           pads: Array.isArray(tr.pads)
             ? tr.pads.map((p) => {
                 const pad = (p && typeof p === "object" ? p : {}) as Record<string, unknown>;
-                return { instrument: typeof pad.instrument === "string" && pad.instrument.includes("/") ? pad.instrument : null };
+                const key = typeof pad.key === "number" && Number.isFinite(pad.key) ? Math.max(0, Math.min(127, Math.round(pad.key))) : undefined;
+                return { instrument: typeof pad.instrument === "string" && (pad.instrument.includes("/") || pad.instrument === BACKING) ? pad.instrument : null, ...(key === undefined ? {} : { key }) };
               })
             : [],
           notes: sortNotes(notes),

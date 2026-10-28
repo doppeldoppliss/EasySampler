@@ -16,6 +16,8 @@ export interface TrackSpec extends MixSettings {
   notes: SeqNote[];
   /** A drum track: the one-shot (by sample id) each row plays; a note's pitch is its row. */
   samples?: (string | null)[];
+  /** A drum track: the GM key of each row on the plain drum sound (null where a one-shot plays). */
+  drumKeys?: (number | null)[];
   /** Portamento (seconds; 0 or absent = off). */
   glide?: number;
   /** 語尾を収める: the tail ends where the note does. */

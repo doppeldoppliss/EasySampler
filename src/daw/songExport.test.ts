@@ -4,7 +4,7 @@ import { DEFAULT_FX, DEFAULT_PARAMS } from "../instrument/types";
 import { parseMidi } from "../song/midi";
 import { demoSyllable } from "../testsignals/synthVoice";
 import { DRUM_KEYS, writeMidi } from "./midiWrite";
-import { emptyProject, newDrumTrack, newTrack, type Note } from "./model";
+import { BACKING, emptyProject, newDrumTrack, newTrack, type Note } from "./model";
 import { renderSong } from "./songRender";
 
 const SR = 44100;
@@ -26,6 +26,18 @@ describe("writeMidi", () => {
       [0, DRUM_KEYS[0], 9],
       [1, DRUM_KEYS[1], 9],
     ]);
+  });
+});
+
+describe("writeMidi, rows on the plain drum sound", () => {
+  it("writes a row's own GM key (what a MIDI file's drum part brought in)", () => {
+    const p = emptyProject();
+    const d = newDrumTrack("ドラム");
+    d.pads = [{ instrument: BACKING, key: 36 }, { instrument: BACKING, key: 42 }];
+    d.notes = [n(0, 0.25, 0), n(0.5, 0.25, 1)];
+    p.tracks = [d];
+    const song = parseMidi(writeMidi(p));
+    expect(song.tracks[0].notes.map((x) => x.pitch)).toEqual([36, 42]);
   });
 });
 
@@ -72,6 +84,21 @@ describe("renderSong", () => {
     const one = await renderSong({ sampleRate: SR, bpm: 120, masterFx: null, tracks: [tracks[0], { ...tracks[1], mute: true }] });
     expect(one.gain).toBe(1);
     expect(Math.max(...one.channels[0])).toBeCloseTo(0.8, 3);
+  });
+
+  it("plays a part on the plain backing synth, and drum rows on its drum sound", async () => {
+    const song = await renderSong({
+      sampleRate: SR,
+      bpm: 120,
+      masterFx: null,
+      tracks: [
+        { id: "b", instrument: null, backing: true, notes: [{ start: 0, end: 0.5, note: 60, velocity: 1, drum: false }], ...plain },
+        { id: "d", instrument: null, samples: [null], drumKeys: [38], notes: [{ start: 1, end: 1.1, note: 0, velocity: 1, drum: false }], ...plain },
+      ],
+    });
+    const [l] = song.channels;
+    expect(rms(l, Math.round(0.05 * SR), Math.round(0.4 * SR))).toBeGreaterThan(0.005);
+    expect(rms(l, Math.round(1.0 * SR), Math.round(1.1 * SR))).toBeGreaterThan(0.005);
   });
 
   it("puts the master effects on the mix (a limiter keeps it under its ceiling)", async () => {

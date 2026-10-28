@@ -44,11 +44,11 @@ import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 import { clock, RangePicker } from "./ui/rangePicker";
 import { KEY_NAMES, quantizeToScale, SCALE_LABELS, type ScaleId } from "./instrument/scale";
-import { isMidiFile, SongPanel } from "./ui/songPanel";
+import { isMidiFile } from "./song/midi";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 import { renderSong, type RenderTrack } from "./daw/songRender";
-import { writeMidi } from "./daw/midiWrite";
-import { toSeqNotes } from "./daw/model";
+import { DRUM_KEYS, writeMidi } from "./daw/midiWrite";
+import { BACKING, toSeqNotes } from "./daw/model";
 import { zipStore, type ZipEntry } from "./export/zip";
 import { encodeWavBytes } from "./audio/wav";
 
@@ -141,17 +141,10 @@ const sink = {
 };
 const piano = new OnScreenKeyboard(sink, 48, SMALL_SCREEN ? 72 : 84);
 const pcKeys = new PcKeyboard(sink);
-// 曲で試す: the material on a part of a MIDI song (one sound at a time with the previews).
-const songPanel = new SongPanel(client, () => note, () => exportSettings.bpm);
-// 打ち込み: a song written on the piano roll, played by the material (one player at a time with 曲で試す).
-const rollPanel = new RollPanel(client, () => exportSettings.bpm, () => songPanel.selectedPart());
-songPanel.onPlayingChange = (playing) => {
-  if (!playing) return;
-  client.stopPreview();
-  rollPanel.stop();
-};
+// 打ち込み: the song (written on the piano roll, or opened from a MIDI file), played by the materials.
+const rollPanel = new RollPanel(client, () => exportSettings.bpm);
 // (Development only: a handle for checking playback where the page's animation frames do not run.)
-if (import.meta.env.DEV) Object.assign(window, { __easysampler: { client, rollPanel, songPanel } });
+if (import.meta.env.DEV) Object.assign(window, { __easysampler: { client, rollPanel } });
 rollPanel.onTrackChange = () => showFxTarget();
 function showFxTarget(): void {
   fxTrackLabel.textContent = fxTarget === "master" ? "(マスター)" : `「${rollPanel.trackName}」`;
@@ -171,9 +164,8 @@ const fxMasterButton = button("マスター(曲全体)", "small toggle", () => {
 rollPanel.onPlayingChange = (playing) => {
   if (!playing) return;
   client.stopPreview();
-  songPanel.stop();
 };
-songPanel.onUseBpm = (bpm) => updateExport((s) => (s.bpm = Math.max(20, Math.min(400, Math.round(bpm * 10) / 10))));
+rollPanel.onUseBpm = (bpm) => updateExport((s) => (s.bpm = Math.max(20, Math.min(400, Math.round(bpm * 10) / 10))));
 
 // A control that was just changed gives the focus back, so Space / Ctrl+Z keep working after a dropdown.
 document.addEventListener("change", (event) => {
@@ -597,7 +589,6 @@ function setNote(n: number, mode: "auto" | "manual"): void {
   note = n;
   noteMode = mode;
   refreshExport();
-  songPanel.noteChanged();
 }
 
 const presetSelect = el("select", { ariaLabel: "プリセット" }, [
@@ -753,7 +744,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
     () => (params.tail.limit === "none" ? "unlimited" : params.tail.limit),
     (p, v) => (p.tail = { enabled: p.tail.enabled, limit: v }),
   ),
-  el("p", { className: "fine help", textContent: "拍は「長さ」の BPM で数えます(「曲で試す」の再生中は曲の BPM)。上限に来た語尾は短くフェードして切れます。" }),
+  el("p", { className: "fine help", textContent: "拍は「長さ」の BPM で数えます(打ち込みの再生中は曲の BPM)。上限に来た語尾は短くフェードして切れます。" }),
   range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
   select("音程の整え方", [["flatten", "判定した 1 音に寄せる"], ["scale", "音階の最寄りの音に、場所ごとに寄せる(複数の音を残す)"]], () => params.tune.mode, (p, v) => (p.tune.mode = v)),
   tuneScaleRow,
@@ -1515,10 +1506,7 @@ function openFiles(files: readonly File[]): void {
   const midi = files.filter((f) => !isSettings(f) && isMidiFile(f));
   const audio = files.filter((f) => !isSettings(f) && !isMidiFile(f));
   const lastMidi = midi.at(-1);
-  if (lastMidi) {
-    void songPanel.open(lastMidi);
-    if (!material && audio.length === 0) status.textContent = `${lastMidi.name} を読み込みました。素材を開くと「曲で試す」で鳴らせます。`;
-  }
+  if (lastMidi) void rollPanel.openMidi(lastMidi);
   for (const f of settings) void openFile(f);
   if (audio.length === 0) return;
   if (audio.length === 1 && queue.length === 0) {
@@ -1534,7 +1522,7 @@ function openFiles(files: readonly File[]): void {
 
 // ---------------------------------------------------------------- page
 
-const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, rollPanel.element, fxPanel, songPanel.element, exportPanel, detailsPanel]);
+const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, rollPanel.element, fxPanel, exportPanel, detailsPanel]);
 
 document.getElementById("app")!.append(
   el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, rePickButton, openButton, pianoButton])]),
@@ -1694,7 +1682,7 @@ function sendInstrument(): void {
 /** The note and export settings → the note row, the length row, the file name, the help, the editor's target line. */
 function refreshExport(): void {
   // The tail limit counts in the export BPM (the song's own while one plays); a "stretch" sustain fills the export length.
-  if (!songPanel.playing && !rollPanel.playing) client.setTempo(exportSettings.bpm);
+  if (!rollPanel.playing) client.setTempo(exportSettings.bpm);
   client.setHold(exportLengthSec(exportSettings));
   refreshInstruments();
   tuneScaleRow.hidden = params.tune.mode !== "scale";
@@ -1842,7 +1830,7 @@ function schedulePrebuild(): void {
   if (!canShareFiles()) return;
   clearTimeout(prebuildTimer);
   prebuildTimer = window.setTimeout(() => {
-    if (material && !building && !playing && !songPanel.playing && !rollPanel.playing) void buildCurrent(true).catch(() => {});
+    if (material && !building && !playing && !rollPanel.playing) void buildCurrent(true).catch(() => {});
   }, 1500);
 }
 
@@ -1908,7 +1896,6 @@ async function listen(): Promise<void> {
     client.stopPreview();
     return;
   }
-  songPanel.stop();
   rollPanel.stop();
   const result = await buildCurrent();
   if (!result) return;
@@ -1968,7 +1955,6 @@ async function playOriginal(): Promise<void> {
     return;
   }
   if (!material || !markers) return;
-  songPanel.stop();
   rollPanel.stop();
   const rate = material.sampleRate;
   const pieces = originalPieces();
@@ -2028,8 +2014,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (!material) return;
   event.preventDefault();
-  if (songPanel.playing || rollPanel.playing) {
-    songPanel.stop();
+  if (rollPanel.playing) {
     rollPanel.stop();
     return;
   }
@@ -2363,7 +2348,19 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
     const notes = toSeqNotes(t.notes, project.bpm, t.kind !== "drum" && t.glide > 0);
     if (t.kind === "drum") {
       if (!t.pads.length) continue;
-      out.push({ id: t.id, instrument: null, samples: t.pads.map((p) => (p.instrument ? (padSamples.get(p.instrument) ?? null) : null)), notes, ...mix });
+      out.push({
+        id: t.id,
+        instrument: null,
+        samples: t.pads.map((p) => (p.instrument && p.instrument !== BACKING ? (padSamples.get(p.instrument) ?? null) : null)),
+        drumKeys: t.pads.map((p, i) => (p.instrument === BACKING ? (p.key ?? DRUM_KEYS[i] ?? 36 + i) : null)),
+        notes,
+        ...mix,
+      });
+      continue;
+    }
+    // A part on the plain backing synth (簡易シンセ), as it plays on the page.
+    if (t.instrument === BACKING) {
+      out.push({ id: t.id, instrument: null, backing: true, notes, ...mix });
       continue;
     }
     const found = t.instrument ? findCut(t.instrument) : null;

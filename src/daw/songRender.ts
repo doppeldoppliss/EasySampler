@@ -7,7 +7,7 @@ import { FxChain } from "../fx/chain";
 import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
 import { SongPlayer, type PlayerTrack, type TrackSound } from "../song/player";
-import { EngineSound, SampleSound } from "../song/sounds";
+import { BackingSound, EngineSound, SampleSound } from "../song/sounds";
 
 export interface RenderInstrument {
   source: PreparedSource;
@@ -23,6 +23,10 @@ export interface RenderTrack {
   instrument: RenderInstrument | null;
   /** A drum track's rows: the one-shot each plays. */
   samples?: (Float32Array[] | null)[];
+  /** A drum track: the GM key of each row on the plain drum sound (null where a one-shot plays). */
+  drumKeys?: (number | null)[];
+  /** A track on the plain backing synth (簡易シンセ). */
+  backing?: boolean;
   notes: SeqNote[];
   /** Portamento (seconds; 0 or absent = off). */
   glide?: number;
@@ -64,9 +68,12 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
   for (const t of input.tracks) {
     let sound: TrackSound | null = null;
     if (t.samples) {
-      const s = new SampleSound();
+      const s = new SampleSound(sr);
       s.rows = t.samples;
+      s.keys = t.drumKeys ?? [];
       sound = s;
+    } else if (t.backing) {
+      sound = new BackingSound(sr);
     } else if (t.instrument) {
       const s = new EngineSound(sr);
       s.engine.setSource(t.instrument.source);

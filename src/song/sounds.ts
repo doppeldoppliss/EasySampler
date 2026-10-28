@@ -36,15 +36,25 @@ export class EngineSound implements TrackSound {
   }
 }
 
-/** A drum track: each row a rendered one-shot, played as it is (no pitch change, no note-off). */
+/** A drum track: each row a rendered one-shot, played as it is (no pitch change, no note-off), or the plain drum sound of a GM key. */
 export class SampleSound implements TrackSound {
   /** Row → sample, as the track was loaded. */
   rows: (Float32Array[] | null)[] = [];
+  /** Row → GM drum key, for a row on the plain drum sound (簡易ドラム). */
+  keys: (number | null)[] = [];
   private voices: { sample: Float32Array[]; at: number; gain: number }[] = [];
+  private readonly synth: BackingSynth | null;
   private static readonly MAX_VOICES = 16;
+  constructor(sampleRate?: number) {
+    this.synth = sampleRate ? new BackingSynth(sampleRate) : null;
+  }
   noteOn(row: number, velocity: number): void {
     const sample = this.rows[row];
-    if (!sample) return;
+    if (!sample) {
+      const key = this.keys[row];
+      if (key !== null && key !== undefined) this.synth?.noteOn(key, velocity, true);
+      return;
+    }
     if (this.voices.length >= SampleSound.MAX_VOICES) this.voices.shift();
     this.voices.push({ sample, at: 0, gain: velocity });
   }
@@ -53,10 +63,12 @@ export class SampleSound implements TrackSound {
   }
   allOff(): void {
     this.voices = [];
+    this.synth?.allOff();
   }
   render(left: Float32Array, right: Float32Array, frames: number): void {
     left.fill(0, 0, frames);
     if (right !== left) right.fill(0, 0, frames);
+    this.synth?.renderAdd(left, right, frames, 1);
     for (const v of this.voices) {
       const l = v.sample[0];
       const r = v.sample[1] ?? l;
@@ -70,7 +82,7 @@ export class SampleSound implements TrackSound {
     this.voices = this.voices.filter((v) => v.at < v.sample[0].length);
   }
   idle(): boolean {
-    return this.voices.length === 0;
+    return this.voices.length === 0 && (this.synth?.idle() ?? true);
   }
 
   get sounding(): number {

@@ -44,7 +44,7 @@ export function writeMidi(project: Project): Uint8Array<ArrayBuffer> {
     if (!drum) channel = channel + 1 === 9 ? 10 : (channel + 1) % 16;
     const events: { tick: number; on: boolean; key: number; velocity: number }[] = [];
     for (const n of track.notes) {
-      const key = drum ? (DRUM_KEYS[n.pitch] ?? 36 + n.pitch) : n.pitch;
+      const key = drum ? (track.pads[n.pitch]?.key ?? DRUM_KEYS[n.pitch] ?? 36 + n.pitch) : n.pitch;
       if (key < 0 || key > 127) continue;
       const start = Math.round(n.start * PPQ);
       const end = Math.max(start + 1, Math.round((n.start + n.length) * PPQ));

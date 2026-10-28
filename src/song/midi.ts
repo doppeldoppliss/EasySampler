@@ -206,3 +206,8 @@ export function parseMidi(data: ArrayBuffer | Uint8Array): Song {
     hasTempoChanges: tempos.some((x) => x.usPerBeat !== tempos[0].usPerBeat),
   };
 }
+
+/** Whether a file is a standard MIDI file (by its name or type). */
+export function isMidiFile(file: File): boolean {
+  return /\.(mid|midi|smf)$/i.test(file.name) || file.type === "audio/midi" || file.type === "audio/x-midi";
+}

@@ -2,12 +2,14 @@
 // (design.md 13.1), with their own notes, effects, volume, pan, mute and solo;
 // the piano roll edits the selected track. The project (tracks, the list of
 // materials, tempo, loop) is kept in the browser and comes back on the next
-// visit; a part of the MIDI file opened in 曲で試す can be taken over as a start.
+// visit. A MIDI file opens here too: each of its parts becomes a track (on the
+// plain backing synth until a cut is chosen), so the song is heard at once.
 
 import type { EngineClient } from "../audio/engineClient";
 import { keep, kept } from "../audio/store";
 import type { TrackSpec } from "../engine/messages";
 import {
+  BACKING,
   beatsToSec,
   DEFAULT_VELOCITY,
   emptyProject,
@@ -17,16 +19,18 @@ import {
   removePad,
   sanitizeProject,
   secToBeats,
-  shifted,
   songEnd,
   toSeqNotes,
   type Note,
+  type Pad,
   type Project,
   type ProjectMaterial,
   type Track,
 } from "../daw/model";
 import type { FxSettings } from "../instrument/types";
-import type { SongPart } from "../song/parts";
+import { MidiParseError, parseMidi } from "../song/midi";
+import { drumName, songParts } from "../song/parts";
+import { DRUM_KEYS } from "../daw/midiWrite";
 import { el } from "./dom";
 import { PianoRoll } from "./pianoRoll";
 
@@ -107,7 +111,6 @@ export class RollPanel {
   private editedInstrument: string | null = null;
   private readonly client: EngineClient;
   private readonly restingBpm: () => number;
-  private readonly importPart: () => { part: SongPart; bpm: number; transpose: number } | null;
 
   private startedAt: number | null = null;
   /** Where playback starts (song seconds). */
@@ -136,7 +139,14 @@ export class RollPanel {
     button("+1", "small", () => this.roll.transposeSelected(1), "半音上げる(↑)"),
     button("+12", "small", () => this.roll.transposeSelected(12), "1 オクターブ上げる(Shift+↑)"),
   ];
-  private readonly importButton = button("曲で試すのパートを取り込む", "small", () => this.takePart());
+  /** "この BPM を書き出しの長さに使う": the song's tempo for the sampling side's export length. */
+  onUseBpm: (bpm: number) => void = () => {};
+  private readonly midiInput = el("input", { type: "file", accept: ".mid,.midi,.smf,audio/midi,audio/x-midi", className: "visually-hidden" });
+  private readonly midiButton = button("MIDI を開く", "small", () => this.midiInput.click(), "MIDI ファイルのパートを、それぞれトラックとして加えます");
+  private readonly useBpmButton = button("この BPM を書き出しの長さに使う", "small", () => {
+    this.onUseBpm(this.project.bpm);
+    this.info.textContent = `書き出しの長さの BPM を ${this.project.bpm} にしました(語尾の長さと拍同期のエフェクトも変わります)。`;
+  });
   private readonly clearButton = button("このトラックの音符をすべて消す", "small", () => {
     if (!this.roll.notes.length) return;
     this.roll.setNotes([], true);
@@ -172,10 +182,14 @@ export class RollPanel {
   private readonly position = el("span", { className: "fine num" });
   private readonly info = el("p", { className: "fine", role: "status" });
 
-  constructor(client: EngineClient, restingBpm: () => number, importPart: () => { part: SongPart; bpm: number; transpose: number } | null) {
+  constructor(client: EngineClient, restingBpm: () => number) {
     this.client = client;
     this.restingBpm = restingBpm;
-    this.importPart = importPart;
+    this.midiInput.addEventListener("change", () => {
+      const file = this.midiInput.files?.[0];
+      this.midiInput.value = "";
+      if (file) void this.openMidi(file);
+    });
 
     this.roll.onChange = (notes) => this.changed(notes);
     this.roll.onStateChange = () => this.refreshButtons();
@@ -224,7 +238,7 @@ export class RollPanel {
     // Folded until opened (and as it was left): the song side is there when wanted, not always in the way.
     this.element = el("details", { className: "panel roll-panel", open: remembered(OPEN_KEY) === "open" }, [
       el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "打ち込み(曲を作る)" }), this.summaryInfo]),
-      el("div", { className: "row" }, [this.importButton]),
+      el("div", { className: "row" }, [this.midiButton, this.midiInput, this.useBpmButton]),
       el("div", { className: "row roll-transport" }, [
         this.playButton,
         this.loopButton,
@@ -340,12 +354,12 @@ export class RollPanel {
     }
     // A cut that is gone (removed on the sampling side): the track plays nothing.
     for (const t of this.project.tracks) {
-      if (t.instrument && !options.some((o) => o.id === t.instrument)) t.instrument = null;
-      for (const p of t.pads) if (p.instrument && !options.some((o) => o.id === p.instrument)) p.instrument = null;
+      if (t.instrument && t.instrument !== BACKING && !options.some((o) => o.id === t.instrument)) t.instrument = null;
+      for (const p of t.pads) if (p.instrument && p.instrument !== BACKING && !options.some((o) => o.id === p.instrument)) p.instrument = null;
     }
     this.renderTracks();
     this.showRoot();
-    if (this.track.kind === "drum") this.roll.setRows(this.track.pads.map((p, i) => this.padLabel(p.instrument, i)));
+    if (this.track.kind === "drum") this.roll.setRows(this.track.pads.map((p, i) => this.padLabel(p, i)));
   }
 
   private applyProject(): void {
@@ -376,20 +390,66 @@ export class RollPanel {
     this.saveTimer = window.setTimeout(() => void keep(STORE_KEY, this.project), 400);
   }
 
-  /** The part chosen in 曲で試す, as notes on the selected track (one undoable step), with its tempo. */
-  private takePart(): void {
-    const picked = this.importPart();
-    if (!picked) {
-      this.info.textContent = "先に「曲で試す」で MIDI を開き、素材で鳴らすパートを選んでください。";
+  /**
+   * A MIDI file into the song: each part becomes a track (a drum channel a
+   * drum track, one row per drum sound), on the plain backing synth so the
+   * whole song is heard at once; the busiest melodic part plays the cut being
+   * edited. The tracks are added to the song (empty ones go), and the tempo
+   * becomes the file's (its first; the notes keep their beats).
+   */
+  async openMidi(file: File): Promise<void> {
+    let song;
+    try {
+      song = parseMidi(new Uint8Array(await file.arrayBuffer()));
+    } catch (error) {
+      this.element.open = true;
+      this.info.textContent = `MIDI を読めませんでした: ${error instanceof MidiParseError ? error.message : String(error)}`;
       return;
     }
-    const notes = shifted(fromSongNotes(picked.part.notes), 0, picked.transpose);
-    this.project.bpm = Math.round(picked.bpm * 10) / 10;
+    const parts = songParts(song).filter((p) => p.drumPitch === null && (p.duplicateOf === null || p.shiftSec !== 0));
+    if (!parts.length) {
+      this.element.open = true;
+      this.info.textContent = `${file.name}: 音符のある MIDI トラックがありません。`;
+      return;
+    }
+    this.stop();
+    const melodic = parts.filter((p) => !p.drum);
+    const lead = melodic.length ? melodic.reduce((x, y) => (y.notes.length > x.notes.length ? y : x)) : null;
+    const added: Track[] = [];
+    let leadTrack: Track | null = null;
+    for (const part of parts) {
+      // "#3 Drums ドラム全部(8 音)" → "Drums": the file's own track name, without the list's numbering and notes.
+      const name = part.label.split("(")[0].replace(/^#\d+\s*/, "").replace(/\s*ドラム全部$/, "").trim();
+      if (part.drum) {
+        // Rows from the kick up, as GM numbers its sounds.
+        const keys = [...new Set(part.notes.map((n) => n.pitch))].sort((x, y) => x - y);
+        const t = newDrumTrack(name || "ドラム");
+        t.pads = keys.map((key) => ({ instrument: BACKING, key }));
+        t.notes = fromSongNotes(part.notes).map((n) => ({ ...n, pitch: keys.indexOf(n.pitch) }));
+        added.push(t);
+        continue;
+      }
+      const t = newTrack(name || `パート ${added.length + 1}`, part === lead && this.editedInstrument ? this.editedInstrument : BACKING);
+      t.notes = fromSongNotes(part.notes);
+      if (part === lead) leadTrack = t;
+      added.push(t);
+    }
+    this.project.tracks = [...this.project.tracks.filter((t) => t.notes.length > 0), ...added];
+    this.project.bpm = Math.round(song.bpm * 10) / 10;
     this.bpmInput.value = String(this.project.bpm);
-    this.roll.setNotes(notes, true);
-    this.roll.frame(60);
-    this.changed(this.roll.notes);
-    this.info.textContent = `「${picked.part.label}」の音符 ${notes.length} 個を「${this.track.name}」に取り込みました(${this.project.bpm} BPM)。取り消しで戻せます。`;
+    this.from = 0;
+    this.selected = this.project.tracks.indexOf(leadTrack ?? added[0]);
+    this.element.open = true;
+    this.showTrackInRoll();
+    if (this.track.kind !== "drum") this.roll.frame(60);
+    this.reload();
+    this.renderTracks();
+    this.showRoot();
+    this.refreshButtons();
+    this.onTrackChange();
+    this.scheduleSave();
+    const tempo = song.hasTempoChanges ? "(途中のテンポ変更は最初のテンポにそろえました)" : "";
+    this.info.textContent = `「${file.name}」のパート ${added.length} 本をトラックにしました(${this.project.bpm} BPM${tempo})。${leadTrack && this.editedInstrument ? `いちばん音符の多い「${leadTrack.name}」は編集中の区間で、` : ""}ほかは簡易シンセで鳴ります。素材で鳴らすには、トラックの区間を選び直してください。`;
   }
 
   // ------------------------------------------------------------- tracks
@@ -402,14 +462,20 @@ export class RollPanel {
     this.tailFitBox.checked = t.tailFit;
     this.stepHeld.clear();
     this.stepHistory.length = 0;
-    this.roll.setRows(t.kind === "drum" ? t.pads.map((p, i) => this.padLabel(p.instrument, i)) : null);
+    this.roll.setRows(t.kind === "drum" ? t.pads.map((p, i) => this.padLabel(p, i)) : null);
     this.roll.setNotes(t.notes);
     if (t.kind === "drum") this.roll.frame(0);
   }
 
-  private padLabel(instrument: string | null, index: number): string {
-    const label = this.options.find((o) => o.id === instrument)?.label;
+  private padLabel(pad: Pad, index: number): string {
+    if (pad.instrument === BACKING) return `${index + 1}. ${drumName(this.padKey(pad, index))}(簡易)`;
+    const label = this.options.find((o) => o.id === pad.instrument)?.label;
     return label ? `${index + 1}. ${label}` : `${index + 1}. (なし)`;
+  }
+
+  /** The GM drum key a row stands for (its own, or by its place). */
+  private padKey(pad: Pad, index: number): number {
+    return pad.key ?? DRUM_KEYS[index] ?? 36 + index;
   }
 
   private selectTrack(index: number): void {
@@ -476,6 +542,7 @@ export class RollPanel {
       const instrument: HTMLElement = t.kind === "drum" ? el("span", { className: "fine track-drum", textContent: `ドラム(${t.pads.length} 行)` }) : el("select", { ariaLabel: "鳴らす区間" }, [
         el("option", { value: "", textContent: "(区間を選ぶ)" }),
         ...this.options.map((o) => el("option", { value: o.id, textContent: o.label })),
+        el("option", { value: BACKING, textContent: "簡易シンセ(伴奏)" }),
       ]);
       if (instrument instanceof HTMLSelectElement) {
         instrument.value = t.instrument ?? "";
@@ -537,10 +604,15 @@ export class RollPanel {
       return;
     }
     const rows = t.pads.map((pad, i) => {
-      const select = el("select", { ariaLabel: `${i + 1} 行目の区間` }, [el("option", { value: "", textContent: "(区間を選ぶ)" }), ...this.options.map((o) => el("option", { value: o.id, textContent: o.label }))]);
+      const select = el("select", { ariaLabel: `${i + 1} 行目の区間` }, [
+        el("option", { value: "", textContent: "(区間を選ぶ)" }),
+        ...this.options.map((o) => el("option", { value: o.id, textContent: o.label })),
+        el("option", { value: BACKING, textContent: `簡易ドラム(${drumName(this.padKey(pad, i))})` }),
+      ]);
       select.value = pad.instrument ?? "";
       select.addEventListener("change", () => {
         pad.instrument = select.value || null;
+        if (pad.instrument === BACKING) pad.key = this.padKey(pad, i);
         this.padsChanged();
         if (pad.instrument) this.previewRow(i);
       });
@@ -573,13 +645,13 @@ export class RollPanel {
   /** Every cut a drum row plays (for the page to keep their one-shots up to date). */
   padInstruments(): string[] {
     const set = new Set<string>();
-    for (const t of this.project.tracks) if (t.kind === "drum") for (const p of t.pads) if (p.instrument) set.add(p.instrument);
+    for (const t of this.project.tracks) if (t.kind === "drum") for (const p of t.pads) if (p.instrument && p.instrument !== BACKING) set.add(p.instrument);
     return [...set];
   }
 
   private previewRow(row: number): void {
     const instrument = this.track.pads[row]?.instrument;
-    if (!instrument || this.playing) return;
+    if (!instrument || instrument === BACKING || this.playing) return;
     this.ensureSamples([instrument]);
     this.client.previewSample(instrument);
   }
@@ -699,7 +771,8 @@ export class RollPanel {
       .map((t) => ({
         id: t.id,
         instrument: t.kind === "drum" ? "drum" : t.instrument!,
-        samples: t.kind === "drum" ? t.pads.map((p) => p.instrument) : undefined,
+        samples: t.kind === "drum" ? t.pads.map((p) => (p.instrument === BACKING ? null : p.instrument)) : undefined,
+        drumKeys: t.kind === "drum" ? t.pads.map((p, i) => (p.instrument === BACKING ? this.padKey(p, i) : null)) : undefined,
         notes: toSeqNotes(t.notes, this.project.bpm, t.kind !== "drum" && t.glide > 0),
         glide: t.kind === "drum" ? 0 : t.glide,
         tailFit: t.kind !== "drum" && t.tailFit,
@@ -719,7 +792,7 @@ export class RollPanel {
       this.previewRow(pitch);
       return;
     }
-    if (this.track.instrument) this.client.previewNote(this.track.instrument, pitch);
+    if (this.track.instrument && this.track.instrument !== BACKING) this.client.previewNote(this.track.instrument, pitch);
   }
 
   private sendLoop(): void {

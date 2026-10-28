@@ -1513,7 +1513,10 @@ function openFiles(files: readonly File[]): void {
   const midi = files.filter((f) => !isSettings(f) && isMidiFile(f));
   const audio = files.filter((f) => !isSettings(f) && !isMidiFile(f));
   const lastMidi = midi.at(-1);
-  if (lastMidi) void rollPanel.openMidi(lastMidi);
+  if (lastMidi) {
+    setView("song");
+    void rollPanel.openMidi(lastMidi);
+  }
   for (const f of settings) void openFile(f);
   if (audio.length === 0) return;
   if (audio.length === 1 && queue.length === 0) {
@@ -1529,7 +1532,54 @@ function openFiles(files: readonly File[]): void {
 
 // ---------------------------------------------------------------- page
 
-const workspace = el("main", { className: "workspace", hidden: true }, [guide, materialPanel, tunePanel, keysPanel, rollPanel.element, fxPanel, exportPanel, detailsPanel]);
+// ---------------------------------------------------------------- the two views: 素材 (the sound) and 曲 (the song)
+
+/**
+ * The page has two sides (design.md 13.1): the material and its cuts — the
+ * sound — and the song — tracks, notes, effects. Each is a view of its own;
+ * the keyboard is in both (trying a sound, step input). Space and Ctrl+Z
+ * belong to the view on screen.
+ */
+type View = "material" | "song";
+const VIEW_KEY = "easysampler.view";
+let view: View = safeStorage(VIEW_KEY) === "song" ? "song" : "material";
+for (const panel of [guide, materialPanel, tunePanel, exportPanel, detailsPanel]) panel.classList.add("axis-material");
+for (const panel of [rollPanel.element, fxPanel]) panel.classList.add("axis-song");
+const materialTab = el("button", { type: "button", className: "view-tab", role: "tab" }, [el("span", { className: "view-tab-title", textContent: "素材(音を作る)" }), materialTabInfo()]);
+const songTab = el("button", { type: "button", className: "view-tab", role: "tab" }, [el("span", { className: "view-tab-title", textContent: "曲(打ち込み)" }), rollPanel.summaryInfo]);
+materialTab.addEventListener("click", () => setView("material"));
+songTab.addEventListener("click", () => setView("song"));
+const viewTabs = el("nav", { className: "view-tabs", role: "tablist", ariaLabel: "表示" }, [materialTab, songTab]);
+
+/** The 素材 tab's line: the material being edited and how many there are. */
+function materialTabInfo(): HTMLElement {
+  return el("span", { className: "fine view-tab-info", id: "material-tab-info" });
+}
+function refreshMaterialTab(): void {
+  const info = materialTab.querySelector(".view-tab-info");
+  if (info) info.textContent = material ? `${material.name}${library.size > 1 ? `(ほか ${library.size - 1})` : ""}` : "";
+}
+
+function setView(next: View): void {
+  view = next;
+  safeStorage(VIEW_KEY, next);
+  workspace.dataset.view = next;
+  materialTab.classList.toggle("on", next === "material");
+  songTab.classList.toggle("on", next === "song");
+  materialTab.setAttribute("aria-selected", String(next === "material"));
+  songTab.setAttribute("aria-selected", String(next === "song"));
+  rollPanel.setVisible(next === "song");
+  if (next === "material") rollPanel.stop();
+  else {
+    client.stopPreview();
+    editor.draw();
+  }
+  if (next === "material") editor.draw();
+  window.scrollTo({ top: 0 });
+}
+
+const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs, guide, materialPanel, tunePanel, keysPanel, rollPanel.element, fxPanel, exportPanel, detailsPanel]);
+setView(view);
 
 document.getElementById("app")!.append(
   el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, rePickButton, openButton, pianoButton])]),
@@ -2021,8 +2071,8 @@ window.addEventListener("keydown", (event) => {
   }
   if (!material) return;
   event.preventDefault();
-  if (rollPanel.playing) {
-    rollPanel.stop();
+  if (view === "song" || rollPanel.playing) {
+    rollPanel.toggle();
     return;
   }
   if (playing) {
@@ -2175,10 +2225,12 @@ window.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   if (key === "z" && !event.shiftKey) {
     event.preventDefault();
-    undo();
+    if (view === "song") rollPanel.roll.undo();
+    else undo();
   } else if (key === "y" || (key === "z" && event.shiftKey)) {
     event.preventDefault();
-    redo();
+    if (view === "song") rollPanel.roll.redo();
+    else redo();
   }
 });
 
@@ -2572,6 +2624,7 @@ function switchMaterialFrom(id: string): void {
 }
 
 function refreshMaterialSelect(): void {
+  refreshMaterialTab();
   materialSelect.replaceChildren(...[...library.values()].map(({ material: m }) => el("option", { value: m.id, textContent: m.name })));
   if (material) materialSelect.value = material.id;
   // The last material stays: the page always has something to play (add another first, then take this one out).
@@ -2613,6 +2666,8 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
     client.setSource(source, id);
     emptyState.hidden = true;
     workspace.hidden = false;
+    // A material opened or added by hand: its view comes up.
+    if (!kept) setView("material");
 
     const seconds = analysis.durationSec.toFixed(2);
     const root = analysis.root;

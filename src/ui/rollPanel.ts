@@ -35,8 +35,6 @@ import { el } from "./dom";
 import { PianoRoll } from "./pianoRoll";
 
 const STORE_KEY = "project";
-/** Whether the 打ち込み panel was left open (this browser only). */
-const OPEN_KEY = "easysampler.roll.open";
 
 function remembered(key: string): string | null {
   try {
@@ -126,9 +124,20 @@ export interface InstrumentOption {
 }
 
 export class RollPanel {
-  readonly element: HTMLDetailsElement;
-  /** What the folded panel says about the song (tracks, notes). */
-  private readonly summaryInfo = el("span", { className: "fine" });
+  readonly element: HTMLElement;
+  /** A line about the song (tracks, notes, playing), for the 曲 tab. */
+  readonly summaryInfo = el("span", { className: "fine view-tab-info" });
+  /** Whether the 曲 view is on screen (step input takes keys only then). */
+  private visible = true;
+  /** The page shows or hides the 曲 view. */
+  setVisible(on: boolean): void {
+    this.visible = on;
+    if (on) this.roll.draw();
+    else {
+      this.setStepMode(false);
+      this.closeMenu();
+    }
+  }
   readonly roll = new PianoRoll();
   /** Playback started or stopped (the page stops its other players). */
   onPlayingChange: (playing: boolean) => void = () => {};
@@ -313,9 +322,8 @@ export class RollPanel {
       this.scheduleSave();
     });
 
-    // Folded until opened (and as it was left): the song side is there when wanted, not always in the way.
-    this.element = el("details", { className: "panel roll-panel", open: remembered(OPEN_KEY) === "open" }, [
-      el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "打ち込み(曲を作る)" }), this.summaryInfo]),
+    this.element = el("section", { className: "panel roll-panel" }, [
+      el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "打ち込み" })]),
       el("div", { className: "row" }, [this.midiButton, this.midiInput, this.useBpmButton]),
       el("div", { className: "row roll-transport" }, [
         this.playButton,
@@ -371,11 +379,6 @@ export class RollPanel {
       this.seeking = false;
       clearTimeout(this.seekTimer);
       if (this.playing) this.start();
-    });
-    this.element.addEventListener("toggle", () => {
-      remember(OPEN_KEY, this.element.open ? "open" : "closed");
-      if (this.element.open) this.roll.draw();
-      else this.setStepMode(false);
     });
     this.applyProject();
   }
@@ -506,13 +509,11 @@ export class RollPanel {
     try {
       song = parseMidi(new Uint8Array(await file.arrayBuffer()));
     } catch (error) {
-      this.element.open = true;
       this.info.textContent = `MIDI を読めませんでした: ${error instanceof MidiParseError ? error.message : String(error)}`;
       return;
     }
     const parts = songParts(song).filter((p) => p.drumPitch === null && (p.duplicateOf === null || p.shiftSec !== 0));
     if (!parts.length) {
-      this.element.open = true;
       this.info.textContent = `${file.name}: 音符のある MIDI トラックがありません。`;
       return;
     }
@@ -543,7 +544,6 @@ export class RollPanel {
     this.bpmInput.value = String(this.project.bpm);
     this.from = 0;
     this.selected = this.project.tracks.indexOf(leadTrack ?? added[0]);
-    this.element.open = true;
     this.showTrackInRoll();
     if (this.track.kind !== "drum") this.roll.frame(60);
     this.reload();
@@ -635,7 +635,7 @@ export class RollPanel {
   /** The folded panel's line: how big the song is, and whether it plays. */
   private summarize(): void {
     const notes = this.project.tracks.reduce((n, t) => n + t.notes.length, 0);
-    this.summaryInfo.textContent = `トラック ${this.project.tracks.length} 本・音符 ${notes} 個${this.playing ? "・再生中" : ""}`;
+    this.summaryInfo.textContent = `トラック ${this.project.tracks.length}・音符 ${notes}${this.playing ? "・再生中" : ""}`;
   }
 
   private renderTracks(): void {
@@ -950,7 +950,7 @@ export class RollPanel {
    */
   stepNote(pitch: number, down: boolean): boolean {
     if (!down) return this.stepHeld.delete(pitch);
-    if (!this.stepMode || !this.element.open || this.playing || this.track.kind === "drum") return false;
+    if (!this.stepMode || !this.visible || this.playing || this.track.kind === "drum") return false;
     const chord = this.stepHeld.size > 0;
     if (!chord) this.stepChordStart = this.stepAt;
     this.stepHeld.add(pitch);

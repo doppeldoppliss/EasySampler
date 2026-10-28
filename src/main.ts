@@ -1288,7 +1288,7 @@ const detailsPanel = el("details", { className: "panel params" }, [
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "エンベロープ" }),
-      range("ディケイ", 0.01, 2, 0.01, () => params.amp.decay, (p, v) => (p.amp.decay = v), ms),
+      range("ディケイ", 0.01, 10, 0.01, () => params.amp.decay, (p, v) => (p.amp.decay = v), ms),
       range("サステイン", 0, 1, 0.01, () => params.amp.sustain, (p, v) => (p.amp.sustain = v), pct),
       range("リリース", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms),
       range("ベロシティ感度", 0, 1, 0.01, () => params.amp.velocitySens, (p, v) => (p.amp.velocitySens = v), pct),

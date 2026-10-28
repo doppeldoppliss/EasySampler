@@ -984,7 +984,11 @@ export class Engine {
           break;
         case Env.Decay:
           v.level = amp.sustain + (v.level - amp.sustain) * decayCoef;
-          if (Math.abs(v.level - amp.sustain) < 1e-4) v.env = Env.Sustain;
+          // Decaying to nothing (sustain 0: a struck, piano-like note): once it is below -80 dB the note is over.
+          if (amp.sustain <= 1e-4 && v.level < 1e-4) {
+            v.level = 0;
+            v.env = Env.Off;
+          } else if (Math.abs(v.level - amp.sustain) < 1e-4) v.env = Env.Sustain;
           break;
         case Env.Release:
           v.level -= releaseStep;

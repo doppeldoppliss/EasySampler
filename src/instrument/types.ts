@@ -221,8 +221,9 @@ export const PRESETS: Preset[] = [
   { id: "transpose", label: "移調のみ(シンセ化せず全体を上げ下げ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: true, limit: "unlimited" }, unvoicedFollow: false, levelEven: 0, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 } }) },
   // Short material (a shout, a word): played through once at the note, nothing stretched — the 音MAD staple.
   { id: "short", label: "短い素材(長さ保持・そのまま音程だけ)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: true }, unvoicedFollow: true, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, retuneSec: 0 } }) },
-  // A struck or plucked sound (a piano, a pluck, a bell): it rings down on its own and stops soon after the key is let go, like a damper.
-  { id: "decay", label: "減衰する楽器(ピアノ・撥弦など)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 0, sustainMode: "none", sustainEnabled: true, tail: { ...p.tail, enabled: false }, unvoicedFollow: true, levelEven: 0, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: false, smoothSec: 0 }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 }, amp: { ...p.amp, attack: 0.001, decay: 0.1, sustain: 1, release: 0.25 } }) },
+  // A struck, piano-like sound from any material: synthesized (flat, the vowel drawn out) and dying away while held —
+  // the level falls toward nothing (decay ~1.2 s, sustain 0) — and stopped quickly when let go, as a damper does.
+  { id: "decay", label: "減衰(伸ばしながら消える・ピアノ風)", apply: (p) => ({ ...p, pitchMode: "preserve-length", flatten: 1, sustainEnabled: true, sustainMode: "pool", tail: { ...p.tail, enabled: false }, unvoicedFollow: false, levelEven: 1, wobble: { ...p.wobble, vibratoCents: 0, driftCents: 0, micro: true }, tune: { ...p.tune, mode: "flatten", retuneSec: 0 }, amp: { ...p.amp, attack: 0.002, decay: 1.2, sustain: 0, release: 0.25, fadeOut: 0 } }) },
 ];
 
 // ---------------------------------------------------------------- export

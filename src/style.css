@@ -213,6 +213,8 @@ input:focus-visible {
 
 .workspace {
   display: grid;
+  /* One column, never wider than the screen (a long name in a tab is cut with … instead of widening the page). */
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 

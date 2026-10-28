@@ -187,4 +187,18 @@ describe("FxChain", () => {
     expect(peak).toBeLessThan(2);
     expect(FxChain.makesStereo(settings)).toBe(true);
   });
+it("waits long enough for the reverb: every size has rung down to -60 dB within its tail", () => {
+    for (const size of [0, 0.5, 1]) {
+      const settings = fx((f) => Object.assign(f.reverb, { on: true, size, damping: 0, mix: 1, preDelayMs: 0 }));
+      const tail = FxChain.tailSec(settings, 120);
+      const x = new Float32Array(Math.ceil((tail + 0.5) * SR));
+      x[0] = 1;
+      const [l] = run(settings, x);
+      // The level just after the tail, against the loudest 50 ms.
+      let loud = 0;
+      for (let at = 0; at + 2400 <= l.length; at += 2400) loud = Math.max(loud, rms(l, at, at + 2400));
+      const after = rms(l, Math.floor(tail * SR), Math.floor(tail * SR) + 2400);
+      expect(after).toBeLessThan(loud * 0.001);
+    }
+  });
 });

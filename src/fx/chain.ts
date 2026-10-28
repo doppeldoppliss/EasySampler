@@ -112,6 +112,10 @@ const FILTER_UPDATE = 16;
 const LIMITER_LOOKAHEAD_SEC = 0.002;
 const CHORUS_BASE_MS = 12;
 const CHORUS_MAX_MS = 40;
+/** The reverb combs' mean loop time (Freeverb's tunings, at 44.1 kHz). */
+const REVERB_LOOP_SEC = 1375 / 44100;
+/** The longest an effect tail is waited for (a delay fed back near the top). */
+const MAX_TAIL_SEC = 20;
 
 export class FxChain {
   private readonly sampleRate: number;
@@ -228,8 +232,13 @@ export class FxChain {
       const repeats = fx.delay.feedback > 0.01 ? Math.log(0.001) / Math.log(fx.delay.feedback) : 1;
       tail = Math.max(tail, step * (repeats + 1));
     }
-    if (fx.reverb.on && fx.reverb.mix > 0) tail = Math.max(tail, 0.6 + 5.5 * fx.reverb.size + fx.reverb.preDelayMs / 1000);
-    return Math.min(12, tail);
+    if (fx.reverb.on && fx.reverb.mix > 0) {
+      // The combs (about 30 ms around) keep `feedback` of the sound each pass: -60 dB after
+      // ln(0.001) / ln(feedback) passes; the allpasses smear it a little longer.
+      const feedback = 0.7 + 0.28 * fx.reverb.size;
+      tail = Math.max(tail, 1.3 * REVERB_LOOP_SEC * (Math.log(0.001) / Math.log(feedback)) + fx.reverb.preDelayMs / 1000 + 0.2);
+    }
+    return Math.min(MAX_TAIL_SEC, tail);
   }
 
   /** Whether the chain turns mono into stereo (a mono material then needs two channels). */

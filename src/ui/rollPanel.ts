@@ -503,11 +503,11 @@ export class RollPanel {
     this.scheduleSave();
   }
 
-  /** A material leaves the project: tracks that played one of its cuts play nothing until another is chosen. */
+  /** A material leaves the project: tracks that played one of its cuts play nothing until another is chosen (an audio track's clips of it go silent). */
   removeMaterial(id: string): void {
     this.project.materials = this.project.materials.filter((m) => m.id !== id);
     for (const t of this.project.tracks) {
-      if (t.instrument?.startsWith(`${id}/`)) t.instrument = null;
+      if (t.instrument?.startsWith(`${id}/`) || (t.kind === "audio" && t.instrument === id)) t.instrument = null;
     }
     if (this.project.editing === id) this.project.editing = this.project.materials.at(-1)?.id ?? null;
     this.renderTracks();
@@ -515,9 +515,9 @@ export class RollPanel {
     this.scheduleSave();
   }
 
-  /** Whether a track plays a cut of this material. */
+  /** Whether a track plays a cut of this material, or has a clip of it. */
   usesMaterial(id: string): boolean {
-    return this.project.tracks.some((t) => t.instrument?.startsWith(`${id}/`));
+    return this.project.tracks.some((t) => t.instrument?.startsWith(`${id}/`) || t.notes.some((n) => n.clip?.material === id));
   }
 
   setEditing(id: string): void {
@@ -533,13 +533,13 @@ export class RollPanel {
     this.editedInstrument = edited;
     // A project of one track that plays nothing yet: it plays the cut being edited.
     const only = this.project.tracks.length === 1 ? this.project.tracks[0] : null;
-    if (only && only.instrument === null && edited) {
+    if (only && only.kind === "melodic" && only.instrument === null && edited) {
       only.instrument = edited;
       this.scheduleSave();
     }
-    // A cut that is gone (removed on the sampling side): the track plays nothing.
+    // A cut that is gone (removed on the sampling side): the track plays nothing. (An audio track names a material, not a cut.)
     for (const t of this.project.tracks) {
-      if (t.instrument && t.instrument !== BACKING && !options.some((o) => o.id === t.instrument)) t.instrument = null;
+      if (t.kind === "melodic" && t.instrument && t.instrument !== BACKING && !options.some((o) => o.id === t.instrument)) t.instrument = null;
     }
     this.renderTracks();
     this.showRoot();
@@ -1575,7 +1575,7 @@ export class RollPanel {
       const down = ((beat % bpb) + bpb) % bpb === 0;
       notes.push({ start, end: start + 0.03, note: down ? 76 : 77, velocity: down ? 1 : 0.55, drum: true });
     }
-    return { id: METRONOME, instrument: "backing", notes, gain: 0.9, pan: 0, mute: false, solo: false, fx: null };
+    return { id: METRONOME, instrument: "backing", notes, gain: 2, pan: 0, mute: false, solo: false, fx: null };
   }
 
   /** Stops playback keeping the position where it is now (leaving the 曲 view). */

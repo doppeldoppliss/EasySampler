@@ -1388,3 +1388,21 @@ details.sub.credit > summary {
   touch-action: none;
   flex-basis: 100%;
 }
+
+/* The 曲 view: the roll first, its effects next, the keyboard after (the tabs stay on top). */
+.workspace > .view-tabs {
+  order: -1;
+}
+.workspace[data-view="song"] > .roll-panel {
+  order: 1;
+}
+.workspace[data-view="song"] > .fx-panel {
+  order: 2;
+}
+.workspace[data-view="song"] > .keys-panel {
+  order: 3;
+}
+.fx-mark {
+  min-height: 0;
+  padding: 2px 8px;
+}

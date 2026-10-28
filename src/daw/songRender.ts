@@ -44,6 +44,11 @@ export interface SongRenderInput {
   bpm: number;
   tracks: RenderTrack[];
   masterFx: FxSettings | null;
+  /**
+   * Only this stretch of the output, exactly (no ring-out, no silence trimmed): for a loop, the notes are
+   * given twice and the second pass is kept, so what rings past the loop's end is heard at its start.
+   */
+  window?: { fromSec: number; lengthSec: number };
 }
 
 export interface RenderedSong {
@@ -101,8 +106,9 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
 
   let lastEnd = 0;
   for (const t of tracks) for (const n of t.notes) lastEnd = Math.max(lastEnd, n.end);
-  const endFrame = Math.ceil(lastEnd * sr);
-  const hardEnd = endFrame + Math.ceil(MAX_RING_SEC * sr);
+  const win = input.window;
+  const endFrame = win ? Math.round((win.fromSec + win.lengthSec) * sr) : Math.ceil(lastEnd * sr);
+  const hardEnd = win ? endFrame : endFrame + Math.ceil(MAX_RING_SEC * sr);
   let left = new Float32Array(endFrame + sr * 2);
   let right = new Float32Array(left.length);
   const l = new Float32Array(BLOCK);
@@ -125,13 +131,21 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
     right.set(r, at);
     at += BLOCK;
     // Past the last note, once every sound is silent the effects get their tail, then it ends.
-    if (at >= endFrame) {
+    if (!win && at >= endFrame) {
       if (quietSince < 0 && sounds.every((s) => s.idle())) quietSince = at;
       if (quietSince >= 0 && at - quietSince >= (anyFx ? FX_TAIL_SEC : 0.05) * sr) break;
     }
     if (progress && block % REPORT_EVERY === REPORT_EVERY - 1) await progress(Math.min(1, at / Math.max(1, endFrame)));
   }
 
+  // A window: exactly that stretch.
+  if (win) {
+    const from = Math.round(win.fromSec * sr);
+    const length = Math.round(win.lengthSec * sr);
+    left = left.slice(from, from + length);
+    right = right.slice(from, from + length);
+    at = left.length;
+  }
   // The trailing silence goes; a mix over full scale is brought down as a whole.
   let end = 0;
   let peak = 0;
@@ -140,7 +154,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
     if (a > 1e-4) end = i + 1;
     if (a > peak) peak = a;
   }
-  end = Math.min(at, end + Math.round(0.05 * sr));
+  end = win ? at : Math.min(at, end + Math.round(0.05 * sr));
   const gain = peak > 0.999 ? 0.98 / peak : 1;
   const outL = left.slice(0, end);
   const outR = right.slice(0, end);

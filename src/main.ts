@@ -52,7 +52,7 @@ import { renderSong, type RenderTrack } from "./daw/songRender";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, newSlot, renderSlot, slotFor, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
-import { BACKING, toSeqNotes } from "./daw/model";
+import { BACKING, beatsToSec, toSeqNotes } from "./daw/model";
 import { zipStore, type ZipEntry } from "./export/zip";
 import { encodeWavBytes } from "./audio/wav";
 
@@ -991,6 +991,7 @@ function fxHead(text: string): HTMLElement {
 }
 
 const fxResetButton = button("エフェクトをすべてオフに", "small", () => {
+  if (!confirm(`${fxTarget === "master" ? "マスター" : `トラック「${rollPanel.trackName}」`}のエフェクトをすべてオフにして、値も初期値に戻しますか?`)) return;
   updateFx((f) => Object.assign(f, structuredClone(DEFAULT_FX)));
   refreshControls();
 });
@@ -2067,6 +2068,7 @@ function renderKitPanel(): void {
         number("フェード ms", slot.fade, (s, v) => (s.fade = v), "終わりを何ミリ秒かけて消すか"),
         el("label", { className: "inline fine" }, ["音量 ", gain]),
         button("×", "small", () => {
+          if (!confirm(`${drumName(key)}の音「${slot.name}」を外しますか?(簡易ドラムに戻ります。元に戻せません)`)) return;
           const old = slot.sample;
           rollPanel.updateKit((k) => {
             k.slots = k.slots.filter((x) => x.key !== key);
@@ -2121,6 +2123,12 @@ rollPanel.onKitChange = () => {
 };
 rollPanel.onKitHit = (key) => client.kitHit(key);
 rollPanel.onOpenKit = () => setView("kit");
+rollPanel.onOpenFx = () => {
+  fxTarget = "track";
+  showFxTarget();
+  fxPanel.open = true;
+  fxPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+};
 
 // ---------------------------------------------------------------- the two views: 素材 (the sound) and 曲 (the song)
 
@@ -2317,6 +2325,8 @@ function addCut(how: "copy" | "next"): void {
 function removeCut(): void {
   if (cuts.length < 2) return;
   const gone = cuts[current];
+  const users = material && gone ? rollPanel.tracksUsing(instrumentId(material.id, gone.id)) : [];
+  if (!confirm(`区間「${gone.name}」を削除しますか?${users.length ? `\nこの区間を鳴らしているトラック(${users.join("、")})は鳴らなくなります。` : ""}`)) return;
   cuts.splice(current, 1);
   current = Math.min(current, cuts.length - 1);
   applyCurrentCut();
@@ -2989,14 +2999,23 @@ function findCut(id: string): { material: Material; cut: CutSettings; exportOf: 
 // ---------------------------------------------------------------- the song as a file (design.md 13, phase 3)
 
 /** The song's tracks as the offline render takes them (only one track, for a stem). */
-function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string | null): RenderTrack[] {
+/** The loop range's notes (seconds from its start), given twice in a row: the second pass is the seamless loop. */
+function loopNotes(notes: ReturnType<typeof toSeqNotes>, startSec: number, lengthSec: number): ReturnType<typeof toSeqNotes> {
+  const inside = notes
+    .filter((n) => n.start >= startSec - 1e-9 && n.start < startSec + lengthSec - 1e-9)
+    .map((n) => ({ ...n, start: n.start - startSec, end: Math.min(n.end, startSec + lengthSec) - startSec }));
+  return [...inside, ...inside.map((n) => ({ ...n, start: n.start + lengthSec, end: n.end + lengthSec }))];
+}
+
+function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string | null, range: { startSec: number; lengthSec: number } | null = null): RenderTrack[] {
   rebuildKit();
   const kit = rollPanel.kitSpec();
   const out: RenderTrack[] = [];
   for (const t of project.tracks) {
     if (only !== null && t.id !== only) continue;
     const mix = { fx: t.fx, gain: t.gain, pan: t.pan, mute: only === null ? t.mute : false, solo: only === null ? t.solo : false };
-    const notes = toSeqNotes(t.notes, project.bpm, t.kind !== "drum" && t.glide > 0);
+    const all = toSeqNotes(t.notes, project.bpm, t.kind !== "drum" && t.glide > 0);
+    const notes = range ? loopNotes(all, range.startSec, range.lengthSec) : all;
     if (t.kind === "drum") {
       // The kit: each key its sound (as the engine has it), or the plain drum sound.
       out.push({ id: t.id, instrument: null, samples: kit.samples.map((_, key) => kitBuffers.get(key) ?? null), drumKeys: kit.keys, notes, ...mix });
@@ -3020,10 +3039,11 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
   return out;
 }
 
+/** A song file's name: the project's name and the time (e.g. 「新曲_20261028-1530」). */
 function songFileStamp(): string {
   const d = new Date();
   const p = (x: number) => String(x).padStart(2, "0");
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+  return `${safeBaseName(currentProject()?.name ?? "曲")}_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
 /** The last file made, kept so a second tap can share it at once (iPhone: the share sheet needs a fresh tap). */
@@ -3038,8 +3058,11 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
     say("書き出す音符がありません。");
     return;
   }
-  const stamp = songFileStamp();
-  const key = JSON.stringify([kind, project, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
+  const loopRange = kind === "mid" ? null : rollPanel.exportRange;
+  const range = loopRange ? { startSec: beatsToSec(loopRange.start, project.bpm), lengthSec: beatsToSec(loopRange.end - loopRange.start, project.bpm) } : null;
+  const stamp = songFileStamp() + (range ? "_loop" : "");
+  const window = range ? { fromSec: range.lengthSec, lengthSec: range.lengthSec } : undefined;
+  const key = JSON.stringify([kind, range, project, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
   let built = songBuilt?.key === key ? songBuilt : null;
   if (!built) {
     songBuilding = true;
@@ -3052,12 +3075,12 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
       };
       if (kind === "mid") {
         const bytes = writeMidi(project);
-        built = { key, blob: new Blob([bytes], { type: "audio/midi" }), fileName: `曲_${stamp}.mid`, summary: `トラック ${project.tracks.length} 本、${project.bpm} BPM` };
+        built = { key, blob: new Blob([bytes], { type: "audio/midi" }), fileName: `${stamp}.mid`, summary: `トラック ${project.tracks.length} 本、${project.bpm} BPM` };
       } else if (kind === "wav") {
         say("作成中…");
         await yieldToScreen();
-        const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null), masterFx: project.masterFx }, progress);
-        const fileName = `曲_${stamp}.wav`;
+        const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, window }, progress);
+        const fileName = `${stamp}.wav`;
         const lowered = song.gain < 1 ? `。音割れしないよう全体を ${(20 * Math.log10(song.gain)).toFixed(1)} dB 下げました` : "";
         built = { key, blob: new Blob([encodeWavBytes(song.channels, song.sampleRate, { ISFT: "EasySampler" })], { type: "audio/wav" }), fileName, summary: `${(song.channels[0].length / song.sampleRate).toFixed(1)} 秒、${song.sampleRate / 1000} kHz${lowered}` };
       } else {
@@ -3066,17 +3089,17 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
         const withNotes = project.tracks.filter((t) => t.notes.length);
         for (let i = 0; i < withNotes.length; i++) {
           const t = withNotes[i];
-          const tracks = songTracks(project, t.id);
+          const tracks = songTracks(project, t.id, range);
           if (!tracks.length) continue;
           say(`作成中… ${i + 1} / ${withNotes.length}(${t.name})`);
           await yieldToScreen();
-          const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null });
+          const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null, window });
           let name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}.wav`;
           for (let k = 2; used.has(name); k++) name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}_${k}.wav`;
           used.add(name);
-          entries.push({ name: `曲_${stamp}/${name}`, data: new Uint8Array(encodeWavBytes(song.channels, song.sampleRate, { ISFT: "EasySampler" })) });
+          entries.push({ name: `${stamp}/${name}`, data: new Uint8Array(encodeWavBytes(song.channels, song.sampleRate, { ISFT: "EasySampler" })) });
         }
-        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `曲_${stamp}_トラック別.zip`, summary: `WAV ${entries.length} 本(各トラックのエフェクト込み、マスターなし)` };
+        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `${stamp}_トラック別.zip`, summary: `WAV ${entries.length} 本(各トラックのエフェクト込み、マスターなし)` };
       }
       songBuilt = built;
     } catch (error) {

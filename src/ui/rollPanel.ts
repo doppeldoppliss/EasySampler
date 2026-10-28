@@ -148,6 +148,8 @@ export class RollPanel {
   onKitChange: () => void = () => {};
   /** What the keyboard plays in the 曲 view changed (another track, its cut or its effects). */
   onLiveChange: () => void = () => {};
+  /** A track's FX mark: the page shows (and opens) the effects. */
+  onOpenFx: () => void = () => {};
   /** 「ドラムキットを開く」: the page shows the kit view. */
   onOpenKit: () => void = () => {};
   /** A drum track's rows as the roll shows them: the GM key of each (top to bottom). */
@@ -258,6 +260,11 @@ export class RollPanel {
   private readonly stepTieButton = button("タイ", "small", () => this.stepTie(), "最後に入れた音符を 1 つぶん伸ばします");
   /** The menu (a right-click or a long press on the roll), while open. */
   private menu: HTMLElement | null = null;
+  /** Each track's undo history while another is shown (with the drum rows it was made on). */
+  private readonly histories = new Map<string, { undo: string[]; redo: string[]; rows: string }>();
+  private shownTrack: string | null = null;
+  /** Export only the loop range (WAV / stems), seamless. */
+  private readonly loopOnlyBox = el("input", { type: "checkbox", ariaLabel: "ループ範囲だけ書き出す" });
   private readonly position = el("span", { className: "fine num" });
   /** The seek bar: the song from its start to a little past its last note (or the loop's end), in beats. */
   private readonly seekBar = el("input", { type: "range", min: "0", max: "16", step: "any", value: "0", className: "song-seek", ariaLabel: "再生位置" });
@@ -367,6 +374,7 @@ export class RollPanel {
         button("曲を WAV で", "small primary", () => this.onExport("wav"), "全トラックをミックスし、マスターのエフェクトをかけた 1 本の WAV"),
         button("トラック別の WAV(zip)", "small", () => this.onExport("stems"), "トラックごとに 1 本ずつ(各トラックのエフェクト込み、マスターなし)"),
         button("MIDI(.mid)", "small", () => this.onExport("mid"), "音符だけを MIDI ファイルに(別の DAW へ持っていく用)"),
+        el("label", { className: "inline fine", title: "ループ範囲だけを、つなぎ目なくループできる長さで書き出します(WAV・トラック別)" }, [this.loopOnlyBox, " ループ範囲だけ"]),
       ]),
       this.exportStatus,
     ]);
@@ -404,6 +412,17 @@ export class RollPanel {
 
   get playing(): boolean {
     return this.startedAt !== null;
+  }
+
+  /** The loop range to export alone (beats), when 「ループ範囲だけ」 is ticked and the loop is on. */
+  get exportRange(): { start: number; end: number } | null {
+    const { loop } = this.project;
+    return this.loopOnlyBox.checked && loop.on && loop.end > loop.start ? { start: loop.start, end: loop.end } : null;
+  }
+
+  /** The names of the tracks that play a cut (to warn before the cut goes). */
+  tracksUsing(instrument: string): string[] {
+    return this.project.tracks.filter((t) => t.instrument === instrument).map((t) => t.name);
   }
 
   /** The song as it is now (a copy), for the export. */
@@ -579,6 +598,10 @@ export class RollPanel {
   /** The roll shows the selected track: keys for a melodic one, its rows for a drum track. */
   private showTrackInRoll(): void {
     const t = this.track;
+    // The track being left keeps its undo history (unless it is the same track shown again).
+    if (this.shownTrack && this.shownTrack !== t.id) {
+      this.histories.set(this.shownTrack, { ...this.roll.takeHistory(), rows: this.rowKeys.join() });
+    }
     this.glideRow.hidden = t.kind === "drum";
     this.glideSelect.value = String(GLIDES.some(([v]) => v === t.glide) ? t.glide : 0);
     this.stepHeld.clear();
@@ -603,6 +626,13 @@ export class RollPanel {
       this.roll.keyToPitch = null;
       this.roll.setRows(null);
       this.roll.setNotes(t.notes);
+    }
+    // Back on a track: its history comes back (for a drum track, only if its rows are the same).
+    if (this.shownTrack !== t.id) {
+      const kept = this.histories.get(t.id);
+      if (kept && (t.kind !== "drum" || kept.rows === this.rowKeys.join())) this.roll.giveHistory(kept);
+      this.histories.delete(t.id);
+      this.shownTrack = t.id;
     }
     if (t.kind === "drum") this.roll.frame(0);
   }
@@ -635,7 +665,8 @@ export class RollPanel {
   private removeTrack(index: number): void {
     if (this.project.tracks.length < 2) return;
     const t = this.project.tracks[index];
-    if (t.notes.length && !window.confirm(`「${t.name}」と音符 ${t.notes.length} 個を消しますか?`)) return;
+    if (!window.confirm(`トラック「${t.name}」${t.notes.length ? `と音符 ${t.notes.length} 個` : ""}を消しますか?(元に戻せません)`)) return;
+    this.histories.delete(t.id);
     this.project.tracks.splice(index, 1);
     this.selected = Math.min(this.selected > index ? this.selected - 1 : this.selected, this.project.tracks.length - 1);
     this.showTrackInRoll();
@@ -683,6 +714,8 @@ export class RollPanel {
           this.showRoot();
           this.scheduleSave();
           this.onLiveChange();
+          // (Its row says whether it sounds.)
+          this.renderTracks();
         });
       }
       const mute = button("M", `small toggle${t.mute ? " on" : ""}`, () => {
@@ -706,6 +739,15 @@ export class RollPanel {
         this.mix(t, (x) => (x.pan = 0));
       });
       const remove = button("×", "small", () => this.removeTrack(i), "このトラックを消す");
+      // A melodic track with no cut plays nothing: it says so. Effects on: an FX mark that opens them.
+      const silent = t.kind !== "drum" && !t.instrument ? el("span", { className: "warn fine", textContent: "区間を選ぶと鳴ります" }) : null;
+      const fxOn = Object.values(t.fx).some((g) => (g as { on?: boolean }).on);
+      const fxMark = fxOn
+        ? button("FX", "small toggle on fx-mark", () => {
+            this.selectTrack(i);
+            this.onOpenFx();
+          }, "このトラックにエフェクトがかかっています(押すとエフェクトを開きます)")
+        : null;
       remove.hidden = this.project.tracks.length < 2;
       const row = el("div", { className: `track-row${selected ? " selected" : ""}` }, [
         el("span", { className: "track-count fine num", textContent: `${t.notes.length}` }),
@@ -715,6 +757,8 @@ export class RollPanel {
         solo,
         el("label", { className: "inline fine" }, ["音量 ", volume]),
         el("label", { className: "inline fine" }, ["パン ", pan]),
+        ...(fxMark ? [fxMark] : []),
+        ...(silent ? [silent] : []),
         remove,
       ]);
       row.addEventListener("pointerdown", (e) => {
@@ -1032,6 +1076,8 @@ export class RollPanel {
     this.client.setTrackMix(t.id, { gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, fx });
     this.scheduleSave();
     this.onLiveChange();
+    const on = Object.values(fx).some((g) => (g as { on?: boolean }).on);
+    if (on !== !!this.trackList.children[this.selected]?.querySelector(".fx-mark")) this.renderTracks();
   }
 
   /** The effects on the whole mix. */

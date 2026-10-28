@@ -212,6 +212,18 @@ export class PianoRoll {
     return this.redoStack.length > 0;
   }
 
+  /** The undo / redo history (to keep it while another track is shown). */
+  takeHistory(): { undo: string[]; redo: string[] } {
+    return { undo: [...this.undoStack], redo: [...this.redoStack] };
+  }
+
+  /** Puts a kept history back (right after the same notes were set again). */
+  giveHistory(history: { undo: string[]; redo: string[] }): void {
+    this.undoStack = [...history.undo];
+    this.redoStack = [...history.redo];
+    this.onStateChange();
+  }
+
   /** Replaces the notes (a load or an import); `keepHistory` makes it one undoable step. */
   setNotes(notes: Note[], keepHistory = false): void {
     // (A drag under way belongs to the notes being replaced: it ends here, so it cannot land in the new ones' history.)

@@ -100,3 +100,17 @@ describe("renderSong", () => {
     expect(peak).toBeLessThan(0.55);
   });
 });
+
+describe("renderSong: a window (the loop range, seamless)", () => {
+  it("is exactly the window, and what rang past the loop's end is heard at its start", async () => {
+    const SR = 44100;
+    const ring = new Float32Array(Math.round(0.3 * SR)).fill(0.4); // longer than the loop
+    const plain = { fx: null, gain: 1, pan: 0, mute: false, solo: false };
+    // A hit at 0.1 s of a 0.2 s loop, given twice (as the page does); the second pass is kept.
+    const notes = [0.1, 0.3].map((start) => ({ start, end: start + 0.01, note: 0, velocity: 1, drum: false }));
+    const song = await renderSong({ sampleRate: SR, bpm: 120, masterFx: null, window: { fromSec: 0.2, lengthSec: 0.2 }, tracks: [{ id: "d", instrument: null, samples: [[ring]], notes, ...plain }] });
+    expect(song.channels[0].length).toBe(Math.round(0.2 * SR));
+    // At the window's start the first hit (from 0.1 s, 0.3 s long) still rings.
+    expect(Math.abs(song.channels[0][10])).toBeGreaterThan(0.3);
+  });
+});

@@ -3,6 +3,7 @@
 // notes are handed to the player.
 
 import { sanitizeFx } from "../export/settings";
+import { emptyKit, sanitizeKit, type Kit } from "./kit";
 import { DEFAULT_FX, type FxSettings } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
 import type { SongNote } from "../song/midi";
@@ -24,12 +25,10 @@ export interface Track {
   /** Stable within the project (the mixer and the audio thread know a track by it). */
   id: string;
   name: string;
-  /** "melodic": one cut played at the notes' pitches. "drum": one row per pad, each pad a cut played as recorded. */
+  /** "melodic": one cut played at the notes' pitches. "drum": the project's drum kit, a note's pitch being its GM drum key (design.md 13.2). */
   kind: "melodic" | "drum";
   /** The cut it plays: "materialId/cutId" (design.md 13.1, a track = one cut), BACKING (簡易シンセ), or null when none is chosen. */
   instrument: string | null;
-  /** A drum track's rows, top to bottom; a note's pitch is its row's index. */
-  pads: Pad[];
   notes: Note[];
   /** The track's effects (design.md 13.1: effects are the song side's, not the cut's). */
   fx: FxSettings;
@@ -48,29 +47,16 @@ export interface Track {
   noteVelocity: number;
 }
 
-export interface Pad {
-  /** The cut the row plays (as recorded, once per note), BACKING for the plain drum sound, or null. */
-  instrument: string | null;
-  /** The GM drum key the row stands for (its plain drum sound, and its key in a MIDI file). */
-  key?: number;
-}
-
-/** A track or a drum row that plays the plain backing synth (簡易シンセ) instead of a cut: what a MIDI file's parts start on. */
+/** A track that plays the plain backing synth (簡易シンセ) instead of a cut: what a MIDI file's parts start on. */
 export const BACKING = "backing";
 
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, kind: "melodic", instrument, pads: [], notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, tailFit: false, noteLength: 1, noteVelocity: DEFAULT_VELOCITY };
+  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, tailFit: false, noteLength: 1, noteVelocity: DEFAULT_VELOCITY };
 }
 
-/** A drum track: its first row plays the given cut (if any). */
-export function newDrumTrack(name: string, instrument: string | null = null): Track {
-  return { ...newTrack(name, null), kind: "drum", pads: instrument ? [{ instrument }] : [] };
-}
-
-/** A drum track loses a row: its notes go, the rows below move up. */
-export function removePad(track: Track, index: number): void {
-  track.pads.splice(index, 1);
-  track.notes = track.notes.filter((n) => n.pitch !== index).map((n) => (n.pitch > index ? { ...n, pitch: n.pitch - 1 } : n));
+/** A drum track: it plays the project's kit, its notes on GM drum keys. */
+export function newDrumTrack(name: string): Track {
+  return { ...newTrack(name, null), kind: "drum" };
 }
 
 export function newTrackId(): string {
@@ -97,6 +83,8 @@ export interface Project {
   loop: { start: number; end: number; on: boolean };
   /** Effects on the whole mix. */
   masterFx: FxSettings;
+  /** The drum kit the drum tracks and the kit view's keyboard play (design.md 13.2). */
+  kit: Kit;
 }
 
 export const MIN_LENGTH = 1 / 64;
@@ -105,7 +93,7 @@ export const DEFAULT_VELOCITY = 0.8;
 const LEGATO_OVERLAP_SEC = 0.002;
 
 export function emptyProject(): Project {
-  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, masterFx: structuredClone(DEFAULT_FX) };
+  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, masterFx: structuredClone(DEFAULT_FX), kit: emptyKit() };
 }
 
 let nextId = 1;
@@ -199,6 +187,13 @@ export function sanitizeProject(raw: unknown): Project {
   const tracks = Array.isArray(r.tracks)
     ? r.tracks.map((t, i) => {
         const tr = (t && typeof t === "object" ? t : {}) as Record<string, unknown>;
+        // An earlier version's drum track: a note's pitch was its row, each row a key (or one by its place).
+        const oldRows = tr.kind === "drum" && Array.isArray(tr.pads) && tr.pads.length ? (tr.pads as Record<string, unknown>[]) : null;
+        const OLD_ROW_KEYS = [36, 38, 42, 46, 39, 49, 45, 47, 50, 51, 37, 56, 54, 41, 43, 48];
+        const rowKey = (row: number) => {
+          const k = oldRows?.[row]?.key;
+          return typeof k === "number" ? k : (OLD_ROW_KEYS[row] ?? 36 + row);
+        };
         const notes = Array.isArray(tr.notes)
           ? tr.notes
               .filter((n): n is Record<string, unknown> => !!n && typeof n === "object")
@@ -206,7 +201,7 @@ export function sanitizeProject(raw: unknown): Project {
                 id: newId(),
                 start: num(n.start, 0, 0, 100_000),
                 length: num(n.length, 1, MIN_LENGTH, 10_000),
-                pitch: clampPitch(num(n.pitch, 60, 0, 127)),
+                pitch: clampPitch(oldRows ? rowKey(Math.round(num(n.pitch, 0, 0, 127))) : num(n.pitch, 60, 0, 127)),
                 velocity: num(n.velocity, DEFAULT_VELOCITY, 0.01, 1),
               }))
           : [];
@@ -215,13 +210,6 @@ export function sanitizeProject(raw: unknown): Project {
           name: typeof tr.name === "string" && tr.name ? tr.name : `トラック ${i + 1}`,
           kind: tr.kind === "drum" ? ("drum" as const) : ("melodic" as const),
           instrument: typeof tr.instrument === "string" && (tr.instrument.includes("/") || tr.instrument === BACKING) ? tr.instrument : null,
-          pads: Array.isArray(tr.pads)
-            ? tr.pads.map((p) => {
-                const pad = (p && typeof p === "object" ? p : {}) as Record<string, unknown>;
-                const key = typeof pad.key === "number" && Number.isFinite(pad.key) ? Math.max(0, Math.min(127, Math.round(pad.key))) : undefined;
-                return { instrument: typeof pad.instrument === "string" && (pad.instrument.includes("/") || pad.instrument === BACKING) ? pad.instrument : null, ...(key === undefined ? {} : { key }) };
-              })
-            : [],
           notes: sortNotes(notes),
           fx: sanitizeFx(tr.fx),
           gain: num(tr.gain, 1, 0, 4),
@@ -251,5 +239,6 @@ export function sanitizeProject(raw: unknown): Project {
     editing: typeof r.editing === "string" ? r.editing : null,
     loop: end > start ? { start, end, on: loop.on === true } : d.loop,
     masterFx: sanitizeFx(r.masterFx),
+    kit: sanitizeKit(r.kit),
   };
 }

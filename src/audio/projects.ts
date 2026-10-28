@@ -94,10 +94,12 @@ export async function chooseProject(id: string): Promise<void> {
   await saveIndex();
 }
 
-/** The material ids a stored project lists. */
+/** The recordings a stored project owns: its materials, and its drum kit's sounds. */
 function materialIds(data: unknown): string[] {
-  const materials = (data as { materials?: unknown } | undefined)?.materials;
-  return Array.isArray(materials) ? materials.map((m) => (m as { id?: unknown })?.id).filter((id): id is string => typeof id === "string") : [];
+  const d = data as { materials?: unknown; kit?: { slots?: unknown } } | undefined;
+  const materials = Array.isArray(d?.materials) ? d.materials.map((m) => (m as { id?: unknown })?.id) : [];
+  const kit = Array.isArray(d?.kit?.slots) ? d.kit.slots.map((s) => (s as { sample?: unknown })?.sample) : [];
+  return [...new Set([...materials, ...kit].filter((id): id is string => typeof id === "string"))];
 }
 
 /**
@@ -113,6 +115,8 @@ export function remapMaterials(data: unknown, map: ReadonlyMap<string, string>):
   };
   if (Array.isArray(copy.materials)) for (const m of copy.materials as Record<string, unknown>[]) if (typeof m.id === "string" && map.has(m.id)) m.id = map.get(m.id);
   if (typeof copy.editing === "string" && map.has(copy.editing)) copy.editing = map.get(copy.editing);
+  const kit = copy.kit as { slots?: Record<string, unknown>[] } | undefined;
+  if (Array.isArray(kit?.slots)) for (const s of kit.slots) if (typeof s.sample === "string" && map.has(s.sample)) s.sample = map.get(s.sample);
   if (Array.isArray(copy.tracks)) {
     for (const t of copy.tracks as Record<string, unknown>[]) {
       t.instrument = moved(t.instrument);

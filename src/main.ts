@@ -15,11 +15,11 @@ import { askToPersist, forget, keep, kept, onSaveState, storageEstimate, whenSav
 import { chooseProject, createProject, currentProject, duplicateProject, newMaterialId, openProjects, projectKey, projectList, remapMaterials, removeProject, renameProject, touchProject } from "./audio/projects";
 import { buildProjectFile, parseProjectFile, PROJECT_FILE_EXTENSION } from "./audio/projectFile";
 import { Engine, type PreparedSource } from "./engine/engine";
-import { mixToMono, prepareSource, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
+import { mixToMono, prepareSource, resample, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
 import type { PitchTrack } from "./analysis/pyin";
 import { buildBatch, buildKit, buildOne, type Built, type BuildInput } from "./export/build";
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
-import { exportFileName, renderNote, safeBaseName, stripExtension } from "./export/render";
+import { exportFileName, safeBaseName, stripExtension } from "./export/render";
 import { newCutId, parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
 import { hiddenPartsOf, normalizeRemoved, outputLayout } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
@@ -49,7 +49,9 @@ import { KEY_NAMES, quantizeToScale, SCALE_LABELS, type ScaleId } from "./instru
 import { isMidiFile } from "./song/midi";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 import { renderSong, type RenderTrack } from "./daw/songRender";
-import { DRUM_KEYS, writeMidi } from "./daw/midiWrite";
+import { writeMidi } from "./daw/midiWrite";
+import { COMMON_KEYS, guessKey, newSlot, renderSlot, slotFor } from "./daw/kit";
+import { drumName } from "./song/parts";
 import { BACKING, toSeqNotes } from "./daw/model";
 import { zipStore, type ZipEntry } from "./export/zip";
 import { encodeWavBytes } from "./audio/wav";
@@ -196,7 +198,7 @@ async function matchEngineRate(): Promise<void> {
     client.setSource(source, m.id);
   }
   client.resendInstrument();
-  ensurePadSamples(rollPanel.padInstruments());
+  rebuildKit(true);
 }
 
 // ---------------------------------------------------------------- building blocks
@@ -395,6 +397,20 @@ const setNoteButton = button("音名に", "small", () => {
   if (!selection) return;
   void addCorrection({ start: selection.from, end: selection.to, kind: "set", midi: note });
 });
+// A hit cut from the material (an 音MAD source) into the drum kit, on the chosen key.
+const toKitKey = el("select", { ariaLabel: "送る鍵" }, COMMON_KEYS.map((k) => el("option", { value: String(k), textContent: drumName(k) })));
+const toKitButton = button("ドラムキットへ", "small", () => {
+  if (!selection || !material) return;
+  const sr = material.sampleRate;
+  const a = Math.max(0, Math.round(selection.from * sr));
+  const b = Math.min(material.channels[0].length, Math.round(selection.to * sr));
+  if (b - a < 16) return;
+  const key = Number(toKitKey.value);
+  const name = `${stripExtension(material.name)} ${selection.from.toFixed(2)}秒`;
+  void addKitSound(key, name, material.channels.map((c) => c.slice(a, b)), sr).then(() => {
+    fixStatus.textContent = `選んだ部分をドラムキットの「${drumName(key)}」に入れました(「ドラムキット」の画面で確かめられます)。`;
+  });
+});
 const clearSelectionButton = button("選択解除", "small", () => {
   selection = null;
   editor.setSelection(null);
@@ -448,7 +464,7 @@ const fixStatus = el("span", { className: "fine fix-status", role: "status" });
 const undoCorrectionButton = button("手直しを 1 つ戻す", "small", () => void setCorrections(material?.corrections.slice(0, -1) ?? []));
 const clearCorrectionsButton = button("手直しをすべて戻す", "small", () => void setCorrections([]));
 const fixBar = el("div", { className: "fix-bar" }, [
-  el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, clearSelectionButton, fixStatus]),
+  el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, toKitKey, toKitButton, clearSelectionButton, fixStatus]),
   el("div", { className: "row tight fix-pitch" }, [el("span", { className: "fine", textContent: "判定の手直し:" }), ...fixButtons, ...shiftButtons, setNoteButton]),
   el("div", { className: "row tight" }, [removedLabel, undoRemoveButton, clearRemovedButton]),
   el("div", { className: "row tight" }, [correctionsLabel, undoCorrectionButton, clearCorrectionsButton]),
@@ -461,7 +477,7 @@ function refreshFixBar(): void {
   selectionLabel.textContent = hasSelection
     ? `選択 ${selection!.from.toFixed(2)}–${selection!.to.toFixed(2)} 秒:`
     : "波形の上を横にドラッグして選ぶと、その部分を削除したり、判定を直したりできます。";
-  for (const b of [removeButton, trimButton, ...fixButtons, ...shiftButtons, setNoteButton, clearSelectionButton]) b.hidden = !hasSelection;
+  for (const b of [removeButton, trimButton, toKitKey, toKitButton, ...fixButtons, ...shiftButtons, setNoteButton, clearSelectionButton]) b.hidden = !hasSelection;
   setNoteButton.textContent = `${pitchLabel(note)} に`;
   setNoteButton.parentElement!.hidden = !hasSelection;
   removedLabel.textContent = removed.length ? `削除 ${removed.length} か所(${removed.map((r) => `${r.start.toFixed(2)}–${r.end.toFixed(2)} 秒`).join("、")})` : "";
@@ -1580,6 +1596,10 @@ function openFiles(files: readonly File[]): void {
   }
   for (const f of settings) void openFile(f);
   if (audio.length === 0) return;
+  if (view === "kit") {
+    void addKitFiles(audio);
+    return;
+  }
   if (audio.length === 1 && queue.length === 0) {
     void openFile(audio[0]);
     return;
@@ -1634,6 +1654,11 @@ async function saveProjectFile(): Promise<void> {
     channels: m.channels,
     settings: material && m.id === material.id ? serializeSettings(settingsBody()) : settings ? serializeSettings(settings) : null,
   }));
+  // The kit's recordings travel as materials without settings (the song's kit lists them; they never join the material list).
+  for (const slot of rollPanel.kit.slots) {
+    const audio = slot.sample ? kitAudio.get(slot.sample) : undefined;
+    if (slot.sample && audio && !materials.some((m) => m.id === slot.sample)) materials.push({ id: slot.sample, name: audio.name, sampleRate: audio.sampleRate, channels: audio.channels, settings: null });
+  }
   const bytes = buildProjectFile({ name, project: rollPanel.snapshot(), materials });
   const fileName = `${safeBaseName(name)}${PROJECT_FILE_EXTENSION}`;
   downloadFile(new Blob([bytes], { type: "application/octet-stream" }), fileName);
@@ -1741,6 +1766,209 @@ window.addEventListener("beforeunload", (e) => {
   if (lastSaveState === "saving") e.preventDefault();
 });
 
+// ---------------------------------------------------------------- the drum kit (design.md 13.2)
+
+/** The kit's recordings by sample id (kept as audio:<id>), and what the engine plays per key (cut, faded, at its rate). */
+const kitAudio = new Map<string, { name: string; sampleRate: number; channels: Float32Array[] }>();
+const kitBuilt = new Map<number, string>();
+const kitBuffers = new Map<number, Float32Array[]>();
+
+/** The kit's sounds to the engine: a key whose sound changed is cut again; one that lost its sound goes. */
+function rebuildKit(force = false): void {
+  if (force) kitBuilt.clear();
+  const rate = client.sampleRate;
+  const live = new Set<number>();
+  for (const slot of rollPanel.kit.slots) {
+    const audio = slot.sample ? kitAudio.get(slot.sample) : undefined;
+    if (!audio) continue;
+    live.add(slot.key);
+    const sig = JSON.stringify([slot.sample, slot.start, slot.end, slot.gain, slot.fade, rate]);
+    if (kitBuilt.get(slot.key) === sig) continue;
+    const buffers = renderSlot(slot, audio.channels, audio.sampleRate, rate, resample);
+    kitBuffers.set(slot.key, buffers);
+    kitBuilt.set(slot.key, sig);
+    client.setSample(`kit:${slot.key}`, buffers);
+  }
+  for (const key of [...kitBuffers.keys()]) {
+    if (live.has(key)) continue;
+    kitBuffers.delete(key);
+    kitBuilt.delete(key);
+    client.setSample(`kit:${key}`, null);
+  }
+}
+
+/** The keyboard plays the kit in the kit view, the cut elsewhere. */
+function sendLiveKit(): void {
+  const spec = rollPanel.kitSpec();
+  client.setLiveKit(view === "kit", spec.samples, spec.keys);
+}
+
+/** The kit's recordings back from the store (at start). */
+async function loadKitAudio(): Promise<void> {
+  for (const slot of rollPanel.kit.slots) {
+    if (!slot.sample || kitAudio.has(slot.sample)) continue;
+    const audio = (await kept(`audio:${slot.sample}`)) as { name: string; sampleRate: number; channels: Float32Array[] } | undefined;
+    if (audio?.channels?.length) kitAudio.set(slot.sample, audio);
+  }
+}
+
+/** A sound onto a key (replacing what it had): kept with the project, heard at once. */
+async function addKitSound(key: number, name: string, channels: Float32Array[], sampleRate: number): Promise<void> {
+  const id = newMaterialId();
+  kitAudio.set(id, { name, sampleRate, channels });
+  await keep(`audio:${id}`, { name, sampleRate, channels });
+  const old = slotFor(rollPanel.kit, key)?.sample ?? null;
+  rollPanel.updateKit((kit) => {
+    const slot = slotFor(kit, key);
+    if (slot) Object.assign(slot, newSlot(key, id, name));
+    else kit.slots.push(newSlot(key, id, name));
+  });
+  forgetKitAudioIfUnused(old);
+}
+
+function forgetKitAudioIfUnused(id: string | null): void {
+  if (!id || rollPanel.kit.slots.some((s) => s.sample === id)) return;
+  kitAudio.delete(id);
+  void forget(`audio:${id}`);
+}
+
+/** The longest a drum sound is kept (seconds): a hit, not a song. */
+const KIT_MAX_SEC = 20;
+
+/** Sound files into the kit: each to the key its name suggests (kick, snare, hihat…), or to the given key. */
+async function addKitFiles(files: readonly File[], forcedKey: number | null = null): Promise<void> {
+  const taken = new Set(rollPanel.kit.slots.filter((s) => s.sample).map((s) => s.key));
+  const done: string[] = [];
+  const failed: string[] = [];
+  for (const file of files) {
+    try {
+      const { channels, sampleRate } = await decode(file);
+      const name = stripExtension(file.name);
+      const key = forcedKey ?? guessKey(name, taken);
+      taken.add(key);
+      await addKitSound(key, name, channels.map((c) => c.slice(0, Math.min(c.length, Math.round(KIT_MAX_SEC * sampleRate)))), sampleRate);
+      done.push(`${drumName(key)} ← ${file.name}`);
+    } catch (error) {
+      failed.push(`${file.name}(${error instanceof Error ? error.message : error})`);
+    }
+  }
+  kitStatus.textContent = (done.length ? `割り当てました: ${done.join("、")}。` : "") + (failed.length ? ` 読み込めなかったもの: ${failed.join("、")}` : "");
+}
+
+const kitFileInput = el("input", { type: "file", accept: "audio/*,video/*", multiple: true, className: "visually-hidden" });
+kitFileInput.addEventListener("change", () => {
+  const files = [...(kitFileInput.files ?? [])];
+  kitFileInput.value = "";
+  if (files.length) void addKitFiles(files);
+});
+/** One file for one key (the row's 「ファイル」). */
+let kitFileKey: number | null = null;
+const kitOneInput = el("input", { type: "file", accept: "audio/*,video/*", className: "visually-hidden" });
+kitOneInput.addEventListener("change", () => {
+  const file = kitOneInput.files?.[0];
+  kitOneInput.value = "";
+  if (file && kitFileKey !== null) void addKitFiles([file], kitFileKey);
+});
+const kitStatus = el("p", { className: "fine", role: "status" });
+const kitList = el("div", { className: "kit-list" });
+const kitAddKey = el("select", { ariaLabel: "鍵を追加" });
+const GM_RANGE = Array.from({ length: 47 }, (_, i) => 35 + i);
+
+function renderKitPanel(): void {
+  const kit = rollPanel.kit;
+  const keys = [...new Set([...COMMON_KEYS, ...kit.slots.map((s) => s.key)])].sort((a, b) => a - b);
+  const ms = (v: number) => String(Math.round(v * 1000));
+  const rows = keys.map((key) => {
+    const slot = slotFor(kit, key);
+    const audio = slot?.sample ? kitAudio.get(slot.sample) : undefined;
+    const lengthSec = audio ? audio.channels[0].length / audio.sampleRate : 0;
+    const edit = (change: (s: NonNullable<typeof slot>) => void) => rollPanel.updateKit((k) => {
+      const target = slotFor(k, key);
+      if (target) change(target);
+    });
+    const number = (label: string, value: number, set: (s: NonNullable<typeof slot>, sec: number) => void, title: string) => {
+      const input = el("input", { type: "number", min: "0", step: "1", inputMode: "numeric", value: ms(value), ariaLabel: label, title, className: "kit-ms" });
+      input.addEventListener("change", () => edit((s) => set(s, Math.max(0, Number(input.value) || 0) / 1000)));
+      return el("label", { className: "inline fine" }, [`${label} `, input]);
+    };
+    const play = button("▶", "small", () => client.kitHit(key));
+    play.title = "この鍵の音を聴く(鍵盤でも鳴らせます)";
+    const choose = button(slot?.sample ? "差し替え" : "ファイル", "small", () => {
+      kitFileKey = key;
+      kitOneInput.click();
+    });
+    const parts: HTMLElement[] = [
+      el("span", { className: "kit-key num", textContent: `${pitchLabel(key)}` }),
+      el("strong", { className: "kit-drum", textContent: drumName(key) }),
+      el("span", { className: "fine kit-name", textContent: slot?.sample ? `${slot.name}(${lengthSec.toFixed(2)} 秒)` : "簡易ドラム" }),
+      play,
+      choose,
+    ];
+    if (slot?.sample) {
+      const gain = el("input", { type: "range", min: "0", max: "2", step: "0.05", value: String(slot.gain), ariaLabel: "音量" });
+      gain.addEventListener("change", () => edit((s) => (s.gain = Number(gain.value))));
+      gain.addEventListener("dblclick", () => edit((s) => (s.gain = 1)));
+      parts.push(
+        number("始まり ms", slot.start, (s, v) => (s.start = Math.min(v, lengthSec)), "録音のどこから鳴らすか"),
+        number("終わり ms", slot.end, (s, v) => (s.end = v), "どこまで鳴らすか(0 = 最後まで)"),
+        number("フェード ms", slot.fade, (s, v) => (s.fade = v), "終わりを何ミリ秒かけて消すか"),
+        el("label", { className: "inline fine" }, ["音量 ", gain]),
+        button("×", "small", () => {
+          const old = slot.sample;
+          rollPanel.updateKit((k) => {
+            k.slots = k.slots.filter((x) => x.key !== key);
+          });
+          forgetKitAudioIfUnused(old);
+        }),
+      );
+    } else if (slot) {
+      parts.push(button("×", "small", () => rollPanel.updateKit((k) => (k.slots = k.slots.filter((x) => x.key !== key)))));
+    }
+    const row = el("div", { className: `kit-row${slot?.sample ? " own" : ""}` }, parts);
+    // A file dropped on a row goes to that key.
+    row.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      row.classList.add("drop");
+    });
+    row.addEventListener("dragleave", () => row.classList.remove("drop"));
+    row.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      row.classList.remove("drop");
+      const files = [...(e.dataTransfer?.files ?? [])];
+      if (files[0]) void addKitFiles([files[0]], key);
+    });
+    return row;
+  });
+  kitList.replaceChildren(...rows);
+  kitAddKey.replaceChildren(el("option", { value: "", textContent: "(鍵を選ぶ)" }), ...GM_RANGE.filter((k) => !keys.includes(k)).map((k) => el("option", { value: String(k), textContent: `${pitchLabel(k)} ${drumName(k)}` })));
+  kitTabInfo.textContent = `自分の音 ${kit.slots.filter((x) => x.sample).length}`;
+}
+kitAddKey.addEventListener("change", () => {
+  const key = Number(kitAddKey.value);
+  if (!kitAddKey.value || slotFor(rollPanel.kit, key)) return;
+  rollPanel.updateKit((k) => k.slots.push({ ...newSlot(key, null, drumName(key)) }));
+});
+
+const kitPanel = el("section", { className: "panel kit-panel" }, [
+  el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "ドラムキット" }), button("ドラムの音を追加(複数可)", "small primary", () => kitFileInput.click()), kitFileInput, kitOneInput]),
+  el("p", {
+    className: "fine help",
+    textContent: "鍵(GM ドラムの配置)ごとに 1 つの音を、録音どおりに 1 回鳴らします。ファイル名(kick・snare・hihat・clap・crash など)から鍵を自動で決めます。行にファイルをドロップするとその鍵に入ります。素材の画面で波形を選んで「ドラムキットへ」でも送れます。音のない鍵は簡易ドラムで鳴ります。この画面では鍵盤がキットを鳴らします。",
+  }),
+  kitList,
+  el("div", { className: "row" }, [el("label", { className: "inline fine" }, ["鍵を追加 ", kitAddKey])]),
+  kitStatus,
+]);
+const kitTabInfo = el("span", { className: "fine view-tab-info" });
+rollPanel.onKitChange = () => {
+  rebuildKit();
+  sendLiveKit();
+  renderKitPanel();
+};
+rollPanel.onKitHit = (key) => client.kitHit(key);
+rollPanel.onOpenKit = () => setView("kit");
+
 // ---------------------------------------------------------------- the two views: 素材 (the sound) and 曲 (the song)
 
 /**
@@ -1749,16 +1977,20 @@ window.addEventListener("beforeunload", (e) => {
  * the keyboard is in both (trying a sound, step input). Space and Ctrl+Z
  * belong to the view on screen.
  */
-type View = "material" | "song";
+type View = "material" | "kit" | "song";
 const VIEW_KEY = "easysampler.view";
-let view: View = safeStorage(VIEW_KEY) === "song" ? "song" : "material";
+const storedView = safeStorage(VIEW_KEY);
+let view: View = storedView === "song" || storedView === "kit" ? storedView : "material";
 for (const panel of [guide, materialPanel, tunePanel, exportPanel, detailsPanel]) panel.classList.add("axis-material");
 for (const panel of [rollPanel.element, fxPanel]) panel.classList.add("axis-song");
+kitPanel.classList.add("axis-kit");
 const materialTab = el("button", { type: "button", className: "view-tab", role: "tab" }, [el("span", { className: "view-tab-title", textContent: "素材(音を作る)" }), materialTabInfo()]);
+const kitTab = el("button", { type: "button", className: "view-tab", role: "tab" }, [el("span", { className: "view-tab-title", textContent: "ドラムキット" }), kitTabInfo]);
 const songTab = el("button", { type: "button", className: "view-tab", role: "tab" }, [el("span", { className: "view-tab-title", textContent: "曲(打ち込み)" }), rollPanel.summaryInfo]);
+kitTab.addEventListener("click", () => setView("kit"));
 materialTab.addEventListener("click", () => setView("material"));
 songTab.addEventListener("click", () => setView("song"));
-const viewTabs = el("nav", { className: "view-tabs", role: "tablist", ariaLabel: "表示" }, [materialTab, songTab]);
+const viewTabs = el("nav", { className: "view-tabs", role: "tablist", ariaLabel: "表示" }, [materialTab, kitTab, songTab]);
 
 /** The 素材 tab's line: the material being edited and how many there are. */
 function materialTabInfo(): HTMLElement {
@@ -1769,16 +2001,30 @@ function refreshMaterialTab(): void {
   if (info) info.textContent = material ? `${material.name}${library.size > 1 ? `(ほか ${library.size - 1})` : ""}` : "";
 }
 
+let pianoBeforeKit: { low: number; high: number; pc: number } | null = null;
+
 function setView(next: View): void {
   view = next;
   safeStorage(VIEW_KEY, next);
   workspace.dataset.view = next;
-  materialTab.classList.toggle("on", next === "material");
-  songTab.classList.toggle("on", next === "song");
-  materialTab.setAttribute("aria-selected", String(next === "material"));
-  songTab.setAttribute("aria-selected", String(next === "song"));
+  for (const [tab, name] of [[materialTab, "material"], [kitTab, "kit"], [songTab, "song"]] as const) {
+    tab.classList.toggle("on", next === name);
+    tab.setAttribute("aria-selected", String(next === name));
+  }
+  // In the kit view the keyboard plays the kit, its keys on the GM drums (and back where they were after).
+  sendLiveKit();
+  if (next === "kit") {
+    if (!pianoBeforeKit) pianoBeforeKit = { low: piano.low, high: piano.high, pc: pcKeys.state.baseNote };
+    piano.setRange(36, 36 + (piano.high - piano.low));
+    pcKeys.state.baseNote = 36;
+    renderKitPanel();
+  } else if (pianoBeforeKit) {
+    piano.setRange(pianoBeforeKit.low, pianoBeforeKit.high);
+    pcKeys.state.baseNote = pianoBeforeKit.pc;
+    pianoBeforeKit = null;
+  }
   rollPanel.setVisible(next === "song");
-  if (next === "material") rollPanel.stop();
+  if (next !== "song") rollPanel.stop();
   else {
     client.stopPreview();
     editor.draw();
@@ -1787,7 +2033,7 @@ function setView(next: View): void {
   window.scrollTo({ top: 0 });
 }
 
-const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs, guide, materialPanel, tunePanel, keysPanel, rollPanel.element, fxPanel, exportPanel, detailsPanel]);
+const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs, guide, materialPanel, tunePanel, kitPanel, keysPanel, rollPanel.element, fxPanel, exportPanel, detailsPanel]);
 setView(view);
 
 document.getElementById("app")!.append(
@@ -1938,7 +2184,6 @@ function sendInstrument(): void {
     client.setHold(exportLengthSec(exportSettings));
     client.setLive(id, null);
     refreshInstruments();
-    if (rollPanel.padInstruments().includes(id)) schedulePadRefresh();
   }
   rootLabel.textContent = pitchLabel(params.root);
   rootSource.textContent = params.rootMode === "auto" ? "(自動判定)" : "(手動)";
@@ -2282,6 +2527,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (!material) return;
   event.preventDefault();
+  if (view === "kit") return;
   if (view === "song" || rollPanel.playing) {
     rollPanel.toggle();
     return;
@@ -2571,10 +2817,6 @@ function defineMaterialCuts(): void {
   refreshInstruments();
 }
 
-/** What each drum row's one-shot was last rendered from (so it is rendered again only when that changes), and the one-shot. */
-const padSampleKeys = new Map<string, string>();
-const padSamples = new Map<string, Float32Array[]>();
-
 /** A cut by its instrument id: its material, its settings as they are now, and its material's export settings. */
 function findCut(id: string): { material: Material; cut: CutSettings; exportOf: ExportSettings } | null {
   const [materialId, cutId] = id.split("/");
@@ -2587,48 +2829,20 @@ function findCut(id: string): { material: Material; cut: CutSettings; exportOf: 
   return { material: entry.material, cut, exportOf: editing ? exportSettings : (entry.settings?.export ?? DEFAULT_EXPORT) };
 }
 
-/**
- * Drum rows (design.md 13.1): each plays a cut's one-shot, rendered here once
- * per change of the cut's settings and kept by the engine, so a drum track
- * costs a playback, not a voice of pitch shifting.
- */
-function ensurePadSamples(instruments: string[]): void {
-  for (const id of instruments) {
-    const found = findCut(id);
-    if (!found) continue;
-    const { cut, exportOf } = found;
-    const hold = exportLengthSec(exportOf);
-    const source = found.material.source;
-    const key = JSON.stringify([cut.markers, cut.params, cut.note, hold, source.sampleRate]);
-    if (padSampleKeys.get(id) === key) continue;
-    const rendered = renderNote(source, cut.markers, { ...cut.params, maxVoices: DEFAULT_PARAMS.maxVoices }, cut.note, hold, exportOf.bpm);
-    client.setSample(id, rendered.channels);
-    padSamples.set(id, rendered.channels);
-    padSampleKeys.set(id, key);
-  }
-}
-rollPanel.ensureSamples = ensurePadSamples;
-
 // ---------------------------------------------------------------- the song as a file (design.md 13, phase 3)
 
 /** The song's tracks as the offline render takes them (only one track, for a stem). */
 function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string | null): RenderTrack[] {
-  ensurePadSamples(rollPanel.padInstruments());
+  rebuildKit();
+  const kit = rollPanel.kitSpec();
   const out: RenderTrack[] = [];
   for (const t of project.tracks) {
     if (only !== null && t.id !== only) continue;
     const mix = { fx: t.fx, gain: t.gain, pan: t.pan, mute: only === null ? t.mute : false, solo: only === null ? t.solo : false };
     const notes = toSeqNotes(t.notes, project.bpm, t.kind !== "drum" && t.glide > 0);
     if (t.kind === "drum") {
-      if (!t.pads.length) continue;
-      out.push({
-        id: t.id,
-        instrument: null,
-        samples: t.pads.map((p) => (p.instrument && p.instrument !== BACKING ? (padSamples.get(p.instrument) ?? null) : null)),
-        drumKeys: t.pads.map((p, i) => (p.instrument === BACKING ? (p.key ?? DRUM_KEYS[i] ?? 36 + i) : null)),
-        notes,
-        ...mix,
-      });
+      // The kit: each key its sound (as the engine has it), or the plain drum sound.
+      out.push({ id: t.id, instrument: null, samples: kit.samples.map((_, key) => kitBuffers.get(key) ?? null), drumKeys: kit.keys, notes, ...mix });
       continue;
     }
     // A part on the plain backing synth (簡易シンセ), as it plays on the page.
@@ -2732,13 +2946,6 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
   say(`保存しました: ${built.fileName}(${built.summary})`);
 }
 rollPanel.onExport = (kind) => void exportSong(kind);
-
-/** The cut being edited changed: a drum row on it gets its one-shot again, once the changes settle. */
-let padRefreshTimer = 0;
-function schedulePadRefresh(): void {
-  clearTimeout(padRefreshTimer);
-  padRefreshTimer = window.setTimeout(() => ensurePadSamples(rollPanel.padInstruments()), 300);
-}
 
 /** The cuts of every material, for the tracks' lists. */
 function refreshInstruments(): void {
@@ -3145,4 +3352,8 @@ void (async () => {
   }
   refreshInstruments();
   refreshMaterialSelect();
+  await loadKitAudio();
+  rebuildKit();
+  sendLiveKit();
+  renderKitPanel();
 })();

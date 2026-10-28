@@ -1342,3 +1342,49 @@ details.sub.credit > summary {
 .pitch-group.unused {
   opacity: 0.4;
 }
+
+/* The drum kit view: a row per GM key. */
+.kit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+.kit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.kit-row.own {
+  border-color: var(--accent);
+}
+.kit-row.drop {
+  background: var(--outside);
+}
+.kit-key {
+  min-width: 2.6em;
+  color: var(--muted);
+}
+.kit-drum {
+  min-width: 8em;
+}
+.kit-name {
+  flex: 1;
+  min-width: 8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kit-ms {
+  width: 5em;
+}
+.workspace[data-view="song"] > .axis-kit,
+.workspace[data-view="material"] > .axis-kit,
+.workspace[data-view="kit"] > .axis-material,
+.workspace[data-view="kit"] > .axis-song {
+  display: none;
+}

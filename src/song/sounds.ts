@@ -6,6 +6,15 @@ import { Engine, type PreparedSource } from "../engine/engine";
 import { BackingSynth } from "./backing";
 import type { TrackSound } from "./player";
 
+/** Drum keys that cut each other off (open / closed / pedal hi-hat). */
+const CHOKE: ReadonlyMap<number, number> = new Map([
+  [42, 1],
+  [44, 1],
+  [46, 1],
+]);
+/** How fast a choked hit fades (samples per step of its gain, about 5 ms). */
+const CHOKE_FADE = 240;
+
 /** An Engine as a track's sound, remembering which instrument and source it was set up with. */
 export class EngineSound implements TrackSound {
   readonly engine: Engine;
@@ -42,13 +51,19 @@ export class SampleSound implements TrackSound {
   rows: (Float32Array[] | null)[] = [];
   /** Row → GM drum key, for a row on the plain drum sound (簡易ドラム). */
   keys: (number | null)[] = [];
-  private voices: { sample: Float32Array[]; at: number; gain: number }[] = [];
+  private voices: { sample: Float32Array[]; at: number; gain: number; row: number; fade: number }[] = [];
+  /** Rows are GM drum keys (a kit): an open hi-hat is cut off by a closed one and the other way round. */
+  chokes = false;
   private readonly synth: BackingSynth | null;
   private static readonly MAX_VOICES = 16;
   constructor(sampleRate?: number) {
     this.synth = sampleRate ? new BackingSynth(sampleRate) : null;
   }
   noteOn(row: number, velocity: number): void {
+    if (this.chokes) {
+      const group = CHOKE.get(row);
+      if (group !== undefined) for (const v of this.voices) if (v.row !== row && CHOKE.get(v.row) === group && v.fade === 0) v.fade = CHOKE_FADE;
+    }
     const sample = this.rows[row];
     if (!sample) {
       const key = this.keys[row];
@@ -56,7 +71,7 @@ export class SampleSound implements TrackSound {
       return;
     }
     if (this.voices.length >= SampleSound.MAX_VOICES) this.voices.shift();
-    this.voices.push({ sample, at: 0, gain: velocity });
+    this.voices.push({ sample, at: 0, gain: velocity, row, fade: 0 });
   }
   noteOff(): void {
     // a one-shot plays to its end
@@ -74,12 +89,18 @@ export class SampleSound implements TrackSound {
       const r = v.sample[1] ?? l;
       const n = Math.min(frames, l.length - v.at);
       for (let i = 0; i < n; i++) {
-        left[i] += l[v.at + i] * v.gain;
-        if (right !== left) right[i] += r[v.at + i] * v.gain;
+        let g = v.gain;
+        if (v.fade > 0) {
+          g *= v.fade / CHOKE_FADE;
+          v.fade = Math.max(1e-9, v.fade - 1);
+        }
+        left[i] += l[v.at + i] * g;
+        if (right !== left) right[i] += r[v.at + i] * g;
       }
       v.at += n;
     }
-    this.voices = this.voices.filter((v) => v.at < v.sample[0].length);
+    // (A choked hit is done once its fade has run out.)
+    this.voices = this.voices.filter((v) => v.at < v.sample[0].length && !(v.fade > 0 && v.fade < 1));
   }
   idle(): boolean {
     return this.voices.length === 0 && (this.synth?.idle() ?? true);

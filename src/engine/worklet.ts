@@ -36,6 +36,10 @@ class EngineProcessor extends AudioWorkletProcessor {
   /** Rendered one-shots (drum rows), by id. */
   private readonly samples = new Map<string, Float32Array[]>();
   private readonly samplePreview = new SampleSound();
+  /** The kit on the keyboard (the kit view), and its sample ids per key. */
+  private readonly liveKit = new SampleSound(sampleRate);
+  private liveKitOn = false;
+  private liveKitSamples: (string | null)[] = [];
   private readonly instruments = new Map<string, Instrument>();
   private readonly song = new SongPlayer(sampleRate);
   /** The sounds of the song's tracks, by track id (kept across reloads, so a track keeps its engine). */
@@ -59,6 +63,7 @@ class EngineProcessor extends AudioWorkletProcessor {
 
   constructor() {
     super();
+    this.liveKit.chokes = true;
     this.port.onmessage = (event: MessageEvent<ToEngine>) => this.handle(event.data);
   }
 
@@ -99,6 +104,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       if (sound instanceof SampleSound) {
         sound.rows = (t.samples ?? []).map((id) => (id ? (this.samples.get(id) ?? null) : null));
         sound.keys = t.drumKeys ?? [];
+        sound.chokes = true;
       }
       next.set(t.id, sound);
     }
@@ -128,13 +134,25 @@ class EngineProcessor extends AudioWorkletProcessor {
         if (message.fx) this.liveFx.set(message.fx);
         break;
       case "noteOn":
-        this.live.noteOn(message.note, message.velocity);
+        if (this.liveKitOn) this.liveKit.noteOn(message.note, message.velocity);
+        else this.live.noteOn(message.note, message.velocity);
         break;
       case "noteOff":
-        this.live.noteOff(message.note);
+        if (!this.liveKitOn) this.live.noteOff(message.note);
         break;
       case "allOff":
         this.live.allOff();
+        this.liveKit.allOff();
+        break;
+      case "liveKit":
+        this.liveKitOn = message.on;
+        this.liveKitSamples = message.samples;
+        this.liveKit.rows = message.samples.map((id) => (id ? (this.samples.get(id) ?? null) : null));
+        this.liveKit.keys = message.keys;
+        if (message.on) this.live.allOff();
+        break;
+      case "kitHit":
+        this.liveKit.noteOn(message.key, 0.8);
         break;
       case "sample":
         if (message.channels) this.samples.set(message.id, message.channels);
@@ -144,6 +162,7 @@ class EngineProcessor extends AudioWorkletProcessor {
           const sound = this.trackSounds.get(t.id);
           if (sound instanceof SampleSound) sound.rows = (t.samples ?? []).map((id) => (id ? (this.samples.get(id) ?? null) : null));
         }
+        this.liveKit.rows = this.liveKitSamples.map((id) => (id ? (this.samples.get(id) ?? null) : null));
         break;
       case "previewSample": {
         const sample = this.samples.get(message.id);
@@ -211,6 +230,11 @@ class EngineProcessor extends AudioWorkletProcessor {
     if (!this.live.idle()) {
       this.live.render(this.liveL, this.liveR, frames);
       if (this.liveFxOn) this.liveFx.process(this.liveL, this.liveR, frames);
+      for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
+      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
+    }
+    if (!this.liveKit.idle()) {
+      this.liveKit.render(this.liveL, this.liveR, frames);
       for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
       if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
     }

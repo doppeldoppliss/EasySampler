@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fromSongNotes, newDrumTrack, removePad, sanitizeProject, shifted, snap, snapDown, songEnd, toSeqNotes, type Note } from "./model";
+import { fromSongNotes, sanitizeProject, shifted, snap, snapDown, songEnd, toSeqNotes, type Note } from "./model";
 
 const note = (start: number, length: number, pitch: number): Note => ({ id: 0, start, length, pitch, velocity: 0.8 });
 
@@ -49,16 +49,18 @@ describe("daw model", () => {
     expect(songEnd([...notes, ...copy])).toBe(6.5);
   });
 
-  it("drum rows: removing one drops its notes and moves the rows below up", () => {
-    const t = newDrumTrack("ドラム 1", "m/kick");
-    t.pads.push({ instrument: "m/snare" }, { instrument: "m/hat" });
-    t.notes = [note(0, 1, 0), note(1, 1, 1), note(2, 1, 2)];
-    removePad(t, 1);
-    expect(t.pads.map((p) => p.instrument)).toEqual(["m/kick", "m/hat"]);
-    expect(t.notes.map((n) => [n.start, n.pitch])).toEqual([
-      [0, 0],
-      [2, 1],
-    ]);
+  it("an earlier version's drum track (a note on a row) comes back with its notes on GM keys", () => {
+    const p = sanitizeProject({
+      tracks: [
+        { kind: "drum", pads: [{ instrument: "backing", key: 36 }, { instrument: "m/snare" }, { instrument: null, key: 42 }], notes: [note(0, 1, 0), note(1, 1, 1), note(2, 1, 2)] },
+        { kind: "drum", notes: [note(0, 1, 38)] },
+      ],
+    });
+    // Row 1 had no key of its own: the old order's second key (snare, 38).
+    expect(p.tracks[0].notes.map((n) => n.pitch)).toEqual([36, 38, 42]);
+    // A drum track of this version is already on keys.
+    expect(p.tracks[1].notes.map((n) => n.pitch)).toEqual([38]);
+    expect(p.kit.slots).toEqual([]);
   });
 
   it("repairs a stored project", () => {

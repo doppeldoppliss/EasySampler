@@ -3,18 +3,18 @@ import { analyzeMaterial, prepareSource } from "../engine/prepare";
 import { DEFAULT_FX, DEFAULT_PARAMS } from "../instrument/types";
 import { parseMidi } from "../song/midi";
 import { demoSyllable } from "../testsignals/synthVoice";
-import { DRUM_KEYS, writeMidi } from "./midiWrite";
-import { BACKING, emptyProject, newDrumTrack, newTrack, type Note } from "./model";
+import { writeMidi } from "./midiWrite";
+import { emptyProject, newDrumTrack, newTrack, type Note } from "./model";
 import { renderSong } from "./songRender";
 
 const SR = 44100;
 const n = (start: number, length: number, pitch: number, velocity = 0.8): Note => ({ id: 0, start, length, pitch, velocity });
 
 describe("writeMidi", () => {
-  it("writes the tempo, a track per song track, and drum rows on channel 10 as GM keys; it reads back the same", () => {
+  it("writes the tempo, a track per song track, and drum notes on channel 10 on their GM keys; it reads back the same", () => {
     const p = emptyProject();
     p.bpm = 150;
-    p.tracks = [{ ...newTrack("メロ", "m/c"), notes: [n(0, 1, 60), n(1.5, 0.5, 64, 1)] }, { ...newDrumTrack("ドラム", "m/k"), notes: [n(0, 0.25, 0), n(1, 0.25, 1)] }];
+    p.tracks = [{ ...newTrack("メロ", "m/c"), notes: [n(0, 1, 60), n(1.5, 0.5, 64, 1)] }, { ...newDrumTrack("ドラム"), notes: [n(0, 0.25, 36), n(1, 0.25, 42)] }];
     const song = parseMidi(writeMidi(p));
     expect(song.bpm).toBeCloseTo(150, 3);
     expect(song.tracks.map((t) => t.name)).toEqual(["メロ", "ドラム"]);
@@ -23,21 +23,9 @@ describe("writeMidi", () => {
       [1.5, 2, 64, 127],
     ]);
     expect(song.tracks[1].notes.map((x) => [x.startBeat, x.pitch, x.channel])).toEqual([
-      [0, DRUM_KEYS[0], 9],
-      [1, DRUM_KEYS[1], 9],
+      [0, 36, 9],
+      [1, 42, 9],
     ]);
-  });
-});
-
-describe("writeMidi, rows on the plain drum sound", () => {
-  it("writes a row's own GM key (what a MIDI file's drum part brought in)", () => {
-    const p = emptyProject();
-    const d = newDrumTrack("ドラム");
-    d.pads = [{ instrument: BACKING, key: 36 }, { instrument: BACKING, key: 42 }];
-    d.notes = [n(0, 0.25, 0), n(0.5, 0.25, 1)];
-    p.tracks = [d];
-    const song = parseMidi(writeMidi(p));
-    expect(song.tracks[0].notes.map((x) => x.pitch)).toEqual([36, 42]);
   });
 });
 

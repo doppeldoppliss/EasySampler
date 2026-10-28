@@ -42,6 +42,10 @@ export type ToEngine =
   // A short note on an instrument (placing a note on a track's roll), apart from the keyboard.
   | { type: "preview"; instrument: string; note: number; sec: number }
   // A song: its tracks (replacing any), then play from `fromSec` at context frame `atFrame`.
+  // The kit (design.md 13.2) on the keyboard: on, the keys play the kit's sounds (by sample id, per GM key) instead of the instrument.
+  | { type: "liveKit"; on: boolean; samples: (string | null)[]; keys: (number | null)[] }
+  // One hit of the kit (a drum row's name tapped), whatever the keyboard plays.
+  | { type: "kitHit"; key: number }
   | { type: "song"; tracks: TrackSpec[] }
   | { type: "songMix"; id: string; mix: MixSettings }
   | { type: "master"; fx: FxSettings | null }

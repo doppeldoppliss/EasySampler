@@ -169,6 +169,19 @@ export class EngineClient {
     this.post({ type: "sample", id, channels });
   }
 
+  /** The kit on the keyboard (on in the kit view): each key plays its sound, by sample id, or the plain drum sound of a GM key. */
+  setLiveKit(on: boolean, samples: (string | null)[], keys: (number | null)[]): void {
+    this.pending = this.pending.filter((m) => m.type !== "liveKit");
+    this.post({ type: "liveKit", on, samples, keys });
+  }
+
+  /** One hit of the kit (a drum row tapped), apart from the keyboard. */
+  kitHit(key: number): void {
+    this.claimPlayback();
+    this.unlock();
+    this.post({ type: "kitHit", key });
+  }
+
   /** Plays a kept one-shot once (a drum row being placed). */
   previewSample(id: string): void {
     this.claimPlayback();

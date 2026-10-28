@@ -300,7 +300,7 @@ function safeStorage(key: string, value?: string | null): string | null {
 
 const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json,.mid,.midi,.easysampler", multiple: true, className: "visually-hidden", id: "file" });
 const openButton = el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" });
-const pianoButton = button("ピアノ", "", () => void addPiano());
+const pianoButton = button("＋ 内蔵ピアノ", "", () => void addPiano());
 const status = el("p", { className: "status", role: "status" });
 
 // The listening volume (this browser only; the files are written as they are), kept for the next visit.
@@ -325,7 +325,7 @@ const volumeControl = el("label", { className: "inline volume", title: "ブラ�
 
 // (Shown only once every material has been taken out: a new project starts on the built-in piano.)
 const emptyState = el("section", { className: "empty", hidden: true }, [
-  el("p", { className: "empty-title", textContent: "素材を入れたら、DAW に渡せる音源になる。" }),
+  el("p", { className: "empty-title", textContent: "声や効果音から楽器を作り、曲まで仕上げる。" }),
   el("p", { textContent: "声や効果音のファイルを開くと、音程を判定して平らにし、母音を伸ばした単音の WAV を書き出せます。REAPER・GarageBand・Vital などのサンプラーにそのまま読み込めます。音域ぶんを揃えたマルチサンプル音源(SFZ / Decent Sampler)も作れます。" }),
   el("div", { className: "row" }, [el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" }), button("ピアノで始める", "", () => void loadPiano())]),
   el("p", { className: "fine", textContent: "生成AIは使っていません。素材は端末の中だけで処理され、外部には送られません。BGM の入った素材は、先に除去してから開いてください。" }),
@@ -337,7 +337,7 @@ const guide = el("aside", { className: "steps", hidden: safeStorage(GUIDE_KEY) =
   el("ol", {}, [
     el("li", {}, [el("strong", { textContent: "聴いて確かめる" }), " — ▶ で鳴らし、判定した高さと帯(頭部・持続区間)がずれていれば直します"]),
     el("li", {}, [el("strong", { textContent: "音名と長さを決める" }), " — 鍵盤は DAW で弾いたときの音の確認。●が書き出す音名です"]),
-    el("li", {}, [el("strong", { textContent: "共有 / 保存" }), " — 1 音の WAV ができます。DAW のサンプラーに読み込んで曲にします"]),
+    el("li", {}, [el("strong", { textContent: "曲にする" }), " — 「曲(打ち込み)」でこの音を鳴らして打ち込むか、1 音の WAV を保存して DAW のサンプラーで使います"]),
   ]),
   button("閉じる", "small", () => {
     guide.hidden = true;
@@ -604,7 +604,7 @@ const materialPanel = el("section", { className: "panel" }, [
   ]),
   el("p", { className: "fine band-legend" }, [
     el("span", { className: "band-dot head" }), "頭部 = 1 回だけ鳴る出だし　",
-    el("span", { className: "band-dot sustain" }), "持続区間 = 押している間くり返す部分",
+    el("span", { className: "band-dot sustain" }), "持続区間 = 押している間伸ばす部分",
   ]),
   fixBar,
 ]);
@@ -711,7 +711,7 @@ const vibratoPanel = el("details", { className: "sub" }, [
   range("速さ", 3, 9, 0.1, () => params.wobble.vibratoHz, (p, v) => (p.wobble.vibratoHz = v), (v) => `${v.toFixed(1)} Hz`),
   range("かかり始め(音の頭から)", 0, 1, 0.01, () => params.wobble.vibratoDelaySec, (p, v) => (p.wobble.vibratoDelaySec = v), ms),
   range("立ち上がり(深さが出切るまで)", 0, 2, 0.01, () => params.wobble.vibratoAttackSec, (p, v) => (p.wobble.vibratoAttackSec = v), ms),
-  range("離したあとの消え方(0 で続く)", 0, 2, 0.01, () => params.wobble.vibratoReleaseSec, (p, v) => (p.wobble.vibratoReleaseSec = v), (v) => (v === 0 ? "続く" : ms(v))),
+  range("ビブラートの消え方(離したあと、0 で続く)", 0, 2, 0.01, () => params.wobble.vibratoReleaseSec, (p, v) => (p.wobble.vibratoReleaseSec = v), (v) => (v === 0 ? "続く" : ms(v))),
   range("位相(始まる位置)", 0, 1, 0.05, () => params.wobble.vibratoPhase, (p, v) => (p.wobble.vibratoPhase = v), (v) => `${Math.round(v * 360)}°`),
   range("音量の揺れ(トレモロ)", 0, 1, 0.01, () => params.wobble.tremoloDepth, (p, v) => (p.wobble.tremoloDepth = v), pct),
   range("素材自身の揺れをならす(平滑化)", 0, 0.3, 0.005, () => params.wobble.smoothSec, (p, v) => (p.wobble.smoothSec = v), (v) => (v === 0 ? "なし" : ms(v))),
@@ -759,14 +759,14 @@ function refreshSustainHelp(): void {
     stretch: "持続区間全体を「長さ」に収まるようゆっくり鳴らします(VocalShifter の TIME のように、声の変化が残る)。長さを超えて押すと持続区間の終わりから「自然」で続きます。",
     loop: "持続区間をそのまま繰り返します。",
     wavetable: "持続区間の 1〜数周期だけを繰り返します(無機質)。",
-    none: "伸ばしません。持続区間を録音のまま 1 回鳴らします(長さの倍率は効きます)。",
+    none: "伸ばしません。持続区間から録音の終わりまで、そのまま 1 回鳴らします(長さの倍率は効きます)。",
   };
   sustainHelp.textContent = params.sustainEnabled ? (texts[params.sustainMode] ?? "") : "持続区間がオフなので、伸ばし方は使われません。";
 }
 
 // Played by resampling (無加工, ドラム・効果音…), a cut's pitch only follows the key, sped up or slowed down:
 // the pitch shaping and the voiceless-sound handling are not used, and are shown so (dimmed, out of reach).
-const pitchModeNote = el("p", { className: "fine help pitch-mode-note", hidden: true, textContent: "このプリセットは録音を早回し・遅回しして高さを変えるので、音程の調整(平坦化・整え方・リチューン)と子音・息の扱いは使われません。使うときは、ほかのプリセットを選ぶか「伸ばし方」を変えてください。" });
+const pitchModeNote = el("p", { className: "fine help pitch-mode-note", hidden: true, textContent: "「ピッチの変え方」が速度連動(録音を早回し・遅回しして高さを変える)なので、音程の調整(平坦化・整え方・リチューン)と子音・息の扱いは使われません。使うときは、細かい設定の「ピッチの変え方」を「長さ保持」にしてください。" });
 const pitchGroups: HTMLElement[] = [];
 function pitchGroup(children: HTMLElement[]): HTMLElement {
   const group = el("div", { className: "pitch-group" }, children);
@@ -795,7 +795,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
   fixedPitchCheck,
   fixedPitchNote,
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
-  el("p", { className: "fine help", textContent: "プリセットは出発点です。つまみを動かすと「(カスタム)」になります。伸ばし方・フェードは変えません。" }),
+  el("p", { className: "fine help", textContent: "プリセットは出発点です。選ぶと音の設定がそのプリセットの形に戻ります(音名・入りと終わりのフェード・ベロシティ感度・フォルマント・「録音した高さで鳴らす」はそのまま)。つまみを動かすと「(カスタム)」になります。" }),
   partsRow,
   partsHelp,
   select(
@@ -821,7 +821,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
     tuneScaleRow,
     range("音程を寄せる速さ(リチューン)", 0, 0.3, 0.005, () => params.tune.retuneSec, (p, v) => (p.tune.retuneSec = v), (v) => (v === 0 ? "即座(ケロケロ向き)" : ms(v))),
     el("p", { className: "fine help", textContent: "判定した高さから音名へ寄せるときの速さ(Auto-Tune の Retune Speed)。即座だと貼り付いたように、30 ms 前後だと自然に、長いとゆっくりした狂いだけが直ります。" }),
-    el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなしでケロケロになります(プリセット「ケロケロ」)。" }),
+    el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなし・リチューン即座でケロケロになります。" }),
   ]),
   range("持続部の音量を揃える", 0, 1, 0.05, () => params.levelEven, (p, v) => (p.levelEven = v), pct, true),
   el("p", { className: "fine help", textContent: "素材の持続区間が減衰していても、伸ばした音の音量が一定になります。0% で録音どおりの強弱(頭部は常にそのまま)。" }),
@@ -866,11 +866,14 @@ function showPinned(): void {
   keysPanel.classList.toggle("pinned", keysPinned);
   document.body.classList.toggle("keys-pinned", keysPinned);
 }
+/** The keyboard's title and note: what the keys play in the view on screen. */
+const keysTitle = el("span", { className: "control-label", textContent: "試し弾き" });
+const keysNote = el("p", { className: "fine", textContent: "●の付いた鍵が、選んだ音名(書き出す高さ)です。" });
 const keysPanel = el("section", { className: "panel keys-panel" }, [
-  el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "試し弾き" }), octaveDown, octaveUp, pinToggle, pcToggle, pcState, el("span", { className: "fine" }, ["同時発音 ", voiceCount])]),
+  el("div", { className: "row" }, [keysTitle, octaveDown, octaveUp, pinToggle, pcToggle, pcState, el("span", { className: "fine" }, ["同時発音 ", voiceCount])]),
   imeWarning,
   piano.element,
-  el("p", { className: "fine", textContent: "●の付いた鍵が、選んだ音名(書き出す高さ)です。" }),
+  keysNote,
 ]);
 // The room left at the end of the page follows the panel's real height (its control row wraps on a phone).
 new ResizeObserver(() => document.body.style.setProperty("--keys-height", `${keysPanel.offsetHeight}px`)).observe(keysPanel);
@@ -995,7 +998,7 @@ const fxResetButton = button("エフェクトをすべてオフに", "small", ()
 const fxPanel = el("details", { className: "panel fx-panel" }, [
   el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxTrackLabel, fxActiveLine]),
   el("div", { className: "row" }, [el("span", { className: "fine", textContent: "かける先:" }), fxTrackButton, fxMasterButton, fxResetButton]),
-  el("p", { className: "fine", textContent: "打ち込みで選んでいるトラック、またはマスター(曲全体)にかかります(上から順に)。試し弾きと、書き出す単音の WAV には入りません。" }),
+  el("p", { className: "fine", textContent: "打ち込みで選んでいるトラック、またはマスター(曲全体)にかかります(上から順に)。曲の再生・書き出しと、曲の画面の鍵盤にかかります。素材・ドラムキットの画面の鍵盤と、書き出す単音の WAV には入りません。" }),
   fxHead("立ち上がり"),
   fxGroup("transient", "トランジェント(立ち上がり)", "音の頭(アタック)と、そのあとの伸び(サステイン)を別々に上げ下げします。", [
     fxRange("アタック", -12, 12, 0.5, () => fxNow().transient.attackDb, (f, v) => (f.transient.attackDb = v), db, true),
@@ -1438,9 +1441,9 @@ let queueIndex = -1;
 
 const queueList = el("ol", { className: "queue-list" });
 const queueOneShot = el("input", { type: "checkbox", checked: true });
-const queueFirstKey = el("select", { ariaLabel: "キットの最初の鍵" }, [24, 36, 48, 60].map((n) => el("option", { value: String(n), textContent: pitchLabel(n), selected: n === 36 })));
+const queueFirstKey = el("select", { ariaLabel: "最初の鍵" }, [24, 36, 48, 60].map((n) => el("option", { value: String(n), textContent: pitchLabel(n), selected: n === 36 })));
 const queueWavsButton = button("すべて単音 WAV で保存(zip)", "", () => void deliverQueue("wavs"));
-const queueKitButton = button("キット音源にする(zip: SFZ + Decent Sampler)", "primary", () => void deliverQueue("kit"));
+const queueKitButton = button("鍵に並べたワンショット音源にする(zip: SFZ + Decent Sampler)", "primary", () => void deliverQueue("kit"));
 const queueStatus = el("p", { className: "fine", role: "status" });
 const queuePanel = el("section", { className: "panel queue-panel", hidden: true }, [
   el("div", { className: "row" }, [el("strong", { textContent: "素材リスト" }), el("span", { className: "fine", textContent: "1 つずつ開いて調整できます(設定は素材ごとに残ります)。調整していないものは、そのまま一括で書き出せます。" })]),
@@ -1448,7 +1451,7 @@ const queuePanel = el("section", { className: "panel queue-panel", hidden: true 
   el("div", { className: "row" }, [
     el("label", { className: "control check" }, [queueOneShot, el("span", { textContent: "調整していない素材はワンショット(録音のまま、伸ばさない)として扱う" })]),
   ]),
-  el("div", { className: "row" }, [queueWavsButton, queueKitButton, el("label", { className: "row tight" }, [el("span", { className: "fine", textContent: "キットの最初の鍵" }), queueFirstKey])]),
+  el("div", { className: "row" }, [queueWavsButton, queueKitButton, el("label", { className: "row tight" }, [el("span", { className: "fine", textContent: "最初の鍵" }), queueFirstKey])]),
   queueStatus,
 ]);
 
@@ -1833,6 +1836,8 @@ function rebuildKit(force = false): void {
  * through the track's effects and the master, as it sounds in the song.
  */
 function routeKeyboard(): void {
+  keysTitle.textContent = view === "song" ? `鍵盤(「${rollPanel.trackName}」をエフェクト込みで)` : view === "kit" ? "鍵盤(ドラムキット)" : "試し弾き";
+  keysNote.hidden = view !== "material";
   const editing = material && cuts[current] ? instrumentId(material.id, cuts[current].id) : null;
   const spec = rollPanel.kitSpec();
   if (view === "song") {
@@ -3247,7 +3252,7 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
     const root = analysis.root;
     let text =
       `「${name}」 ${seconds} 秒 — 解析 ${Math.round(elapsedMs)} ms。` +
-      (root ? ` 音程 ${pitchLabel(root.midi)}(信頼度 ${Math.round(root.confidence * 100)}%)。` : " 音程が見つからなかったので、ワンショット(ドラム・効果音)として扱います。");
+      (root ? ` 音程 ${pitchLabel(root.midi)}(信頼度 ${Math.round(root.confidence * 100)}%)。` : " 音程が見つからなかったので、1 回鳴らしきる音として扱います。ドラムに使うなら、波形で範囲を選んで「ドラムキットへ」送ってください。");
     // Its settings: as kept in the project, or (a file opened again) as last saved for that file.
     const stored = kept ? (kept.settings ? serializeSettings(kept.settings) : null) : safeStorage(settingsKey(name, channels[0].length, sampleRate));
     let restored = false;

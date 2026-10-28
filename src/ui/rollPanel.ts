@@ -197,8 +197,8 @@ export class RollPanel {
     this.roll.selectMode = !this.roll.selectMode;
     this.refreshButtons();
   });
-  private readonly undoButton = button("取り消し", "small", () => this.roll.undo());
-  private readonly redoButton = button("やり直し", "small", () => this.roll.redo());
+  private readonly undoButton = button("元に戻す", "small", () => this.roll.undo(), "Ctrl+Z");
+  private readonly redoButton = button("やり直す", "small", () => this.roll.redo(), "Ctrl+Y");
   private readonly deleteButton = button("削除", "small", () => this.roll.deleteSelected());
   private readonly duplicateButton = button("複製", "small", () => this.roll.duplicateSelected(), "選んだ音符の直後にコピーを置きます(Ctrl+D)");
   private readonly transposeButtons = [
@@ -213,7 +213,7 @@ export class RollPanel {
     if (!this.roll.notes.length) return;
     this.roll.setNotes([], true);
     this.changed(this.roll.notes);
-    this.info.textContent = "すべて消しました。取り消しで戻せます。";
+    this.info.textContent = "すべて消しました。「元に戻す」で戻せます。";
   });
   private readonly quantizeButton = button("クオンタイズ", "small", () => this.quantize(), "選んだ音符(選んでいなければ全部)の始まりと終わりを吸着の線に合わせます");
   private readonly velocityToggle = button("強弱", "small toggle", () => {
@@ -358,7 +358,7 @@ export class RollPanel {
         className: "fine help",
         textContent: COARSE
           ? "空いたところをタップで音符、音符をドラッグで移動、右端をドラッグで長さ、長押しでメニュー(コピー・貼り付け・一括変更など)。上の目盛りはタップで位置、2 回タップで再生、ドラッグでループ範囲。空いたところを指でドラッグするか、右端・下端のバーでスクロール。"
-          : "クリックで音符、ドラッグで範囲選択(Shift で追加)、音符のドラッグで移動(Ctrl を押してから始めると複製、ドラッグ中の Ctrl か Alt で吸着なし、ドラッグ中の右クリックで取り消し)、右端で長さ、ダブルクリックで削除、右クリックでメニュー(音符の上ならその長さと強さを拾うスポイト)。上の目盛りはクリックで位置、ダブルクリックで再生、ドラッグでループ範囲。スクロールは右端・下端のバー、ホイール(Shift で左右)、ホイールを押し込んでドラッグ。Space で再生 / 停止、Ctrl+PageUp / PageDown でトラック切り替え。",
+          : "クリックで音符、ドラッグで範囲選択(Shift で追加)、音符のドラッグで移動(Ctrl を押してから始めると複製、ドラッグ中の Ctrl か Alt で吸着なし、ドラッグ中の右クリックでやめる)、右端で長さ、ダブルクリックで削除、右クリックでメニュー(音符の上ならその長さと強さを拾うスポイト)。上の目盛りはクリックで位置、ダブルクリックで再生、ドラッグでループ範囲。スクロールは右端・下端のバー、ホイール(Shift で左右)、ホイールを押し込んでドラッグ。Space で再生 / 停止、Ctrl+PageUp / PageDown でトラック切り替え。",
       }),
       el("div", { className: "row" }, [this.clearButton]),
       this.info,
@@ -869,7 +869,7 @@ export class RollPanel {
         if (vel !== null) note.velocity = Math.max(1, Math.min(127, Math.round(vel))) / 127;
       });
       this.closeMenu();
-      this.info.textContent = `${n} 個の音符を一括変更しました。取り消しで戻せます。`;
+      this.info.textContent = `${n} 個の音符を一括変更しました。「元に戻す」で戻せます。`;
     };
     const form = el("form", { className: "batch-form" }, [
       el("p", { className: "control-label", textContent: `一括変更(${this.roll.selectionSize ? `選んだ ${this.roll.selectionSize} 個` : "すべての音符"})` }),
@@ -935,7 +935,7 @@ export class RollPanel {
     }
     const all = this.roll.selectionSize === 0;
     const changed = this.roll.quantize();
-    this.info.textContent = changed ? `${all ? "すべての" : "選んだ"}音符のうち ${changed} 個を吸着の線に合わせました。取り消しで戻せます。` : "どの音符もすでに吸着の線の上にあります。";
+    this.info.textContent = changed ? `${all ? "すべての" : "選んだ"}音符のうち ${changed} 個を吸着の線に合わせました。「元に戻す」で戻せます。` : "どの音符もすでに吸着の線の上にあります。";
   }
 
   /** The step position (beats), without the rounding a trip through seconds leaves. */

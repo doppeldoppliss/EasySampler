@@ -925,12 +925,6 @@ details.roll-panel[open] > summary::before {
   margin-left: 4px;
 }
 
-.part-fixed {
-  background: transparent;
-  color: var(--text);
-  border-style: dashed;
-}
-
 @media (pointer: coarse) {
   .zoom-fine {
     display: none;

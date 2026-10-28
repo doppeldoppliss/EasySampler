@@ -103,6 +103,8 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
   master.setTempo(input.bpm);
   const masterOn = input.masterFx !== null && master.active;
   const anyFx = masterOn || tracks.some((t) => t.fx !== null);
+  // How long the effects may ring on after the sounds stop (a delay's repeats, a reverb's tail).
+  const fxTail = Math.max(FX_TAIL_SEC, FxChain.tailSec(input.masterFx, input.bpm), ...input.tracks.map((t) => FxChain.tailSec(t.fx, input.bpm)));
 
   let lastEnd = 0;
   for (const t of tracks) for (const n of t.notes) lastEnd = Math.max(lastEnd, n.end);
@@ -133,7 +135,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
     // Past the last note, once every sound is silent the effects get their tail, then it ends.
     if (!win && at >= endFrame) {
       if (quietSince < 0 && sounds.every((s) => s.idle())) quietSince = at;
-      if (quietSince >= 0 && at - quietSince >= (anyFx ? FX_TAIL_SEC : 0.05) * sr) break;
+      if (quietSince >= 0 && at - quietSince >= (anyFx ? fxTail : 0.05) * sr) break;
     }
     if (progress && block % REPORT_EVERY === REPORT_EVERY - 1) await progress(Math.min(1, at / Math.max(1, endFrame)));
   }

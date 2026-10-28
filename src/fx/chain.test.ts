@@ -137,4 +137,54 @@ describe("FxChain", () => {
     const [y] = run(fx((f) => ((f.air.on = true), (f.air.amount = 1))), x);
     expect(rms(y, 2000)).toBeGreaterThan(rms(x, 2000) * 1.5);
   });
+
+  it("the compressor brings a loud part down toward the threshold, and make-up lifts it", () => {
+    const x = sine(500, 0.5, 0.9);
+    const settings = (makeupDb: number) => fx((f) => Object.assign(f.compressor, { on: true, thresholdDb: -20, ratio: 10, attackMs: 1, releaseMs: 50, makeupDb }));
+    const tail = (a: Float32Array) => rms(a, Math.round(0.3 * SR));
+    const [y] = run(settings(0), x);
+    expect(tail(y)).toBeLessThan(tail(x) * 0.25);
+    const [z] = run(settings(12), x);
+    expect(tail(z) / tail(y)).toBeCloseTo(10 ** (12 / 20), 1);
+    // A quiet sound under the threshold passes untouched.
+    const q = sine(500, 0.2, 0.01);
+    const [w] = run(settings(0), q);
+    expect(rms(w, 2000)).toBeCloseTo(rms(q, 2000), 4);
+  });
+
+  it("the delay repeats a click one step later, quieter each time, ping-ponging", () => {
+    const x = new Float32Array(SR * 2);
+    x[0] = 1;
+    const settings = fx((f) => Object.assign(f.delay, { on: true, beats: 0.5, feedback: 0.5, highCutHz: 20000, pingPong: true, mix: 1 }));
+    const [l, r] = run(settings, x, x, 120);
+    const step = Math.round(0.25 * SR); // an eighth note at 120 BPM
+    const peakNear = (a: Float32Array, at: number) => {
+      let m = 0;
+      for (let i = at - 3; i <= at + 3; i++) m = Math.max(m, Math.abs(a[i]));
+      return m;
+    };
+    expect(peakNear(l, step)).toBeGreaterThan(0.5);
+    expect(peakNear(r, step)).toBeLessThan(0.05);
+    expect(peakNear(r, step * 2)).toBeGreaterThan(0.2);
+    expect(peakNear(r, step * 2)).toBeLessThan(peakNear(l, step));
+    expect(FxChain.tailSec(settings, 120)).toBeGreaterThan(2);
+  });
+
+  it("the reverb leaves a stereo tail that dies away, and stays bounded", () => {
+    const x = new Float32Array(SR * 3);
+    for (let i = 0; i < 2400; i++) x[i] = Math.sin(i * 0.1) * 0.8;
+    const settings = fx((f) => Object.assign(f.reverb, { on: true, size: 0.8, damping: 0.3, preDelayMs: 10, mix: 0.5 }));
+    const [l, r] = run(settings, x);
+    const early = rms(l, Math.round(0.1 * SR), Math.round(0.3 * SR));
+    const late = rms(l, Math.round(2.5 * SR), Math.round(3 * SR));
+    expect(early).toBeGreaterThan(0.005);
+    expect(late).toBeLessThan(early * 0.3);
+    let diff = 0;
+    for (let i = SR / 10; i < SR / 5; i++) diff += Math.abs(l[i] - r[i]);
+    expect(diff).toBeGreaterThan(1);
+    let peak = 0;
+    for (const a of [l, r]) for (const v of a) peak = Math.max(peak, Math.abs(v));
+    expect(peak).toBeLessThan(2);
+    expect(FxChain.makesStereo(settings)).toBe(true);
+  });
 });

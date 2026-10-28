@@ -1005,6 +1005,13 @@ const fxPanel = el("details", { className: "panel fx-panel" }, [
     fxRange("アタック", -12, 12, 0.5, () => fxNow().transient.attackDb, (f, v) => (f.transient.attackDb = v), db, true),
     fxRange("サステイン", -12, 12, 0.5, () => fxNow().transient.sustainDb, (f, v) => (f.transient.sustainDb = v), db, true),
   ]),
+  fxGroup("compressor", "コンプレッサー", "大きいところを抑えて音量をそろえ、そのぶん全体を持ち上げます。声ネタを曲になじませる基本の道具です。", [
+    fxRange("スレッショルド", -60, 0, 1, () => fxNow().compressor.thresholdDb, (f, v) => (f.compressor.thresholdDb = v), db, true),
+    fxRange("レシオ", 1, 20, 0.5, () => fxNow().compressor.ratio, (f, v) => (f.compressor.ratio = v), (v) => `${v.toFixed(1)} : 1`, true),
+    fxRange("アタック", 0.1, 100, 0.1, () => fxNow().compressor.attackMs, (f, v) => (f.compressor.attackMs = v), (v) => `${v.toFixed(1)} ms`, true),
+    fxRange("リリース", 10, 1000, 5, () => fxNow().compressor.releaseMs, (f, v) => (f.compressor.releaseMs = v), (v) => `${Math.round(v)} ms`, true),
+    fxRange("メイクアップ", 0, 24, 0.5, () => fxNow().compressor.makeupDb, (f, v) => (f.compressor.makeupDb = v), db, true),
+  ]),
   fxHead("音色"),
   fxGroup("eq", "EQ", "低域カット・低域・中域(ベル)・高域・高域カット。", [
     fxFreq("低域カット", 20, 2000, () => fxNow().eq.lowCutHz, (f, v) => (f.eq.lowCutHz = v <= 20 ? 0 : v), { at: 20, text: "オフ" }),
@@ -1042,6 +1049,20 @@ const fxPanel = el("details", { className: "panel fx-panel" }, [
     fxRange("速さ", 0.1, 5, 0.05, () => fxNow().chorus.rateHz, (f, v) => (f.chorus.rateHz = v), (v) => `${v.toFixed(2)} Hz`, true),
     fxRange("深さ", 0, 12, 0.1, () => fxNow().chorus.depthMs, (f, v) => (f.chorus.depthMs = v), (v) => `${v.toFixed(1)} ms`, true),
     fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().chorus.mix, (f, v) => (f.chorus.mix = v), pct, true),
+  ]),
+  fxHead("やまびこと響き"),
+  fxGroup("delay", "ディレイ(やまびこ)", "拍に合わせて音を繰り返します。ピンポンにすると左右に跳ね返ります。", [
+    fxSelect("間隔", [["0.25", "1/16 音符"], ["0.5", "1/8 音符"], ["0.75", "付点 1/8 音符"], ["1", "1 拍"], ["1.5", "付点 1/4 音符"], ["2", "2 拍"]], () => String(fxNow().delay.beats) as "0.5", (f, v) => (f.delay.beats = Number(v) as FxSettings["delay"]["beats"]), true),
+    fxRange("繰り返し(フィードバック)", 0, 0.9, 0.01, () => fxNow().delay.feedback, (f, v) => (f.delay.feedback = v), pct, true),
+    fxFreq("繰り返しの高域カット", 500, 20000, () => fxNow().delay.highCutHz, (f, v) => (f.delay.highCutHz = v)),
+    fxCheck("ピンポン(左右に跳ね返る)", () => fxNow().delay.pingPong, (f, v) => (f.delay.pingPong = v)),
+    fxRange("混ぜる量", 0, 1, 0.01, () => fxNow().delay.mix, (f, v) => (f.delay.mix = v), pct, true),
+  ]),
+  fxGroup("reverb", "リバーブ(響き)", "部屋やホールの響きを足して、音を奥に置いたり曲になじませたりします。モノラルの素材もステレオになります。", [
+    fxRange("広さ", 0, 1, 0.01, () => fxNow().reverb.size, (f, v) => (f.reverb.size = v), pct, true),
+    fxRange("こもり(高域の減衰)", 0, 1, 0.01, () => fxNow().reverb.damping, (f, v) => (f.reverb.damping = v), pct, true),
+    fxRange("プリディレイ", 0, 200, 1, () => fxNow().reverb.preDelayMs, (f, v) => (f.reverb.preDelayMs = v), (v) => `${Math.round(v)} ms`, true),
+    fxRange("混ぜる量", 0, 1, 0.01, () => fxNow().reverb.mix, (f, v) => (f.reverb.mix = v), pct, true),
   ]),
   fxGroup("width", "ステレオ幅(ミッド/サイド)", "左右の広がり(サイド)と中央(ミッド)を別々に調整します。モノラルの素材は広がらないので、コーラスと組み合わせます。", [
     fxRange("広がり(サイド)", 0, 3, 0.01, () => fxNow().width.side, (f, v) => (f.width.side = v), (v) => (v === 0 ? "モノラル" : pct(v)), true),

@@ -130,10 +130,15 @@ export interface InstrumentParams {
 /** LFO speeds, in beats per cycle (counted in the export BPM, or the song's while 曲で試す plays). */
 export type FxBeats = 0.25 | 0.5 | 1 | 2 | 4 | 8;
 
-/** The effects, always in this order: shape → tone → colour → movement → space → level. */
+/** Delay times, in beats (½ = an eighth note, 0.75 = a dotted eighth). */
+export type DelayBeats = 0.25 | 0.5 | 0.75 | 1 | 1.5 | 2;
+
+/** The effects, always in this order: shape → dynamics → tone → colour → movement → echoes and room → space → level. */
 export interface FxSettings {
   /** Transient shaper: dB on the attack and on what follows it. */
   transient: { on: boolean; attackDb: number; sustainDb: number };
+  /** Compressor: above the threshold the level rises by 1/ratio; attack / release (ms); make-up gain. */
+  compressor: { on: boolean; thresholdDb: number; ratio: number; attackMs: number; releaseMs: number; makeupDb: number };
   /** EQ: low cut, low shelf, one bell, high shelf, high cut (a cut at 0 / ≥ 20 kHz is off). */
   eq: { on: boolean; lowCutHz: number; lowDb: number; lowHz: number; midDb: number; midHz: number; midQ: number; highDb: number; highHz: number; highCutHz: number };
   /** Saturation (tube-like, asymmetric): drive 0–1, dry/wet. */
@@ -150,12 +155,17 @@ export interface FxSettings {
   width: { on: boolean; side: number; midDb: number };
   /** Auto-pan: depth 0–1. */
   pan: { on: boolean; depth: number; beats: FxBeats };
+  /** Delay: time in beats, feedback 0–0.9, the repeats darkened above highCutHz, ping-pong between the sides, dry/wet. */
+  delay: { on: boolean; beats: DelayBeats; feedback: number; highCutHz: number; pingPong: boolean; mix: number };
+  /** Reverb (a room): size 0–1, damping 0–1 (darker tail), pre-delay (ms), dry/wet. */
+  reverb: { on: boolean; size: number; damping: number; preDelayMs: number; mix: number };
   /** Limiter: input gain, ceiling (dBFS), release. */
   limiter: { on: boolean; gainDb: number; ceilingDb: number; releaseMs: number };
 }
 
 export const DEFAULT_FX: FxSettings = {
   transient: { on: false, attackDb: 0, sustainDb: 0 },
+  compressor: { on: false, thresholdDb: -18, ratio: 4, attackMs: 10, releaseMs: 120, makeupDb: 4 },
   eq: { on: false, lowCutHz: 0, lowDb: 0, lowHz: 150, midDb: 0, midHz: 1500, midQ: 1, highDb: 0, highHz: 6000, highCutHz: 20000 },
   saturation: { on: false, drive: 0.3, mix: 1 },
   air: { on: false, amount: 0.3 },
@@ -164,6 +174,8 @@ export const DEFAULT_FX: FxSettings = {
   chorus: { on: false, rateHz: 0.8, depthMs: 4, mix: 0.4 },
   width: { on: false, side: 1.4, midDb: 0 },
   pan: { on: false, depth: 0.6, beats: 1 },
+  delay: { on: false, beats: 0.5, feedback: 0.35, highCutHz: 6000, pingPong: true, mix: 0.25 },
+  reverb: { on: false, size: 0.6, damping: 0.5, preDelayMs: 20, mix: 0.25 },
   limiter: { on: false, gainDb: 3, ceilingDb: -1, releaseMs: 80 },
 };
 

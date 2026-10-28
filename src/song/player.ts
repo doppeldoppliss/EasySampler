@@ -239,11 +239,12 @@ export class SongPlayer {
     }
     // The rest of the block, the effects, and the mix.
     const anySolo = this.lanes.some((l) => l.mix.solo);
-    const idleLimit = IDLE_SKIP_SEC * this.sampleRate;
     for (const lane of this.lanes) {
       const quiet = lane.sound.idle();
       lane.idleFrames = quiet && !fired ? lane.idleFrames + frames : 0;
-      if (lane.idleFrames > idleLimit && lane.done === 0) continue; // silent, effects died away: nothing to do
+      // Silent, its effects died away (a delay or a reverb may ring on longer): nothing to do.
+      const idleLimit = Math.max(IDLE_SKIP_SEC, FxChain.tailSec(lane.fxOn ? lane.mix.fx : null, this.bpm) + 0.5) * this.sampleRate;
+      if (lane.idleFrames > idleLimit && lane.done === 0) continue;
       SongPlayer.fill(lane, frames);
       if (lane.fxOn) lane.fx.process(lane.l, lane.r, frames);
       const { gain, pan, mute, solo } = lane.mix;

@@ -1,6 +1,7 @@
 // The effect rack (エフェクト): the kinds of plug-ins 音MAD makers reach
-// for — transient shaper, EQ, saturation, air, LFO filter, bit crusher,
-// chorus, mid/side width, auto-pan, limiter — written for this app. One
+// for — transient shaper, compressor, EQ, saturation, air, LFO filter, bit
+// crusher, chorus, delay, reverb, mid/side width, auto-pan, limiter —
+// written for this app. One
 // chain, fixed order, stereo in place; the same code runs in the AudioWorklet
 // (after the voices) and in the file render, so what is heard is what is
 // written. Every effect that is off costs nothing.
@@ -162,6 +163,20 @@ export class FxChain {
   // auto-pan
   private panPhase = 0;
 
+  // compressor (the gain reduction in dB, smoothed)
+  private compGr = 0;
+
+  // delay (allocated when first turned on)
+  private delayBuf: [Float32Array, Float32Array] | null = null;
+  private delayWrite = 0;
+  private delayLp = [0, 0];
+
+  // reverb (Freeverb: 8 parallel combs and 4 allpasses per side; allocated when first turned on)
+  private revCombs: { buf: Float32Array; at: number; store: number }[][] | null = null;
+  private revAll: { buf: Float32Array; at: number }[][] | null = null;
+  private revPre: [Float32Array, Float32Array] | null = null;
+  private revPreAt = 0;
+
   // limiter
   private readonly limDelay: [Float32Array, Float32Array];
   private readonly limLookahead: number;
@@ -198,12 +213,62 @@ export class FxChain {
   get active(): boolean {
     const fx = this.fx;
     if (!fx) return false;
-    return fx.transient.on || fx.eq.on || fx.saturation.on || fx.air.on || fx.filter.on || fx.crush.on || fx.chorus.on || fx.width.on || fx.pan.on || fx.limiter.on;
+    return fx.transient.on || fx.compressor.on || fx.eq.on || fx.saturation.on || fx.air.on || fx.filter.on || fx.crush.on || fx.chorus.on || fx.delay.on || fx.reverb.on || fx.width.on || fx.pan.on || fx.limiter.on;
+  }
+
+  /**
+   * How long the chain may go on sounding after its input falls silent (seconds): the delay's repeats
+   * down to -60 dB, the reverb's tail. A render (and the mixer) waits that long before stopping.
+   */
+  static tailSec(fx: FxSettings | null, bpm: number): number {
+    if (!fx) return 0;
+    let tail = 0;
+    if (fx.delay.on && fx.delay.mix > 0) {
+      const step = (fx.delay.beats * 60) / Math.max(1, bpm);
+      const repeats = fx.delay.feedback > 0.01 ? Math.log(0.001) / Math.log(fx.delay.feedback) : 1;
+      tail = Math.max(tail, step * (repeats + 1));
+    }
+    if (fx.reverb.on && fx.reverb.mix > 0) tail = Math.max(tail, 0.6 + 5.5 * fx.reverb.size + fx.reverb.preDelayMs / 1000);
+    return Math.min(12, tail);
   }
 
   /** Whether the chain turns mono into stereo (a mono material then needs two channels). */
   static makesStereo(fx: FxSettings): boolean {
-    return (fx.chorus.on && fx.chorus.mix > 0) || (fx.pan.on && fx.pan.depth > 0);
+    return (fx.chorus.on && fx.chorus.mix > 0) || (fx.pan.on && fx.pan.depth > 0) || (fx.reverb.on && fx.reverb.mix > 0) || (fx.delay.on && fx.delay.pingPong && fx.delay.mix > 0);
+  }
+
+  /** The delay's buffers (4 s: two beats at 30 BPM), made when the delay is first turned on. */
+  private ensureDelay(): [Float32Array, Float32Array] {
+    if (!this.delayBuf) {
+      const n = Math.ceil(4 * this.sampleRate) + 4;
+      this.delayBuf = [new Float32Array(n), new Float32Array(n)];
+    }
+    return this.delayBuf;
+  }
+
+  /** The reverb's combs and allpasses (Freeverb's tunings, scaled to the rate; the right side a little longer). */
+  private ensureReverb(): void {
+    if (this.revCombs) return;
+    const scale = this.sampleRate / 44100;
+    const combs = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
+    const alls = [556, 441, 341, 225];
+    const spread = 23;
+    this.revCombs = [0, 1].map((side) => combs.map((n) => ({ buf: new Float32Array(Math.round((n + side * spread) * scale)), at: 0, store: 0 })));
+    this.revAll = [0, 1].map((side) => alls.map((n) => ({ buf: new Float32Array(Math.round((n + side * spread) * scale)), at: 0 })));
+    const pre = Math.ceil(0.2 * this.sampleRate) + 2;
+    this.revPre = [new Float32Array(pre), new Float32Array(pre)];
+  }
+
+  private clearEchoes(): void {
+    if (this.delayBuf) for (const b of this.delayBuf) b.fill(0);
+    this.delayLp.fill(0);
+    if (this.revCombs) for (const side of this.revCombs) for (const c of side) {
+      c.buf.fill(0);
+      c.store = 0;
+    }
+    if (this.revAll) for (const side of this.revAll) for (const a of side) a.buf.fill(0);
+    if (this.revPre) for (const b of this.revPre) b.fill(0);
+    this.compGr = 0;
   }
 
   setTempo(bpm: number): void {
@@ -229,6 +294,10 @@ export class FxChain {
     }
     if (!was || (!was.chorus.on && fx.chorus.on)) for (const b of this.chorusBuf) b.fill(0);
     if (!was || (!was.limiter.on && fx.limiter.on)) this.resetLimiter();
+    if (fx.delay.on) this.ensureDelay();
+    if (fx.reverb.on) this.ensureReverb();
+    // Echoes switched on start clean.
+    if (was && ((!was.delay.on && fx.delay.on) || (!was.reverb.on && fx.reverb.on))) this.clearEchoes();
     this.filterCountdown = 0;
   }
 
@@ -248,6 +317,7 @@ export class FxChain {
     this.chorusWrite = 0;
     this.chorusPhase = 0;
     this.panPhase = 0;
+    this.clearEchoes();
     this.resetLimiter();
   }
 
@@ -285,6 +355,18 @@ export class FxChain {
     const midGain = dbToGain(fx.width.midDb);
     const panStep = beatHz(fx.pan.beats) / sr;
     const filterStep = beatHz(fx.filter.lfoBeats) / sr;
+    const compAtk = Math.exp(-1 / Math.max(1, (fx.compressor.attackMs / 1000) * sr));
+    const compRel = Math.exp(-1 / Math.max(1, (fx.compressor.releaseMs / 1000) * sr));
+    const compSlope = 1 - 1 / Math.max(1, fx.compressor.ratio);
+    const compMakeup = dbToGain(fx.compressor.makeupDb);
+    const delayBuf = fx.delay.on ? this.ensureDelay() : null;
+    const delayLen = delayBuf ? delayBuf[0].length : 1;
+    const delaySamples = Math.min(delayLen - 2, Math.max(1, ((fx.delay.beats * 60) / this.bpm) * sr));
+    const delayLpA = Math.exp((-TAU * Math.min(fx.delay.highCutHz, sr * 0.45)) / sr);
+    if (fx.reverb.on) this.ensureReverb();
+    const revFeedback = 0.7 + 0.28 * fx.reverb.size;
+    const revDamp = fx.reverb.damping * 0.4;
+    const revPreSamples = Math.min((this.revPre?.[0].length ?? 2) - 1, Math.round((fx.reverb.preDelayMs / 1000) * sr));
     const limIn = dbToGain(fx.limiter.gainDb);
     const ceiling = dbToGain(fx.limiter.ceilingDb);
     const limRelease = Math.exp(-1 / Math.max(1, (fx.limiter.releaseMs / 1000) * sr));
@@ -302,6 +384,17 @@ export class FxChain {
         // How much of the level right now is attack (the fast follower running ahead of the slow one).
         const t = this.envFast > 1e-6 ? Math.max(0, Math.min(1, (this.envFast - this.envSlow) / this.envFast)) : 0;
         const g = tAtk ** t * tSus ** (1 - t);
+        l *= g;
+        r *= g;
+      }
+
+      if (fx.compressor.on) {
+        // Linked stereo: the louder side sets the gain; the reduction (dB) follows with its attack / release.
+        const level = Math.max(Math.abs(l), Math.abs(r), 1e-9);
+        const over = 20 * Math.log10(level) - fx.compressor.thresholdDb;
+        const want = over > 0 ? over * compSlope : 0;
+        this.compGr = want > this.compGr ? compAtk * this.compGr + (1 - compAtk) * want : compRel * this.compGr + (1 - compRel) * want;
+        const g = dbToGain(-this.compGr) * compMakeup;
         l *= g;
         r *= g;
       }
@@ -407,6 +500,63 @@ export class FxChain {
         const m = fx.chorus.mix;
         l = l * (1 - m * 0.5) + wetL * 0.5 * m;
         r = r * (1 - m * 0.5) + wetR * 0.5 * m;
+      }
+
+      if (fx.delay.on && delayBuf) {
+        const d = fx.delay;
+        const w = this.delayWrite;
+        const echoL = readDelay(delayBuf[0], w, delaySamples, delayLen);
+        const echoR = readDelay(delayBuf[1], w, delaySamples, delayLen);
+        // The repeats get darker (a one-pole low-pass in the loop).
+        this.delayLp[0] = echoL + (this.delayLp[0] - echoL) * delayLpA;
+        this.delayLp[1] = echoR + (this.delayLp[1] - echoR) * delayLpA;
+        const inL = mono ? (l + r) / 2 : l;
+        const inR = mono ? inL : r;
+        if (d.pingPong) {
+          // The input enters on the left; each repeat crosses to the other side.
+          delayBuf[0][w] = (inL + inR) / 2 + this.delayLp[1] * d.feedback;
+          delayBuf[1][w] = this.delayLp[0] * d.feedback;
+        } else {
+          delayBuf[0][w] = inL + this.delayLp[0] * d.feedback;
+          delayBuf[1][w] = inR + this.delayLp[1] * d.feedback;
+        }
+        this.delayWrite = (w + 1) % delayLen;
+        l += echoL * d.mix;
+        r += echoR * d.mix;
+      }
+
+      if (fx.reverb.on && this.revCombs && this.revAll && this.revPre) {
+        const v = fx.reverb;
+        // Pre-delay, then 8 damped combs in parallel and 4 allpasses in series, per side (Freeverb).
+        const pre = this.revPre;
+        const pw = this.revPreAt;
+        pre[0][pw] = (l + r) * 0.5 * 0.015 * 2;
+        pre[1][pw] = pre[0][pw];
+        const pr = (pw - revPreSamples + pre[0].length) % pre[0].length;
+        this.revPreAt = (pw + 1) % pre[0].length;
+        let outL = 0;
+        let outR = 0;
+        for (let side = 0; side < 2; side++) {
+          const input = pre[side][pr];
+          let acc = 0;
+          for (const comb of this.revCombs[side]) {
+            const y = comb.buf[comb.at];
+            comb.store = y * (1 - revDamp) + comb.store * revDamp;
+            comb.buf[comb.at] = input + comb.store * revFeedback;
+            comb.at = (comb.at + 1) % comb.buf.length;
+            acc += y;
+          }
+          for (const ap of this.revAll[side]) {
+            const b = ap.buf[ap.at];
+            ap.buf[ap.at] = acc + b * 0.5;
+            acc = b - acc;
+            ap.at = (ap.at + 1) % ap.buf.length;
+          }
+          if (side === 0) outL = acc;
+          else outR = acc;
+        }
+        l = l * (1 - v.mix * 0.5) + outL * v.mix * 3;
+        r = r * (1 - v.mix * 0.5) + outR * v.mix * 3;
       }
 
       if (fx.width.on) {

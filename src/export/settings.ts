@@ -203,6 +203,10 @@ export function sanitizeFx(raw: unknown): FxSettings {
   const on = (p: Record<string, unknown>) => p.on === true;
   const beats = (v: unknown, fallback: FxBeats) => (FX_BEATS.includes(v as FxBeats) ? (v as FxBeats) : fallback);
   const t = part("transient");
+  const co = part("compressor");
+  const de = part("delay");
+  const rv = part("reverb");
+  const DELAY_BEATS = [0.25, 0.5, 0.75, 1, 1.5, 2];
   const e = part("eq");
   const sa = part("saturation");
   const a = part("air");
@@ -214,6 +218,29 @@ export function sanitizeFx(raw: unknown): FxSettings {
   const l = part("limiter");
   return {
     transient: { on: on(t), attackDb: clamp(num(t.attackDb, d.transient.attackDb), -24, 24), sustainDb: clamp(num(t.sustainDb, d.transient.sustainDb), -24, 24) },
+    compressor: {
+      on: on(co),
+      thresholdDb: clamp(num(co.thresholdDb, d.compressor.thresholdDb), -60, 0),
+      ratio: clamp(num(co.ratio, d.compressor.ratio), 1, 20),
+      attackMs: clamp(num(co.attackMs, d.compressor.attackMs), 0.1, 200),
+      releaseMs: clamp(num(co.releaseMs, d.compressor.releaseMs), 10, 2000),
+      makeupDb: clamp(num(co.makeupDb, d.compressor.makeupDb), 0, 24),
+    },
+    delay: {
+      on: on(de),
+      beats: (DELAY_BEATS.includes(de.beats as number) ? de.beats : d.delay.beats) as FxSettings["delay"]["beats"],
+      feedback: clamp(num(de.feedback, d.delay.feedback), 0, 0.9),
+      highCutHz: clamp(num(de.highCutHz, d.delay.highCutHz), 500, 20000),
+      pingPong: typeof de.pingPong === "boolean" ? de.pingPong : d.delay.pingPong,
+      mix: clamp(num(de.mix, d.delay.mix), 0, 1),
+    },
+    reverb: {
+      on: on(rv),
+      size: clamp(num(rv.size, d.reverb.size), 0, 1),
+      damping: clamp(num(rv.damping, d.reverb.damping), 0, 1),
+      preDelayMs: clamp(num(rv.preDelayMs, d.reverb.preDelayMs), 0, 200),
+      mix: clamp(num(rv.mix, d.reverb.mix), 0, 1),
+    },
     eq: {
       on: on(e),
       lowCutHz: clamp(num(e.lowCutHz, d.eq.lowCutHz), 0, 2000),

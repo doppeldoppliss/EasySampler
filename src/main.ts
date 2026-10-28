@@ -1026,7 +1026,7 @@ const DESTINATIONS: { id: Destination; label: string; help: (n: string, format: 
   {
     id: "garageband",
     label: "GarageBand(iPhone / iPad)",
-    help: (n) => `共有シートで「"ファイル"に保存」。GarageBand の Sampler で「読み込む」からそのファイルを選びます。元の高さの鍵は GarageBand が決めます(Tune 画面で合わせます。選んだ音名 ${n} はファイル名に入っています)。44.1kHz / 16bit で出します。`,
+    help: (n) => `「保存」で「ファイル」アプリのダウンロードに入ります(「共有」から GarageBand へ直接渡すこともできます)。GarageBand の Sampler で「読み込む」からそのファイルを選びます。元の高さの鍵は GarageBand が決めます(Tune 画面で合わせます。選んだ音名 ${n} はファイル名に入っています)。44.1kHz / 16bit で出します。`,
   },
   {
     id: "decent",
@@ -1071,11 +1071,18 @@ const listenButton = button("▶ 書き出し後を聴く", "big", () => {
     void listen();
   }
 });
-const shareButton = button("共有", "big primary", () => void deliver("share", false));
+/**
+ * Files go to the browser's downloads (the Downloads folder, unless the browser is set to ask) by default;
+ * 共有 (the share sheet) is the second way where there is one. Only a home-screen app on an iPhone has no
+ * downloads at all: there the share sheet is the way.
+ */
+const SHARE_ONLY = IOS && STANDALONE;
+const exportHow = (): "share" | "download" => (SHARE_ONLY ? "share" : "download");
+const saveButton = button("保存(ダウンロード)", "big primary", () => void deliver("download", false));
+saveButton.hidden = SHARE_ONLY;
+const shareButton = button("共有", SHARE_ONLY ? "big primary" : "big", () => void deliver("share", false));
 shareButton.hidden = !canShareFiles();
-const saveButton = button("保存", `big ${canShareFiles() ? "" : "primary"}`, () => void deliver("download", false));
-saveButton.hidden = IOS && STANDALONE; // a home-screen app on an iPhone has no download sheet: the share sheet is the way
-const batchButton = button("すべての区間をまとめて保存(zip)", "", () => void deliver(canShareFiles() ? "share" : "download", true));
+const batchButton = button("すべての区間をまとめて保存(zip)", "", () => void deliver(exportHow(), true));
 const exportStatus = el("p", { className: "fine", role: "status" });
 
 const exportPanel = el("section", { className: "panel export" }, [
@@ -1084,7 +1091,7 @@ const exportPanel = el("section", { className: "panel export" }, [
   destinationHelp,
   el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "ファイルの形式" }), formatSelect]),
   formatNote,
-  el("div", { className: "export-actions" }, [listenButton, shareButton, saveButton]),
+  el("div", { className: "export-actions" }, [listenButton, saveButton, shareButton]),
   el("p", { className: "fine" }, ["ファイル名: ", fileNameLabel]),
   el("div", { className: "row" }, [batchButton]),
   exportStatus,
@@ -1111,7 +1118,7 @@ const saveSettingsButton = button("設定を保存(JSON)", "small", () => {
   const json = serializeSettings(settingsBody());
   const blob = new Blob([json], { type: "application/json" });
   const name = `${safeBaseName(stripExtension(material.name))}.easysampler.json`;
-  if (IOS && canShareFiles()) shareFile(blob, name, name).catch(() => downloadFile(blob, name));
+  if (SHARE_ONLY && canShareFiles()) shareFile(blob, name, name).catch(() => downloadFile(blob, name));
   else downloadFile(blob, name);
 });
 const loadSettingsButton = el("label", { className: "button small", htmlFor: "file", textContent: "設定を読み込む(JSON)" });
@@ -1478,7 +1485,7 @@ async function deliverQueue(kind: "wavs" | "kit"): Promise<void> {
       builtQueue = { key, result: built, skipped };
     }
     const note = skipped.length ? ` — 飛ばしたもの: ${skipped.join("、")}` : "";
-    if (canShareFiles()) {
+    if (SHARE_ONLY && canShareFiles()) {
       try {
         const outcome = await shareFile(built.blob, built.fileName, built.fileName);
         queueStatus.textContent = outcome === "shared" ? `共有しました: ${built.summary}${note}` : "";
@@ -1827,7 +1834,7 @@ function forDestination(result: Built): Built {
 let prebuildTimer = 0;
 /** Where the share sheet is the way out, the current file is made ahead, in a quiet moment: then a tap on 共有 opens the sheet at once. */
 function schedulePrebuild(): void {
-  if (!canShareFiles()) return;
+  if (!SHARE_ONLY || !canShareFiles()) return;
   clearTimeout(prebuildTimer);
   prebuildTimer = window.setTimeout(() => {
     if (material && !building && !playing && !rollPanel.playing) void buildCurrent(true).catch(() => {});
@@ -2443,7 +2450,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
       songBuilding = false;
     }
   }
-  if (canShareFiles()) {
+  if (SHARE_ONLY && canShareFiles()) {
     try {
       const outcome = await shareFile(built.blob, built.fileName, built.fileName);
       say(outcome === "shared" ? `共有しました: ${built.fileName}(${built.summary})` : "");

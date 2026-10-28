@@ -2,7 +2,7 @@
 // stretch deleted, or a stretch played twice — on every track at once, notes
 // and lines (automation) alike, so the parts stay together.
 
-import { newId, sortNotes, type BeatPoint, type Note, type Project } from "./model";
+import { newId, setTempoList, sortNotes, tempoAt, type BeatPoint, type Note, type Project, type TempoChange } from "./model";
 
 export type ArrangeKind = "insert" | "delete" | "duplicate";
 
@@ -75,6 +75,22 @@ export function arrangeNotes(notes: readonly Note[], kind: ArrangeKind, from: nu
   return sortNotes(out);
 }
 
+/** The tempo list (the start's first) after the operation: each stretch keeps the tempos it had. */
+export function arrangeTempos(project: Project, kind: ArrangeKind, from: number, to: number): TempoChange[] {
+  const len = to - from;
+  const all = [{ beat: 0, bpm: project.bpm }, ...project.tempos];
+  const at = (beat: number) => tempoAt(beat, project);
+  if (kind === "insert") return [...all.filter((c) => c.beat < from), { beat: from, bpm: at(from) }, ...all.filter((c) => c.beat >= from).map((c) => ({ ...c, beat: c.beat + len }))];
+  if (kind === "delete") return [...all.filter((c) => c.beat < from), { beat: from, bpm: at(to) }, ...all.filter((c) => c.beat > to).map((c) => ({ ...c, beat: c.beat - len }))];
+  return [
+    ...all.filter((c) => c.beat < to),
+    { beat: to, bpm: at(from) },
+    ...all.filter((c) => c.beat > from && c.beat < to).map((c) => ({ ...c, beat: c.beat + len })),
+    { beat: to + len, bpm: at(to) },
+    ...all.filter((c) => c.beat > to).map((c) => ({ ...c, beat: c.beat + len })),
+  ];
+}
+
 /** Inserts a blank of [from, to)'s length at `from`, deletes [from, to), or plays it twice — on every track and line. */
 export function arrange(project: Project, kind: ArrangeKind, from: number, to: number): void {
   if (!(to > from)) return;
@@ -84,6 +100,7 @@ export function arrange(project: Project, kind: ArrangeKind, from: number, to: n
     t.panAuto = arrangeLine(t.panAuto, kind, from, to);
   }
   project.masterAuto = arrangeLine(project.masterAuto, kind, from, to);
+  setTempoList(project, arrangeTempos(project, kind, from, to));
   // A copy: the loop moves onto it (pressing again makes the next one).
   if (kind === "duplicate") project.loop = { ...project.loop, start: to, end: to + (to - from) };
 }

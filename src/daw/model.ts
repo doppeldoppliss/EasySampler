@@ -59,8 +59,53 @@ export interface BeatPoint {
 export const VOLUME_AUTO_MAX = 2;
 
 /** A line as the player takes it (seconds). */
-export function autoToSec(points: readonly BeatPoint[], bpm: number): AutoPoint[] {
-  return points.map((q) => ({ sec: beatsToSec(q.beat, bpm), value: q.value }));
+export function autoToSec(points: readonly BeatPoint[], tempo: Tempo): AutoPoint[] {
+  return points.map((q) => ({ sec: beatsToSec(q.beat, tempo), value: q.value }));
+}
+
+/** A tempo change: from this beat on, this tempo (the song's start has `Project.bpm`). */
+export interface TempoChange {
+  beat: number;
+  bpm: number;
+}
+
+/** A fixed tempo, or a song's tempo map (its starting tempo and the changes after it, sorted by beat). */
+export type Tempo = number | { bpm: number; tempos?: readonly TempoChange[] };
+
+/** The tempo at a beat. */
+export function tempoAt(beat: number, tempo: Tempo): number {
+  if (typeof tempo === "number") return tempo;
+  let bpm = tempo.bpm;
+  for (const c of tempo.tempos ?? []) {
+    if (c.beat > beat) break;
+    bpm = c.bpm;
+  }
+  return bpm;
+}
+
+/** The tempo map in seconds (where each tempo starts), for the player's tempo-synced effects. */
+export function tempoMapSec(tempo: Tempo): { sec: number; bpm: number }[] {
+  if (typeof tempo === "number") return [{ sec: 0, bpm: tempo }];
+  return [{ sec: 0, bpm: tempo.bpm }, ...(tempo.tempos ?? []).map((c) => ({ sec: beatsToSec(c.beat, tempo), bpm: c.bpm }))];
+}
+
+/** A tempo list (the start's first) tidied: sorted, in range, repeats of the tempo before dropped; written to the project. */
+export function setTempoList(project: Project, list: readonly TempoChange[]): void {
+  const sorted = [...list].filter((c) => Number.isFinite(c.beat) && Number.isFinite(c.bpm)).sort((a, b) => a.beat - b.beat);
+  const start = sorted.find((c) => c.beat <= 1e-9)?.bpm ?? project.bpm;
+  const out: TempoChange[] = [];
+  let last = Math.max(20, Math.min(400, start));
+  for (const c of sorted) {
+    if (c.beat <= 1e-9) continue;
+    const bpm = Math.max(20, Math.min(400, c.bpm));
+    // (Several at one beat: the last one counts.)
+    if (out.length && Math.abs(out[out.length - 1].beat - c.beat) < 1e-9) out.pop();
+    const before = out.length ? out[out.length - 1].bpm : last;
+    if (bpm === before) continue;
+    out.push({ beat: c.beat, bpm });
+  }
+  project.bpm = last;
+  project.tempos = out;
 }
 
 /** A track that plays the plain backing synth (簡易シンセ) instead of a cut: what a MIDI file's parts start on. */
@@ -97,6 +142,8 @@ export interface Project {
   editing: string | null;
   /** The loop in beats, and whether playback follows it. */
   loop: { start: number; end: number; on: boolean };
+  /** Tempo changes after the start (sorted by beat; the start's tempo is `bpm`). */
+  tempos: TempoChange[];
   /** Effects on the whole mix. */
   masterFx: FxSettings;
   /** The master volume line (a factor, 0–2, after the master effects); empty = none. */
@@ -111,7 +158,7 @@ export const DEFAULT_VELOCITY = 0.8;
 const LEGATO_OVERLAP_SEC = 0.002;
 
 export function emptyProject(): Project {
-  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, masterFx: structuredClone(DEFAULT_FX), masterAuto: [], kit: emptyKit() };
+  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, tempos: [], masterFx: structuredClone(DEFAULT_FX), masterAuto: [], kit: emptyKit() };
 }
 
 let nextId = 1;
@@ -145,12 +192,34 @@ export function songEnd(notes: readonly Note[]): number {
   return end;
 }
 
-export function beatsToSec(beats: number, bpm: number): number {
-  return (beats * 60) / bpm;
+/** Beats from the song's start → seconds, through the tempo (a fixed one, or the song's map). */
+export function beatsToSec(beats: number, tempo: Tempo): number {
+  if (typeof tempo === "number") return (beats * 60) / tempo;
+  let sec = 0;
+  let at = 0;
+  let bpm = tempo.bpm;
+  for (const c of tempo.tempos ?? []) {
+    if (c.beat >= beats) break;
+    sec += ((c.beat - at) * 60) / bpm;
+    at = c.beat;
+    bpm = c.bpm;
+  }
+  return sec + ((beats - at) * 60) / bpm;
 }
 
-export function secToBeats(sec: number, bpm: number): number {
-  return (sec * bpm) / 60;
+export function secToBeats(sec: number, tempo: Tempo): number {
+  if (typeof tempo === "number") return (sec * tempo) / 60;
+  let at = 0;
+  let atSec = 0;
+  let bpm = tempo.bpm;
+  for (const c of tempo.tempos ?? []) {
+    const cSec = atSec + ((c.beat - at) * 60) / bpm;
+    if (cSec >= sec) break;
+    at = c.beat;
+    atSec = cSec;
+    bpm = c.bpm;
+  }
+  return at + ((sec - atSec) * bpm) / 60;
 }
 
 /**
@@ -159,7 +228,7 @@ export function secToBeats(sec: number, bpm: number): number {
  * heard (the engine has one voice per key). With `legato` (a track with portamento), a
  * note that ends right where one of another pitch starts overlaps it a little.
  */
-export function toSeqNotes(notes: readonly Note[], bpm: number, legato = false): SeqNote[] {
+export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false): SeqNote[] {
   const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   const out: SeqNote[] = [];
   for (let i = 0; i < sorted.length; i++) {
@@ -266,6 +335,12 @@ export function sanitizeProject(raw: unknown): Project {
     loop: end > start ? { start, end, on: loop.on === true } : d.loop,
     masterFx: sanitizeFx(r.masterFx),
     masterAuto: line(r.masterAuto, 0, VOLUME_AUTO_MAX),
+    tempos: Array.isArray(r.tempos)
+      ? r.tempos
+          .filter((c): c is Record<string, unknown> => !!c && typeof c === "object")
+          .map((c) => ({ beat: num(c.beat, 1, 0.001, 100_000), bpm: num(c.bpm, 120, 20, 400) }))
+          .sort((a, b) => a.beat - b.beat)
+      : [],
     kit: sanitizeKit(r.kit),
   };
 }

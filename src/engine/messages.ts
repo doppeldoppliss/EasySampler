@@ -53,6 +53,8 @@ export type ToEngine =
   | { type: "master"; fx: FxSettings | null }
   // The master volume line (song seconds; empty = none).
   | { type: "masterAuto"; points: AutoPoint[] }
+  // The song's tempo map (where each tempo starts, song seconds).
+  | { type: "tempoMap"; points: { sec: number; bpm: number }[] }
   | { type: "songPlay"; atFrame: number; fromSec: number }
   | { type: "songStop" }
   | { type: "songLoop"; loop: { startSec: number; endSec: number } | null };

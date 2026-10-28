@@ -47,6 +47,8 @@ export interface SongRenderInput {
   bpm: number;
   tracks: RenderTrack[];
   masterFx: FxSettings | null;
+  /** The tempo map (seconds) the tempo-synced effects follow; absent = `bpm` throughout. */
+  tempoMap?: { sec: number; bpm: number }[];
   /** The master volume line (song seconds; after the master effects). */
   masterAuto?: AutoPoint[];
   /**
@@ -103,6 +105,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
   player.setTracks(tracks);
   player.setTempo(input.bpm);
   player.setMasterAuto(input.masterAuto ?? []);
+  player.setTempoMap(input.tempoMap ?? []);
   player.play(0, 0);
   const master = new FxChain(sr);
   if (input.masterFx) master.set(input.masterFx);

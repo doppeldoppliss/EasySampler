@@ -38,6 +38,8 @@ export interface Song {
   /** The tempo at the start. */
   bpm: number;
   hasTempoChanges: boolean;
+  /** The tempo changes after the start (beats from the start, sorted). */
+  tempos: { beat: number; bpm: number }[];
 }
 
 export class MidiParseError extends Error {}
@@ -204,6 +206,7 @@ export function parseMidi(data: ArrayBuffer | Uint8Array): Song {
     durationSec,
     bpm: 60e6 / tempos[0].usPerBeat,
     hasTempoChanges: tempos.some((x) => x.usPerBeat !== tempos[0].usPerBeat),
+    tempos: tempos.filter((x) => x.tick > 0).map((x) => ({ beat: x.tick / ppq, bpm: 60e6 / x.usPerBeat })),
   };
 }
 

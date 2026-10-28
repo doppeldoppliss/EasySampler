@@ -19,6 +19,8 @@ export interface TrackSound {
   render(left: Float32Array, right: Float32Array, frames: number): void;
   /** Nothing sounding (no voice still releasing). */
   idle(): boolean;
+  /** The tempo (for tempo-synced settings), when the song's tempo changes. */
+  setTempo?(bpm: number): void;
 }
 
 /** A point of an automation line: song seconds, and the value there (straight lines between points). */
@@ -124,6 +126,8 @@ export class SongPlayer {
   private bpm = 120;
   /** The master volume line (a factor, 0–2), and its gain at the start and end of the last block. */
   private masterAuto: AutoPoint[] = [];
+  /** The song's tempo map (where each tempo starts, seconds); empty = the one set by setTempo. */
+  private tempoMap: { sec: number; bpm: number }[] = [];
   private masterFrom = 1;
   private masterTo = 1;
 
@@ -165,6 +169,11 @@ export class SongPlayer {
     this.lanes.find((l) => l.id === id)?.setMix(mix);
   }
 
+  /** The song's tempo map (seconds): tempo-synced effects follow it as the song plays. */
+  setTempoMap(map: readonly { sec: number; bpm: number }[]): void {
+    this.tempoMap = map.map((q) => ({ ...q }));
+  }
+
   /** The master volume line (song seconds; empty = none). Applied by `applyMaster`, after the master effects. */
   setMasterAuto(points: readonly AutoPoint[]): void {
     this.masterAuto = points.map((q) => ({ ...q }));
@@ -188,7 +197,10 @@ export class SongPlayer {
 
   setTempo(bpm: number): void {
     this.bpm = bpm;
-    for (const lane of this.lanes) lane.fx.setTempo(bpm);
+    for (const lane of this.lanes) {
+      lane.fx.setTempo(bpm);
+      lane.sound.setTempo?.(bpm);
+    }
   }
 
   /** Loops [startSec, endSec) of the song, or stops looping (null). */
@@ -297,6 +309,11 @@ export class SongPlayer {
     // The rest of the block, the effects, and the mix. The lines (automation) are read at the block's end;
     // the gains ramp to there from the last block's (so a jump never clicks).
     const endSec = this.songSecAt(blockFrame + frames);
+    if (endSec !== null && this.tempoMap.length > 1) {
+      let bpm = this.tempoMap[0].bpm;
+      for (const q of this.tempoMap) if (q.sec <= endSec) bpm = q.bpm;
+      if (bpm !== this.bpm) this.setTempo(bpm);
+    }
     this.masterFrom = this.masterTo;
     this.masterTo = endSec !== null && this.masterAuto.length ? autoValue(this.masterAuto, endSec, 1) : 1;
     const anySolo = this.lanes.some((l) => l.mix.solo);

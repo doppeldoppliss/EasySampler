@@ -262,6 +262,12 @@ export class EngineClient {
     this.post({ type: "songMix", id, mix: { gain: mix.gain, pan: mix.pan, mute: mix.mute, solo: mix.solo, fx: mix.fx, volumeAuto: mix.volumeAuto, panAuto: mix.panAuto } });
   }
 
+  /** The song's tempo map (seconds), for its tempo-synced effects. */
+  setTempoMap(points: { sec: number; bpm: number }[]): void {
+    this.pending = this.pending.filter((m) => m.type !== "tempoMap");
+    this.post({ type: "tempoMap", points });
+  }
+
   /** The master volume line (song seconds; empty = none). */
   setMasterAuto(points: AutoPoint[]): void {
     this.pending = this.pending.filter((m) => m.type !== "masterAuto");

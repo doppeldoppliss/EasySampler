@@ -215,6 +215,9 @@ class EngineProcessor extends AudioWorkletProcessor {
       case "masterAuto":
         this.song.setMasterAuto(message.points);
         break;
+      case "tempoMap":
+        this.song.setTempoMap(message.points);
+        break;
       case "songPlay":
         this.song.play(message.atFrame, message.fromSec);
         this.master.reset();

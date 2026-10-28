@@ -1406,3 +1406,8 @@ details.sub.credit > summary {
   min-height: 0;
   padding: 2px 8px;
 }
+
+/* The song's tempo changes (under the seek bar). */
+.tempo-list { gap: 6px; align-items: center; flex-wrap: wrap; }
+.tempo-item { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; }
+.tempo-bpm { width: 4.5em; }

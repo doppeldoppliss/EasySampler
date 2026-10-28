@@ -27,13 +27,19 @@ function chunk(events: number[]): number[] {
 }
 
 export function writeMidi(project: Project): Uint8Array<ArrayBuffer> {
-  const tempo = Math.round(60e6 / project.bpm);
-  const conductor = [
-    ...text(0x03, "EasySampler"),
-    0, 0xff, 0x51, 3, (tempo >> 16) & 255, (tempo >> 8) & 255, tempo & 255,
-    0, 0xff, 0x58, 4, project.beatsPerBar, 2, 24, 8,
-    0, 0xff, 0x2f, 0,
-  ];
+  const tempoEvent = (bpm: number) => {
+    const us = Math.round(60e6 / bpm);
+    return [0xff, 0x51, 3, (us >> 16) & 255, (us >> 8) & 255, us & 255];
+  };
+  const conductor = [...text(0x03, "EasySampler"), 0, ...tempoEvent(project.bpm), 0, 0xff, 0x58, 4, project.beatsPerBar, 2, 24, 8];
+  // The tempo changes, each at its tick.
+  let lastTick = 0;
+  for (const c of project.tempos) {
+    const tick = Math.round(c.beat * PPQ);
+    conductor.push(...vlq(tick - lastTick), ...tempoEvent(c.bpm));
+    lastTick = tick;
+  }
+  conductor.push(0, 0xff, 0x2f, 0);
   const chunks = [chunk(conductor)];
   let channel = 0;
   for (const track of project.tracks) {

@@ -112,6 +112,14 @@ export class PianoRoll {
   private longPress = 0;
   /** The velocity lane is shown under the notes. */
   private velocityLane = false;
+  /** The tempo changes, marked on the ruler. */
+  private tempoMarks: { beat: number; bpm: number }[] = [];
+
+  setTempoMarks(marks: readonly { beat: number; bpm: number }[]): void {
+    this.tempoMarks = marks.map((m) => ({ ...m }));
+    this.draw();
+  }
+
   /** A line shown in the lane instead (null: none). */
   private line: LaneLine | null = null;
   /** The line's points when a drag started (a cancelled drag puts them back). */
@@ -1465,6 +1473,14 @@ export class PianoRoll {
       if (x < this.keysW - 1) continue;
       g.fillRect(Math.round(x), RULER_H - 8, 1, 8);
       g.fillText(String(bar + 1), x + 3, RULER_H / 2);
+    }
+    // Tempo changes: a mark and the new tempo, low on the ruler.
+    g.fillStyle = cssVar("--warn");
+    for (const m of this.tempoMarks) {
+      const x = this.xOf(m.beat);
+      if (x < this.keysW - 1 || x > cw) continue;
+      g.fillRect(Math.round(x), 0, 2, RULER_H);
+      g.fillText(`♩${+m.bpm.toFixed(1)}`, x + 4, RULER_H - 5);
     }
     g.fillStyle = cssVar("--line");
     g.fillRect(0, RULER_H - 1, cw, 1);

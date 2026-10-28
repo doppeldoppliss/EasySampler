@@ -19,7 +19,11 @@ import {
   newTrack,
   sanitizeProject,
   secToBeats,
+  setTempoList,
   songEnd,
+  tempoAt,
+  tempoMapSec,
+  type TempoChange,
   toSeqNotes,
   type Note,
   type Project,
@@ -283,6 +287,8 @@ export class RollPanel {
   /** Export only the loop range (WAV / stems), seamless. */
   private readonly loopOnlyBox = el("input", { type: "checkbox", ariaLabel: "ループ範囲だけ書き出す" });
   private readonly position = el("span", { className: "fine num" });
+  /** The tempo changes after the start: each its bar and beat, its tempo, and ×. */
+  private readonly tempoList = el("div", { className: "row tempo-list" });
   /** The seek bar: the song from its start to a little past its last note (or the loop's end), in beats. */
   private readonly seekBar = el("input", { type: "range", min: "0", max: "16", step: "any", value: "0", className: "song-seek", ariaLabel: "再生位置" });
   private seeking = false;
@@ -320,7 +326,7 @@ export class RollPanel {
     this.roll.onPreview = (pitch) => this.preview(pitch);
     this.roll.onTogglePlay = () => this.toggle();
     this.roll.onSeek = (beat, play) => {
-      this.from = beatsToSec(beat, this.project.bpm);
+      this.from = beatsToSec(beat, this.project);
       if (this.playing || play) this.start();
       else this.showPosition(this.from);
     };
@@ -333,12 +339,7 @@ export class RollPanel {
 
     this.bpmInput.addEventListener("change", () => {
       const bpm = Math.max(20, Math.min(400, Number(this.bpmInput.value) || this.project.bpm));
-      const position = this.currentBeat();
-      this.project.bpm = bpm;
-      this.bpmInput.value = String(bpm);
-      this.from = beatsToSec(position, bpm);
-      this.reload();
-      this.scheduleSave();
+      this.setTempos([{ beat: 0, bpm }, ...this.project.tempos]);
     });
     this.laneSelect.addEventListener("change", () => this.showLane());
     this.roll.onLineChange = (points) => this.lineChanged(points);
@@ -366,6 +367,7 @@ export class RollPanel {
         this.position,
       ]),
       el("div", { className: "row song-seek-row" }, [this.seekBar]),
+      this.tempoList,
       this.trackList,
       el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack()), button("＋ ドラムトラックを追加", "small", () => this.addTrack(true))]),
       this.padList,
@@ -402,7 +404,7 @@ export class RollPanel {
     this.seekBar.addEventListener("input", () => {
       this.seeking = true;
       const beat = Number(this.seekBar.value);
-      this.from = beatsToSec(beat, this.project.bpm);
+      this.from = beatsToSec(beat, this.project);
       this.roll.setPlayhead(beat, true);
       this.showPosition(this.from);
       if (this.playing) {
@@ -527,6 +529,7 @@ export class RollPanel {
   private applyProject(): void {
     this.selected = Math.min(this.selected, this.project.tracks.length - 1);
     this.bpmInput.value = String(this.project.bpm);
+    this.renderTempos();
     this.roll.setBeatsPerBar(this.project.beatsPerBar);
     this.roll.setLoop(this.project.loop);
     this.showTrackInRoll();
@@ -598,8 +601,9 @@ export class RollPanel {
       added.push(t);
     }
     this.project.tracks = [...this.project.tracks.filter((t) => t.notes.length > 0), ...added];
-    this.project.bpm = Math.round(song.bpm * 10) / 10;
+    setTempoList(this.project, [{ beat: 0, bpm: Math.round(song.bpm * 10) / 10 }, ...song.tempos.map((c) => ({ beat: c.beat, bpm: Math.round(c.bpm * 10) / 10 }))]);
     this.bpmInput.value = String(this.project.bpm);
+    this.renderTempos();
     this.from = 0;
     this.selected = this.project.tracks.indexOf(leadTrack ?? added[0]);
     this.showTrackInRoll();
@@ -610,7 +614,7 @@ export class RollPanel {
     this.refreshButtons();
     this.onTrackChange();
     this.scheduleSave();
-    const tempo = song.hasTempoChanges ? "(途中のテンポ変更は最初のテンポにそろえました)" : "";
+    const tempo = this.project.tempos.length ? `、途中のテンポ変更 ${this.project.tempos.length} か所` : "";
     this.info.textContent = `「${file.name}」のパート ${added.length} 本をトラックにしました(${this.project.bpm} BPM${tempo})。${leadTrack && this.editedInstrument ? `いちばん音符の多い「${leadTrack.name}」は編集中の区間で、` : ""}ほかは簡易シンセで鳴ります。素材で鳴らすには、トラックの区間を選び直してください。`;
   }
 
@@ -690,19 +694,75 @@ export class RollPanel {
 
   /** What the mixer gets for a track: volume, pan, mute, solo, effects and its lines (in seconds). */
   private mixOf(t: Track, fx: FxSettings = t.fx): MixSettings {
-    const bpm = this.project.bpm;
-    return { gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, fx, volumeAuto: autoToSec(t.volumeAuto, bpm), panAuto: autoToSec(t.panAuto, bpm) };
+    const tempo = this.project;
+    return { gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, fx, volumeAuto: autoToSec(t.volumeAuto, tempo), panAuto: autoToSec(t.panAuto, tempo) };
   }
 
   private sendMasterAuto(): void {
-    this.client.setMasterAuto(autoToSec(this.project.masterAuto, this.project.bpm));
+    this.client.setMasterAuto(autoToSec(this.project.masterAuto, this.project));
+    this.client.setTempoMap(tempoMapSec(this.project));
+  }
+
+  /** The tempo changes: the list under the seek bar and the marks on the ruler. */
+  private renderTempos(): void {
+    const bpb = this.project.beatsPerBar;
+    const where = (beat: number) => {
+      const bar = Math.floor(beat / bpb + 1e-9);
+      const inBar = +(beat - bar * bpb + 1).toFixed(2);
+      return inBar === 1 ? `${bar + 1} 小節` : `${bar + 1} 小節 ${inBar} 拍`;
+    };
+    const items = this.project.tempos.map((c, i) => {
+      const input = el("input", { type: "number", min: "20", max: "400", step: "1", inputMode: "decimal", value: String(c.bpm), ariaLabel: `${where(c.beat)}からの BPM`, className: "tempo-bpm" });
+      input.addEventListener("change", () => {
+        const list = this.project.tempos.map((x) => ({ ...x }));
+        list[i].bpm = Number(input.value) || c.bpm;
+        this.setTempos([{ beat: 0, bpm: this.project.bpm }, ...list]);
+      });
+      return el("span", { className: "tempo-item" }, [
+        el("span", { className: "fine", textContent: `${where(c.beat)}〜 ` }),
+        input,
+        button("×", "small", () => this.setTempos([{ beat: 0, bpm: this.project.bpm }, ...this.project.tempos.filter((_, j) => j !== i)]), "このテンポ変更を消す"),
+      ]);
+    });
+    this.tempoList.replaceChildren(
+      el("span", { className: "fine", textContent: this.project.tempos.length ? "テンポ変更:" : "途中のテンポ変更なし" }),
+      ...items,
+      button("＋ 再生位置の小節からテンポを変える", "small", () => this.addTempo(), "再生位置のある小節の頭から、別のテンポにします(曲の頭のテンポは BPM 欄)"),
+    );
+    this.roll.setTempoMarks(this.project.tempos);
+  }
+
+  private addTempo(): void {
+    const bpb = this.project.beatsPerBar;
+    const beat = Math.floor(this.currentBeat() / bpb + 1e-9) * bpb;
+    if (beat <= 0) {
+      this.info.textContent = "曲の頭のテンポは BPM 欄で変えます。テンポを変えたい小節へ再生位置を動かしてから押してください(目盛りをタップ)。";
+      return;
+    }
+    if (this.project.tempos.some((c) => Math.abs(c.beat - beat) < 1e-9)) {
+      this.info.textContent = "この小節にはもうテンポ変更があります。数字を書き換えてください。";
+      return;
+    }
+    this.setTempos([{ beat: 0, bpm: this.project.bpm }, ...this.project.tempos, { beat, bpm: tempoAt(beat, this.project) + 10 }]);
+  }
+
+  /** A new tempo list (the start's first): the playing position stays on its beat. */
+  private setTempos(list: TempoChange[]): void {
+    const position = this.currentBeat();
+    setTempoList(this.project, list);
+    this.bpmInput.value = String(this.project.bpm);
+    this.from = beatsToSec(position, this.project);
+    this.renderTempos();
+    this.reload();
+    this.showPosition(this.from);
+    this.scheduleSave();
   }
 
   /** Inserts, deletes or duplicates the loop range on every track (notes and lines). */
   private arrange(kind: ArrangeKind): void {
     const { start, end } = this.project.loop;
     if (kind === "delete" && !window.confirm(`${this.rangeText()}を全トラックから削除して、後ろを詰めますか?(「小節の操作を取り消す」で戻せます)`)) return;
-    const before = JSON.stringify({ tracks: this.project.tracks.map((t) => ({ id: t.id, notes: t.notes, volumeAuto: t.volumeAuto, panAuto: t.panAuto })), masterAuto: this.project.masterAuto, loop: this.project.loop });
+    const before = JSON.stringify({ tracks: this.project.tracks.map((t) => ({ id: t.id, notes: t.notes, volumeAuto: t.volumeAuto, panAuto: t.panAuto })), masterAuto: this.project.masterAuto, loop: this.project.loop, bpm: this.project.bpm, tempos: this.project.tempos });
     arrange(this.project, kind, start, end);
     this.afterArrange();
     this.arrangeUndo = before;
@@ -712,7 +772,7 @@ export class RollPanel {
 
   private undoArrange(): void {
     if (!this.arrangeUndo) return;
-    const before = JSON.parse(this.arrangeUndo) as { tracks: Pick<Track, "id" | "notes" | "volumeAuto" | "panAuto">[]; masterAuto: BeatPoint[]; loop: Project["loop"] };
+    const before = JSON.parse(this.arrangeUndo) as { tracks: Pick<Track, "id" | "notes" | "volumeAuto" | "panAuto">[]; masterAuto: BeatPoint[]; loop: Project["loop"]; bpm: number; tempos: TempoChange[] };
     for (const t of this.project.tracks) {
       const was = before.tracks.find((b) => b.id === t.id);
       if (!was) continue;
@@ -722,6 +782,8 @@ export class RollPanel {
     }
     this.project.masterAuto = before.masterAuto;
     this.project.loop = before.loop;
+    this.project.bpm = before.bpm;
+    this.project.tempos = before.tempos;
     this.afterArrange();
     this.arrangeUndo = null;
     this.refreshButtons();
@@ -730,6 +792,8 @@ export class RollPanel {
 
   /** Every track changed at once: the roll shows the track afresh (the tracks' undo histories no longer fit). */
   private afterArrange(): void {
+    this.renderTempos();
+    this.bpmInput.value = String(this.project.bpm);
     this.histories.clear();
     this.shownTrack = null;
     this.roll.setLoop(this.project.loop);
@@ -802,7 +866,7 @@ export class RollPanel {
 
   private renderTracks(): void {
     this.summarize();
-    this.refreshSeekRange(secToBeats(this.from, this.project.bpm));
+    this.refreshSeekRange(secToBeats(this.from, this.project));
     const rows = this.project.tracks.map((t, i) => {
       const selected = i === this.selected;
       const name = el("input", { type: "text", value: t.name, className: "track-name", ariaLabel: "トラックの名前", maxLength: 30 });
@@ -964,7 +1028,7 @@ export class RollPanel {
   }
 
   private slice(): void {
-    const at = this.roll.position ?? secToBeats(this.from, this.project.bpm);
+    const at = this.roll.position ?? secToBeats(this.from, this.project);
     const n = this.roll.sliceAt(at);
     this.info.textContent = n ? `${n} 個の音符を再生位置で分けました。` : "再生位置をまたぐ音符がありません。目盛りで分けたい位置を選んでから押してください。";
   }
@@ -1094,7 +1158,7 @@ export class RollPanel {
 
   /** The step position (beats), without the rounding a trip through seconds leaves. */
   private get stepAt(): number {
-    return Math.round(secToBeats(this.from, this.project.bpm) * 1e6) / 1e6;
+    return Math.round(secToBeats(this.from, this.project) * 1e6) / 1e6;
   }
 
   /** One step of step input (beats): the grid, or the last note length with no grid. */
@@ -1114,7 +1178,7 @@ export class RollPanel {
 
   /** Moves the step position (beats) and shows it. */
   private stepTo(beat: number): void {
-    this.from = beatsToSec(Math.max(0, beat), this.project.bpm);
+    this.from = beatsToSec(Math.max(0, beat), this.project);
     this.showPosition(this.from);
     this.roll.setPlayhead(Math.max(0, beat), true);
   }
@@ -1212,7 +1276,7 @@ export class RollPanel {
         instrument: t.kind === "drum" ? "drum" : t.instrument!,
         samples: t.kind === "drum" ? kit.samples : undefined,
         drumKeys: t.kind === "drum" ? kit.keys : undefined,
-        notes: toSeqNotes(t.notes, this.project.bpm, t.kind !== "drum" && t.glide > 0),
+        notes: toSeqNotes(t.notes, this.project, t.kind !== "drum" && t.glide > 0),
         glide: t.kind === "drum" ? 0 : t.glide,
         ...this.mixOf(t),
       }));
@@ -1233,8 +1297,8 @@ export class RollPanel {
   private sendLoop(): void {
     // (The master line's seconds follow the tempo too: it goes wherever the loop does.)
     this.sendMasterAuto();
-    const { loop, bpm } = this.project;
-    this.client.setSongLoop(loop.on ? { startSec: beatsToSec(loop.start, bpm), endSec: beatsToSec(loop.end, bpm) } : null);
+    const { loop } = this.project;
+    this.client.setSongLoop(loop.on ? { startSec: beatsToSec(loop.start, this.project), endSec: beatsToSec(loop.end, this.project) } : null);
   }
 
   private setLoopOn(on: boolean): void {
@@ -1261,17 +1325,17 @@ export class RollPanel {
     const now = this.client.currentTime;
     if (this.startedAt === null || now === null) return this.from;
     let pos = this.from + Math.max(0, now - this.startedAt);
-    const { loop, bpm } = this.project;
+    const { loop } = this.project;
     if (loop.on) {
-      const a = beatsToSec(loop.start, bpm);
-      const b = beatsToSec(loop.end, bpm);
+      const a = beatsToSec(loop.start, this.project);
+      const b = beatsToSec(loop.end, this.project);
       if (this.from < b && pos >= b && b > a) pos = a + ((pos - b) % (b - a));
     }
     return pos;
   }
 
   private currentBeat(): number {
-    return secToBeats(this.currentSec(), this.project.bpm);
+    return secToBeats(this.currentSec(), this.project);
   }
 
   private lastBeat(): number {
@@ -1284,7 +1348,7 @@ export class RollPanel {
       this.stop();
       return;
     }
-    const endSec = beatsToSec(this.lastBeat(), this.project.bpm);
+    const endSec = beatsToSec(this.lastBeat(), this.project);
     if (!this.project.loop.on && this.from >= endSec) this.from = 0;
     this.start();
   }
@@ -1307,7 +1371,7 @@ export class RollPanel {
         return;
       }
       this.roll.setPlayhead(beat, true);
-      this.showPosition(beatsToSec(beat, this.project.bpm));
+      this.showPosition(beatsToSec(beat, this.project));
       this.frame = requestAnimationFrame(tick);
     };
     this.frame = requestAnimationFrame(tick);
@@ -1329,7 +1393,7 @@ export class RollPanel {
     this.client.setTempo(this.restingBpm());
     this.playButton.textContent = "▶ 再生";
     this.summarize();
-    this.roll.setPlayhead(secToBeats(this.from, this.project.bpm));
+    this.roll.setPlayhead(secToBeats(this.from, this.project));
     this.showPosition(this.from);
     this.onPlayingChange(false);
   }
@@ -1337,7 +1401,7 @@ export class RollPanel {
   // ------------------------------------------------------------- the screen
 
   private showPosition(sec: number): void {
-    const beat = secToBeats(sec, this.project.bpm);
+    const beat = secToBeats(sec, this.project);
     if (!this.seeking) {
       this.refreshSeekRange(beat);
       this.seekBar.value = String(beat);

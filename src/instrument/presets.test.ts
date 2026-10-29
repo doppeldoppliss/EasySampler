@@ -14,8 +14,8 @@ describe("presets: each a full starting point", () => {
     expect(afterShort.sustainMode).toBe("pool");
     expect(afterShort.flatten).toBe(1);
     // Every preset gives the same result whatever came before.
-    for (const id of ["synth", "short", "transpose", "decay"]) {
-      const results = ["synth", "short", "transpose", "decay"].map((before) => JSON.stringify(apply(id, apply(before, base))));
+    for (const id of ["synth", "short", "transpose", "decay", "once"]) {
+      const results = ["synth", "short", "transpose", "decay", "once"].map((before) => JSON.stringify(apply(id, apply(before, base))));
       expect(new Set(results).size).toBe(1);
     }
   });
@@ -41,6 +41,15 @@ describe("作り方", () => {
     // 頭部だけ, then back.
     const back = withMakeMode({ ...one, sustainEnabled: false }, "hold");
     expect([back.sustainMode, back.pitchMode, back.sustainEnabled, back.flatten]).toEqual(["wavetable", "resample", true, 0.4]);
+  });
+
+  it("移調 is a one-shot that leaves the pitch shaping set but unused; 伸ばす clears it", () => {
+    const shaped: InstrumentParams = { ...DEFAULT_PARAMS, flatten: 0.7 };
+    const tr = withMakeMode({ ...withMakeMode(shaped, "oneshot"), sustainEnabled: false }, "transpose");
+    expect([makeModeOf(tr), tr.transposeOnly, tr.sustainMode, tr.sustainEnabled, tr.flatten]).toEqual(["transpose", true, "none", false, 0.7]);
+    expect(makeModeOf(withMakeMode(tr, "oneshot"))).toBe("oneshot");
+    const back = withMakeMode(tr, "hold");
+    expect([makeModeOf(back), back.transposeOnly]).toEqual(["hold", false]);
   });
 
   it("an older file with the sustain switched off while drawn out opens as a one-shot of the head", () => {

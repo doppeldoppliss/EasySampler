@@ -612,3 +612,20 @@ describe("離したら止める (stopOnRelease)", () => {
     expect(window(off)).toBeLessThan(1e-4);
   });
 });
+
+describe("移調 (transposeOnly)", () => {
+  it("moves the pitch as a whole: 平坦化 and 細かい揺れ set or not, the same sound as flatten 0", () => {
+    const voice = synthVoice({ sampleRate: SR, durationSec: 0.8, pitch: (t) => 57 + 0.8 * Math.sin(2 * Math.PI * 1.5 * t) });
+    const base = { sustainMode: "none" as const, flatten: 0, wobble: { ...DEFAULT_PARAMS.wobble, micro: false } };
+    const plain = play(setup(voice, base).engine, 60, 0.6, 0.4);
+    const tr = play(setup(voice, { ...base, transposeOnly: true, flatten: 1, wobble: { ...DEFAULT_PARAMS.wobble, micro: true } }).engine, 60, 0.6, 0.4);
+    let diff = 0;
+    for (let i = 0; i < plain.length; i++) diff = Math.max(diff, Math.abs(plain[i] - tr[i]));
+    expect(diff).toBeLessThan(1e-6);
+    // (Flattened, it differs.)
+    const flat = play(setup(voice, { ...base, flatten: 1 }).engine, 60, 0.6, 0.4);
+    let d2 = 0;
+    for (let i = 0; i < plain.length; i++) d2 = Math.max(d2, Math.abs(plain[i] - flat[i]));
+    expect(d2).toBeGreaterThan(0.01);
+  });
+});

@@ -778,7 +778,8 @@ const vibratoPanel = el("details", { className: "sub" }, [
 // 作り方: the first choice, deciding which settings below are shown (design.md 4.5).
 const makeSelect = el("select", { ariaLabel: "作り方" }, [
   el("option", { value: "hold", textContent: "伸ばす(シンセ化。押している間伸びる)" }),
-  el("option", { value: "oneshot", textContent: "そのまま 1 回(ワンショット。録音を最後まで 1 回鳴らす)" }),
+  el("option", { value: "transpose", textContent: "移調(録音を 1 回、全体の音程を上げ下げ。平坦化しない)" }),
+  el("option", { value: "oneshot", textContent: "1 回鳴らす(伸ばさない。平坦化などで音程を整える)" }),
 ]);
 makeSelect.addEventListener("change", () => {
   update((p) => Object.assign(p, withMakeMode(p, makeSelect.value as MakeMode)));
@@ -810,6 +811,9 @@ const holdOnly: HTMLElement[] = [];
 const oneShotOnly: HTMLElement[] = [];
 const held = (e: HTMLElement) => (holdOnly.push(e), e);
 const oneShot = (e: HTMLElement) => (oneShotOnly.push(e), e);
+// The pitch shaping (平坦化 and the rest): not for 移調.
+const shapingOnly: HTMLElement[] = [];
+const shaping = (e: HTMLElement) => (shapingOnly.push(e), e);
 let wavetableRow: HTMLElement;
 let releaseRow: HTMLElement;
 /** The 作り方 → which settings are shown, and what the chosen ones do. */
@@ -831,7 +835,13 @@ function refreshMakeMode(): void {
   };
   sustainHelp.textContent = texts[params.sustainMode] ?? "";
   const end = params.stopOnRelease ? "離した所から「リリース」の長さで消えます。" : "押している長さに関係なく最後まで鳴ります。";
-  makeHelp.textContent = hold ? "押している間は持続区間で伸ばし、離すと「リリース」の長さで消えます。" : `録音を 1 回、音名の高さで鳴らします。${end}`;
+  makeHelp.textContent = hold
+    ? "押している間は持続区間で伸ばし、離すと「リリース」の長さで消えます。"
+    : mode === "transpose"
+      ? "録音を 1 回、抑揚はそのままに全体を音名の高さへ上げ下げします。" + end
+      : "伸ばさずに録音を 1 回鳴らし、音程は平坦化などで整えます。" + end;
+  // 移調: the pitch shaping is not applied, so it is not shown.
+  for (const e of shapingOnly) e.hidden = mode === "transpose";
   // 速度連動 (細かい設定): the pitch is the speed, so the pitch shaping is dimmed, with a note.
   const resample = params.pitchMode === "resample";
   pitchModeNote.hidden = !resample;
@@ -888,14 +898,14 @@ const tunePanel = el("section", { className: "panel tune" }, [
   // How a held note ends (語尾 was taken out: this is it).
   (releaseRow = range("離したあとの消え方(リリース)", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms)),
   pitchModeNote,
-  pitchGroup([
+  shaping(pitchGroup([
     range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
     select("音程の整え方", [["flatten", "判定した 1 音に寄せる"], ["scale", "音階の最寄りの音に、場所ごとに寄せる(複数の音を残す)"]], () => params.tune.mode, (p, v) => (p.tune.mode = v)),
     tuneScaleRow,
     range("音程を寄せる速さ(リチューン)", 0, 0.3, 0.005, () => params.tune.retuneSec, (p, v) => (p.tune.retuneSec = v), (v) => (v === 0 ? "即座(ケロケロ向き)" : ms(v))),
     el("p", { className: "fine help", textContent: "判定した高さから音名へ寄せるときの速さ(Auto-Tune の Retune Speed)。即座だと貼り付いたように、30 ms 前後だと自然に、長いとゆっくりした狂いだけが直ります。" }),
     el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなし・リチューン即座でケロケロになります。" }),
-  ]),
+  ])),
   held(range("持続部の音量を揃える", 0, 1, 0.05, () => params.levelEven, (p, v) => (p.levelEven = v), pct, true)),
   held(el("p", { className: "fine help", textContent: "素材の持続区間が減衰していても、伸ばした音の音量が一定になります。0% で録音どおりの強弱(頭部は常にそのまま)。" })),
   pitchGroup([
@@ -1403,13 +1413,13 @@ const detailsPanel = el("details", { className: "panel params" }, [
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "揺らぎ(ビブラートは上の「ビブラート」で)" }),
-      pitchGroup([
+      shaping(pitchGroup([
         range("素材のゆっくりした揺れ(ドリフト)を残す", -1, 1, 0.05, () => params.wobble.keepDrift, (p, v) => (p.wobble.keepDrift = v), (v) => (v < 0 ? `反転 ${Math.round(-v * 100)}%` : pct(v))),
         range("素材の速い揺れ(ビブラート)を残す", -1, 1, 0.05, () => params.wobble.keepModulation, (p, v) => (p.wobble.keepModulation = v), (v) => (v < 0 ? `反転 ${Math.round(-v * 100)}%` : pct(v))),
         el("p", { className: "fine help", textContent: "Melodyne のピッチドリフト / ピッチモジュレーションにあたります。平坦化が 100% だとどちらも消えるので、平坦化を下げてから効かせます。マイナスで揺れが逆向きになります。" }),
-      ]),
+      ])),
       range("足すゆっくりした揺れ", 0, 30, 1, () => params.wobble.driftCents, (p, v) => (p.wobble.driftCents = v), (v) => `${v}¢`),
-      pitchGroup([check("細かい揺れ(平坦でも機械的にしない)", () => params.wobble.micro, (p, v) => (p.wobble.micro = v))]),
+      shaping(pitchGroup([check("細かい揺れ(平坦でも機械的にしない)", () => params.wobble.micro, (p, v) => (p.wobble.micro = v))])),
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "エンベロープ" }),
@@ -2522,16 +2532,17 @@ function refreshExport(): void {
   built = null;
 
   if (markers) {
+    const flatten = params.transposeOnly ? 0 : params.flatten;
     editor.setParts({ sustain: params.sustainEnabled, tail: params.tail.enabled && params.tail.limit !== "none" });
     const shaper =
-      params.tune.mode === "scale"
+      params.tune.mode === "scale" && !params.transposeOnly
         ? (p: number) => {
             const transposed = p + (note - params.root);
             return transposed - params.flatten * (transposed - quantizeToScale(transposed, params.tune.scale, params.tune.key));
           }
         : null;
     // (録音した高さで鳴らす: the output stays at the recording's own pitch, whatever the note.)
-    editor.setState(markers, params.root, params.flatten, params.fixedPitch ? params.root : note, params.fixedPitch ? null : shaper);
+    editor.setState(markers, params.root, flatten, params.fixedPitch ? params.root : note, params.fixedPitch ? null : shaper);
     refreshFadeGrips();
     editor.setLayout(
       outputLayout(markers, params, held),
@@ -3022,7 +3033,7 @@ function applySettings(file: SettingsFile, analysed = false): void {
     // The preset as saved; an older file without one gets the first preset its settings still match.
     const saved = c.presetId === "" || PRESETS.some((p) => p.id === c.presetId) ? (c.presetId as PresetId | "") : undefined;
     const preset = saved ?? PRESETS.find((p) => JSON.stringify(p.apply(structuredClone(c.params))) === JSON.stringify(c.params))?.id ?? "";
-    return { ...c, markers: m, params: { ...c.params, maxVoices: DEFAULT_PARAMS.maxVoices }, presetId: preset, detectedRoot: detected?.midi ?? null };
+    return { ...c, markers: m, params: { ...c.params, maxVoices: DEFAULT_PARAMS.maxVoices, transposeOnly: c.params.transposeOnly || ((preset === "transpose" || preset === "short") && c.params.sustainMode === "none") }, presetId: preset, detectedRoot: detected?.midi ?? null };
   });
   current = file.currentCut;
   exportSettings = file.export;

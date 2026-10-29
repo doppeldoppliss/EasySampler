@@ -789,7 +789,8 @@ export class Engine {
     } else if (voiced) {
       const f0 = this.f0[k];
       let correction = 0;
-      if (Number.isFinite(f0)) {
+      // (移調: the contour is left as recorded; only the shift moves it.)
+      if (Number.isFinite(f0) && !params.transposeOnly) {
         // The target in the material's own pitch space: the root, or the nearest scale note of the pitch as played.
         let target = params.root;
         if (params.tune.mode === "scale") {
@@ -819,7 +820,7 @@ export class Engine {
       spacing = Number.isFinite(f0) ? this.sampleRate / (440 * 2 ** ((f0 + offset - 69) / 12)) : period * 2 ** (-offset / 12);
       alpha = this.formantAlpha(shift);
       gain = Math.sqrt((spacing * alpha) / period);
-      if (params.wobble.micro) {
+      if (params.wobble.micro && !params.transposeOnly) {
         spacing *= 1 + (this.random() * 2 - 1) * JITTER;
         gain *= 1 + (this.random() * 2 - 1) * SHIMMER;
       }

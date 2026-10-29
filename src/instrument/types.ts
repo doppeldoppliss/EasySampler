@@ -11,13 +11,14 @@ import type { ScaleId } from "./scale";
 export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
 export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
-export type PresetId = "synth" | "short" | "transpose" | "decay";
+export type PresetId = "synth" | "short" | "transpose" | "decay" | "once";
 /**
  * 作り方: the first choice for a cut, deciding which settings mean anything (and are shown).
- * hold = drawn out while held (シンセ化); oneshot = the recording once, at the note.
- * (How the pitch is changed, 長さ保持 or 速度連動, is a 細かい設定 of either.)
+ * hold = drawn out while held (シンセ化); transpose = the recording once, its whole pitch moved up or down
+ * as it is (no flattening); oneshot = the recording once, its pitch shaped (平坦化 and the rest).
+ * (How the pitch is changed, 長さ保持 or 速度連動, is a 細かい設定 of each.)
  */
-export type MakeMode = "hold" | "oneshot";
+export type MakeMode = "hold" | "transpose" | "oneshot";
 
 /** Seconds within the material, [start, end). */
 export interface TimeRange {
@@ -101,6 +102,11 @@ export interface InstrumentParams {
   sustainMode: SustainMode;
   /** The 伸ばし方 of 伸ばす, kept while the cut is a one-shot so that going back finds it. */
   heldSustainMode: Exclude<SustainMode, "none">;
+  /**
+   * 移調 (a one-shot only): the pitch is moved as a whole, its contour untouched — the pitch shaping
+   * (平坦化, 音程の整え方, リチューン, the kept wobble, 細かい揺れ) is not applied, whatever it is set to.
+   */
+  transposeOnly: boolean;
   /** Wavetable sustain: how many consecutive periods are cycled (1 = one period over and over). */
   wavetableCycles: number;
   /**
@@ -220,6 +226,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   sustainEnabled: true,
   sustainMode: "pool",
   heldSustainMode: "pool",
+  transposeOnly: false,
   wavetableCycles: 1,
   stretch: { head: 1, sustain: 1, tail: 1 },
   // 語尾 is no more (2026-10-28): a held note ends with the release; a one-shot plays its recording out.
@@ -241,14 +248,25 @@ export function oneShotParams(p: InstrumentParams): InstrumentParams {
 
 /** The 作り方 a cut's settings amount to. */
 export function makeModeOf(p: InstrumentParams): MakeMode {
-  return p.sustainMode !== "none" && p.sustainEnabled ? "hold" : "oneshot";
+  if (p.sustainMode !== "none" && p.sustainEnabled) return "hold";
+  return p.transposeOnly ? "transpose" : "oneshot";
 }
 
-/** The other 作り方, everything else kept: leaving 伸ばす remembers its 伸ばし方, coming back puts it back. */
+/**
+ * Another 作り方, everything else kept: leaving 伸ばす remembers its 伸ばし方, coming back puts it back
+ * (between the two one-shots, 鳴らす範囲 goes along).
+ */
 export function withMakeMode(p: InstrumentParams, mode: MakeMode): InstrumentParams {
-  if (makeModeOf(p) === mode) return p;
-  if (mode === "hold") return { ...p, sustainEnabled: true, sustainMode: p.heldSustainMode };
-  return { ...p, sustainEnabled: true, sustainMode: "none", heldSustainMode: p.sustainMode === "none" ? p.heldSustainMode : p.sustainMode };
+  const from = makeModeOf(p);
+  if (from === mode) return p;
+  if (mode === "hold") return { ...p, sustainEnabled: true, sustainMode: p.heldSustainMode, transposeOnly: false };
+  return {
+    ...p,
+    sustainEnabled: from === "hold" ? true : p.sustainEnabled,
+    sustainMode: "none",
+    heldSustainMode: p.sustainMode === "none" ? p.heldSustainMode : p.sustainMode,
+    transposeOnly: mode === "transpose",
+  };
 }
 
 export interface Preset {
@@ -278,6 +296,7 @@ function presetBase(p: InstrumentParams): InstrumentParams {
     sustainEnabled: true,
     sustainMode: "pool",
     heldSustainMode: "pool",
+    transposeOnly: false,
     stretch: { ...d.stretch },
     wobble: { ...d.wobble },
     amp: { ...d.amp, attack: p.amp.attack, fadeOut: p.amp.fadeOut, velocitySens: p.amp.velocitySens },
@@ -290,9 +309,11 @@ export const PRESETS: Preset[] = [
   { id: "synth", mode: "hold", label: "シンセ化(平坦)", apply: (p) => presetBase(p) },
   // Not synth-ified at all: the whole cut plays through once, as recorded, moved up or down to the key pressed
   // (a pitch shift that keeps the length and the voice's colour; nothing is held or evened out).
-  { id: "transpose", mode: "oneshot", label: "移調のみ(シンセ化せず全体を上げ下げ)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", levelEven: 0, wobble: { ...DEFAULT_PARAMS.wobble, micro: false } }) },
+  { id: "transpose", mode: "transpose", label: "移調のみ(全体をそのまま上げ下げ)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", transposeOnly: true, levelEven: 0, wobble: { ...DEFAULT_PARAMS.wobble, micro: false } }) },
   // Short material (a shout, a word): played through once at the note, nothing stretched — the 音MAD staple.
-  { id: "short", mode: "oneshot", label: "短い素材(子音・息も音程に合わせる)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", unvoicedFollow: true }) },
+  { id: "short", mode: "transpose", label: "短い素材(子音・息も音程に合わせる)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", transposeOnly: true, unvoicedFollow: true }) },
+  // Flattened on the note like シンセ化, but not drawn out: the recording once.
+  { id: "once", mode: "oneshot", label: "平坦にして 1 回(伸ばさない)", apply: (p) => ({ ...presetBase(p), sustainMode: "none" }) },
   // A struck, piano-like sound from any material: synthesized (flat, the vowel drawn out) and dying away while held —
   // the level falls toward nothing (decay ~1.2 s, sustain 0) — and stopped quickly when let go, as a damper does.
   { id: "decay", mode: "hold", label: "減衰(伸ばしながら消える・ピアノ風)", apply: (p) => { const b = presetBase(p); return { ...b, amp: { ...b.amp, decay: 1.2, sustain: 0, release: 0.25 } }; } },

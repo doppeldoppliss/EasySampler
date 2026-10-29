@@ -141,6 +141,8 @@ function sanitizeParams(raw: unknown): InstrumentParams {
     p.heldSustainMode = p.sustainMode;
     p.sustainMode = "none";
   }
+  // (移調 is a one-shot's.)
+  if (p.sustainMode !== "none") p.transposeOnly = false;
   return p;
 }
 
@@ -161,6 +163,7 @@ function readParams(raw: unknown): InstrumentParams {
     unvoicedFollow: typeof raw.unvoicedFollow === "boolean" ? raw.unvoicedFollow : d.unvoicedFollow,
     fixedPitch: raw.fixedPitch === true,
     stopOnRelease: raw.stopOnRelease === true,
+    transposeOnly: raw.transposeOnly === true,
     levelEven: clamp(num(raw.levelEven, d.levelEven), 0, 1),
     formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
     // (Older files stored on / off.)

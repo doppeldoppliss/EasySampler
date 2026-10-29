@@ -14,8 +14,8 @@ describe("presets: each a full starting point", () => {
     expect(afterShort.sustainMode).toBe("pool");
     expect(afterShort.flatten).toBe(1);
     // Every preset gives the same result whatever came before.
-    for (const id of ["synth", "short", "transpose", "decay", "sfx"]) {
-      const results = ["synth", "short", "transpose", "decay", "sfx"].map((before) => JSON.stringify(apply(id, apply(before, base))));
+    for (const id of ["synth", "short", "transpose", "decay"]) {
+      const results = ["synth", "short", "transpose", "decay"].map((before) => JSON.stringify(apply(id, apply(before, base))));
       expect(new Set(results).size).toBe(1);
     }
   });
@@ -34,14 +34,12 @@ describe("作り方", () => {
     for (const preset of PRESETS) expect(makeModeOf(preset.apply({ ...DEFAULT_PARAMS }))).toBe(preset.mode);
   });
 
-  it("leaving 伸ばす and coming back finds its 伸ばし方 and ピッチの変え方 again", () => {
+  it("leaving 伸ばす and coming back finds its 伸ばし方 again, the rest untouched", () => {
     const held: InstrumentParams = { ...DEFAULT_PARAMS, sustainMode: "wavetable", pitchMode: "resample", flatten: 0.4 };
     const one = withMakeMode(held, "oneshot");
-    expect([one.sustainMode, one.pitchMode, makeModeOf(one)]).toEqual(["none", "preserve-length", "oneshot"]);
-    const speed = withMakeMode({ ...one, sustainEnabled: false }, "speed");
-    // (The one-shot's 鳴らす範囲 goes along.)
-    expect([speed.pitchMode, speed.sustainEnabled, makeModeOf(speed)]).toEqual(["resample", false, "speed"]);
-    const back = withMakeMode(speed, "hold");
+    expect([one.sustainMode, one.pitchMode, makeModeOf(one)]).toEqual(["none", "resample", "oneshot"]);
+    // 頭部だけ, then back.
+    const back = withMakeMode({ ...one, sustainEnabled: false }, "hold");
     expect([back.sustainMode, back.pitchMode, back.sustainEnabled, back.flatten]).toEqual(["wavetable", "resample", true, 0.4]);
   });
 

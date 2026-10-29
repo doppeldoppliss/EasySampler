@@ -28,6 +28,7 @@ import {
   DEFAULT_FX,
   DEFAULT_PARAMS,
   PRESETS,
+  oneShotParams,
   makeModeOf,
   withMakeMode,
   type MakeMode,
@@ -777,8 +778,7 @@ const vibratoPanel = el("details", { className: "sub" }, [
 // 作り方: the first choice, deciding which settings below are shown (design.md 4.5).
 const makeSelect = el("select", { ariaLabel: "作り方" }, [
   el("option", { value: "hold", textContent: "伸ばす(シンセ化。押している間伸びる)" }),
-  el("option", { value: "oneshot", textContent: "そのまま 1 回(ワンショット。長さはそのまま音程だけ変える)" }),
-  el("option", { value: "speed", textContent: "早回し(効果音・ドラム。高さとともに速さも変わる)" }),
+  el("option", { value: "oneshot", textContent: "そのまま 1 回(ワンショット。録音を最後まで 1 回鳴らす)" }),
 ]);
 makeSelect.addEventListener("change", () => {
   update((p) => Object.assign(p, withMakeMode(p, makeSelect.value as MakeMode)));
@@ -831,17 +831,11 @@ function refreshMakeMode(): void {
   };
   sustainHelp.textContent = texts[params.sustainMode] ?? "";
   const end = params.stopOnRelease ? "離した所から「リリース」の長さで消えます。" : "押している長さに関係なく最後まで鳴ります。";
-  makeHelp.textContent = hold
-    ? "押している間は持続区間で伸ばし、離すと「リリース」の長さで消えます。"
-    : mode === "oneshot"
-      ? `録音を 1 回、長さを変えずに音名の高さで鳴らします。${end}`
-      : `録音を早回し・遅回しして高さを変えます(高いほど短く)。${end}`;
-  // 早回し: the pitch is the speed, so the pitch shaping, the formant and the voiceless handling are not there at all;
-  // 伸ばす with 速度連動 chosen in 細かい設定 shows them dimmed, with a note.
+  makeHelp.textContent = hold ? "押している間は持続区間で伸ばし、離すと「リリース」の長さで消えます。" : `録音を 1 回、音名の高さで鳴らします。${end}`;
+  // 速度連動 (細かい設定): the pitch is the speed, so the pitch shaping is dimmed, with a note.
   const resample = params.pitchMode === "resample";
-  pitchModeNote.hidden = !(hold && resample);
+  pitchModeNote.hidden = !resample;
   for (const group of pitchGroups) {
-    group.hidden = mode === "speed";
     group.classList.toggle("unused", resample);
     group.inert = resample;
   }
@@ -1400,8 +1394,7 @@ const detailsPanel = el("details", { className: "panel params" }, [
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "鳴らし方" }),
-      // (The one-shots set it by their 作り方.)
-      held(select("ピッチの変え方", [["preserve-length", "長さ保持(PSOLA)"], ["resample", "速度連動(昔ながら)"]], () => params.pitchMode, (p, v) => (p.pitchMode = v))),
+      select("ピッチの変え方", [["preserve-length", "長さ保持(PSOLA)"], ["resample", "速度連動(昔ながら)"]], () => params.pitchMode, (p, v) => (p.pitchMode = v)),
       pitchGroup([
         range("フォルマント", -6, 6, 0.1, () => params.formantSemitones, (p, v) => (p.formantSemitones = v), semis),
         range("±7 半音を超える移調で声質を追従させる", 0, 1, 0.05, () => params.formantFollow, (p, v) => (p.formantFollow = v), pct),
@@ -2361,8 +2354,8 @@ function cutFor(track: PitchTrack | null, m: Markers, name: string, base: Instru
     // Nothing pitched (a hit, a noise), or a one-shot by request: plays as recorded, from its own pitch (C4 when there is none).
     p.root = root?.midi ?? 60;
     p.rootMode = root ? "auto" : "manual";
-    Object.assign(p, PRESETS.find((x) => x.id === "sfx")!.apply(p));
-    preset = "sfx";
+    Object.assign(p, oneShotParams(p));
+    preset = "";
   }
   return { id: newCutId(), name, markers: m, params: p, note: Math.max(24, Math.min(96, Math.round(p.root))), noteMode: "auto", presetId: preset, detectedRoot: root?.midi ?? null };
 }

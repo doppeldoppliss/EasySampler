@@ -169,7 +169,6 @@ function readParams(raw: unknown): InstrumentParams {
     sustainEnabled: typeof raw.sustainEnabled === "boolean" ? raw.sustainEnabled : d.sustainEnabled,
     sustainMode: raw.sustainMode === "loop" || raw.sustainMode === "none" || raw.sustainMode === "wavetable" || raw.sustainMode === "stretch" ? raw.sustainMode : "pool",
     heldSustainMode: HELD_MODES.find((m) => m === raw.heldSustainMode) ?? (HELD_MODES.find((m) => m === raw.sustainMode) ?? d.heldSustainMode),
-    heldPitchMode: raw.heldPitchMode === "resample" ? "resample" : raw.heldPitchMode === "preserve-length" ? "preserve-length" : raw.sustainMode === "none" ? d.heldPitchMode : raw.pitchMode === "resample" ? "resample" : "preserve-length",
     wavetableCycles: clamp(Math.round(num(raw.wavetableCycles, d.wavetableCycles)), 1, 16),
     stretch: {
       head: clamp(num(isRecord(raw.stretch) ? raw.stretch.head : undefined, d.stretch.head), 0.25, 4),

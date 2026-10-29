@@ -271,7 +271,7 @@ export function withMakeMode(p: InstrumentParams, mode: MakeMode): InstrumentPar
 
 export interface Preset {
   id: PresetId;
-  /** The 作り方 it belongs to (the preset menu lists only the current one's). */
+  /** The 作り方 it belongs to (the first of each is that 作り方's 初期値). */
   mode: MakeMode;
   label: string;
   apply: (params: InstrumentParams) => InstrumentParams;
@@ -303,7 +303,11 @@ function presetBase(p: InstrumentParams): InstrumentParams {
   };
 }
 
-/** Starting points (design.md 4.5); the root and markers stay as they are. */
+/**
+ * Starting points (design.md 4.5), no longer chosen on screen (2026-10-29): the first of each 作り方 is its
+ * 初期値に戻す; the others start a new cut (decay: the built-in piano, short: a short material).
+ * The root and markers stay as they are.
+ */
 export const PRESETS: Preset[] = [
   // Synthesis: flat on the note, the vowel drawn out while held.
   { id: "synth", mode: "hold", label: "シンセ化(平坦)", apply: (p) => presetBase(p) },

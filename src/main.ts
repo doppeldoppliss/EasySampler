@@ -240,7 +240,6 @@ function update(change: (p: InstrumentParams) => void, keepPreset = false): void
   params = next;
   if (!keepPreset) {
     presetId = "";
-    presetSelect.value = "";
   }
   sendInstrument();
 }
@@ -676,34 +675,12 @@ function setNote(n: number, mode: "auto" | "manual"): void {
   refreshExport();
 }
 
-// The presets of the current 作り方 only (rebuilt when it changes).
-const presetSelect = el("select", { ariaLabel: "プリセット" });
-let presetOptionsMode: MakeMode | null = null;
-function refreshPresetOptions(): void {
-  const mode = makeModeOf(params);
-  if (mode !== presetOptionsMode) {
-    presetOptionsMode = mode;
-    presetSelect.replaceChildren(
-      el("option", { value: "", textContent: "(カスタム)" }),
-      ...PRESETS.filter((p) => p.mode === mode).map((p) => el("option", { value: p.id, textContent: p.label })),
-    );
-  }
-  presetSelect.value = presetId;
-}
-presetSelect.addEventListener("change", () => {
-  const preset = PRESETS.find((p) => p.id === presetSelect.value);
-  if (!preset) return;
-  // (A cut saved with the former 無加工 preset had its sustain and tail moved to its end: they are found again.)
-  const wasRaw = (presetId as string) === "raw";
-  presetId = preset.id;
-  params = preset.apply(structuredClone(params));
-  if (markers && material) {
-    if (wasRaw) {
-      // Back from it: the sustain and tail are found again within the cut.
-      const found = suggestMarkersWithin(material.analysis.track, markers.rangeStart, markers.rangeEnd);
-      markers = clampMarkers({ ...found, rangeStart: markers.rangeStart, rangeEnd: markers.rangeEnd, ...(markers.removed ? { removed: markers.removed } : {}) });
-    }
-  }
+// この作り方の初期値に戻す: the sound settings back to the 作り方's starting point (the first of its PRESETS),
+// keeping what is the user's (presetBase).
+const resetModeButton = button("この作り方の初期値に戻す", "small", () => {
+  const start = PRESETS.find((p) => p.mode === makeModeOf(params))!;
+  presetId = start.id;
+  params = start.apply(structuredClone(params));
   refreshControls();
   sendInstrument();
 });
@@ -816,14 +793,25 @@ const shapingOnly: HTMLElement[] = [];
 const shaping = (e: HTMLElement) => (shapingOnly.push(e), e);
 let wavetableRow: HTMLElement;
 let releaseRow: HTMLElement;
+let decayRow: HTMLElement;
+// 減衰 (the former preset): held notes die away while held, like a struck string, and stop quickly when let go (a damper).
+// On: ディケイ 1.2 s to サステイン 0, リリース 0.25 s; off: the level holds (サステイン 100%). Both are in 細かい設定 too.
+const decayCheck = check(
+  "押している間に消えていく(ピアノ風の減衰)",
+  () => params.amp.sustain < 1,
+  (p, on) => (p.amp = on ? { ...p.amp, decay: 1.2, sustain: 0, release: 0.25 } : { ...p.amp, decay: DEFAULT_PARAMS.amp.decay, sustain: 1, release: DEFAULT_PARAMS.amp.release }),
+  true,
+);
+// (The release and the decay length follow it.)
+decayCheck.querySelector("input")!.addEventListener("change", () => refreshControls());
 /** The 作り方 → which settings are shown, and what the chosen ones do. */
 function refreshMakeMode(): void {
   const mode = makeModeOf(params);
   const hold = mode === "hold";
-  refreshPresetOptions();
   for (const e of holdOnly) e.hidden = !hold;
   for (const e of oneShotOnly) e.hidden = hold;
   wavetableRow.hidden = !hold || params.sustainMode !== "wavetable";
+  decayRow.hidden = !hold || params.amp.sustain >= 1;
   // (A one-shot only fades where it is let go with 離したら止める.)
   releaseRow.hidden = !hold && !params.stopOnRelease;
   sustainStretchRow.hidden = hold || !params.sustainEnabled;
@@ -875,8 +863,8 @@ const tunePanel = el("section", { className: "panel tune" }, [
   fixedPitchNote,
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "作り方" }), makeSelect]),
   makeHelp,
-  el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "プリセット" }), presetSelect]),
-  el("p", { className: "fine help", textContent: "作り方ごとの出発点です。選ぶと音の設定がそのプリセットの形に戻ります(音名・入りと終わりのフェード・ベロシティ感度・フォルマント・「録音した高さで鳴らす」「鍵を離したらそこで止める」はそのまま)。つまみを動かすと「(カスタム)」になります。作り方を切り替えても、ほかの設定はそのまま残ります。" }),
+  el("div", { className: "row tight" }, [resetModeButton]),
+  el("p", { className: "fine help", textContent: "作り方を切り替えても、ほかの設定はそのまま残ります。「初期値に戻す」は音の設定をこの作り方の初期値にします(音名・入りと終わりのフェード・ベロシティ感度・フォルマント・「録音した高さで鳴らす」「鍵を離したらそこで止める」はそのまま)。" }),
   held(
     select(
       "持続区間の伸ばし方",
@@ -896,6 +884,8 @@ const tunePanel = el("section", { className: "panel tune" }, [
   sustainStretchRow,
   oneShot(stopOnReleaseRow),
   // How a held note ends (語尾 was taken out: this is it).
+  held(decayCheck),
+  (decayRow = range("消えるまでの長さ(ディケイ)", 0.05, 10, 0.05, () => params.amp.decay, (p, v) => (p.amp.decay = v), ms)),
   (releaseRow = range("離したあとの消え方(リリース)", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms)),
   pitchModeNote,
   shaping(pitchGroup([
@@ -2408,7 +2398,6 @@ function applyCurrentCut(): void {
   presetId = cut.presetId;
   note = cut.note;
   noteMode = cut.noteMode;
-  presetSelect.value = presetId;
   rebuildCutSelect();
   cutName.value = cut.name;
   removeCutButton.disabled = cuts.length < 2;
@@ -3472,7 +3461,7 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
       freshCuts();
       applyCurrentCut();
     }
-    const shortNote = !restored && presetId === "short" ? " 伸ばせる部分が短いので「短い素材(長さ保持)」にしました。伸ばして使うならプリセットを「シンセ化」などに。" : "";
+    const shortNote = !restored && presetId === "short" ? " 伸ばせる部分が短いので、作り方を「移調」(子音・息も音程に合わせる)にしました。伸ばして使うなら作り方を「伸ばす」に。" : "";
     status.replaceChildren(text + (restored ? " 前回の設定を復元しました。" : "") + shortNote);
     if (restored && !kept) status.append(" ", button("最初から", "small", () => resetSettingsButton.click()));
     defineMaterialCuts();

@@ -195,13 +195,6 @@ export const DEFAULT_FX: FxSettings = {
   limiter: { on: false, gainDb: 3, ceilingDb: -1, releaseMs: 80 },
 };
 
-export interface Credit {
-  title: string;
-  url: string;
-  timecode: string;
-  memo: string;
-}
-
 /** Synth-ification (シンセ化) is the default: flat on the note, the vowel drawn out, a little life left in it. */
 export const DEFAULT_PARAMS: InstrumentParams = {
   root: 60,

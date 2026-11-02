@@ -1,13 +1,13 @@
 // The settings file (design.md 5): everything the user decided about a
 // material — the cuts with their markers and parameters, the export
-// settings, the credit — and nothing of the audio. Small enough to keep in
+// settings — and nothing of the audio. Small enough to keep in
 // localStorage per material (so reopening the same file restores it) and
 // to save / load as JSON by hand.
 
 import type { PitchCorrection } from "../analysis/corrections";
 import { normalizeRemoved } from "../instrument/layout";
 import { clampMarkers } from "../instrument/markers";
-import { DEFAULT_EXPORT, DEFAULT_FX, DEFAULT_PARAMS, type Credit, type ExportSettings, type FxBeats, type FxSettings, type InstrumentParams, type Markers } from "../instrument/types";
+import { DEFAULT_EXPORT, DEFAULT_FX, DEFAULT_PARAMS, type ExportSettings, type FxBeats, type FxSettings, type InstrumentParams, type Markers } from "../instrument/types";
 
 export interface CutSettings {
   /** Stable within its material: a track names the cut it plays by it. */
@@ -25,7 +25,6 @@ export interface SettingsFile {
   savedAt: string;
   material: { name: string; durationSec: number; sampleRate: number; channels: number };
   export: ExportSettings;
-  credit: Credit;
   cuts: CutSettings[];
   currentCut: number;
   /** Hand corrections to the pitch analysis (applied to the original analysis, in order). */
@@ -64,7 +63,6 @@ export function parseSettings(text: string): SettingsFile {
       channels: num(material.channels, 1),
     },
     export: exp,
-    credit: sanitizeCredit(raw.credit),
     cuts,
     currentCut: Math.max(0, Math.min(cuts.length - 1, Math.round(num(raw.currentCut, 0)))),
     corrections: sanitizeCorrections(raw.corrections),
@@ -298,11 +296,6 @@ function sanitizeExport(raw: unknown): ExportSettings {
   };
 }
 
-function sanitizeCredit(raw: unknown): Credit {
-  const r = isRecord(raw) ? raw : {};
-  const str = (v: unknown) => (typeof v === "string" ? v.slice(0, 2000) : "");
-  return { title: str(r.title), url: str(r.url), timecode: str(r.timecode), memo: str(r.memo) };
-}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);

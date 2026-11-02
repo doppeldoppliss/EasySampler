@@ -17,7 +17,7 @@ import { buildProjectFile, parseProjectFile, PROJECT_FILE_EXTENSION } from "./au
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, resample, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
 import type { PitchTrack } from "./analysis/pyin";
-import { buildBatch, buildOne, creditLine, type Built, type BuildInput } from "./export/build";
+import { buildBatch, buildOne, type Built, type BuildInput } from "./export/build";
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
 import { exportFileName, safeBaseName, stripExtension } from "./export/render";
 import { newCutId, parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
@@ -34,7 +34,6 @@ import {
   type MakeMode,
   destinationRate,
   exportLengthSec,
-  type Credit,
   type Destination,
   type ExportFormat,
   type ExportSettings,
@@ -124,7 +123,6 @@ let params: InstrumentParams = structuredClone(DEFAULT_PARAMS);
 let note = 60;
 let noteMode: "auto" | "manual" = "auto";
 let exportSettings: ExportSettings = structuredClone(DEFAULT_EXPORT);
-const credit: Credit = { title: "", url: "", timecode: "", memo: "" };
 /** The last file built, keyed by everything it depends on. */
 let built: { key: string; result: Built } | null = null;
 let building = false;
@@ -1236,19 +1234,6 @@ const exportPanel = el("details", { className: "panel export" }, [
 
 // ---------------------------------------------------------------- details: the fine settings
 
-const creditFields = (["title", "url", "timecode", "memo"] as const).map((key) => {
-  const labels = { title: "作品名", url: "URL", timecode: "時刻", memo: "メモ" };
-  const input = el("input", { type: key === "url" ? "url" : "text", value: credit[key] });
-  input.addEventListener("input", () => {
-    credit[key] = input.value;
-    built = null; // the credit is written into the file
-    scheduleSave();
-  });
-  return el("label", { className: "control" }, [el("span", { className: "control-label", textContent: labels[key] }), input]);
-});
-function setCreditInputs(): void {
-  (["title", "url", "timecode", "memo"] as const).forEach((key, i) => (creditFields[i].querySelector("input")!.value = credit[key]));
-}
 
 const settingsStatus = el("span", { className: "fine fix-status", role: "status" });
 // The analysis's pitch search range (探索範囲): pYIN's default is about G1–B5.
@@ -1297,7 +1282,7 @@ async function setPitchRange(range: { low: number; high: number } | null): Promi
 }
 const resetSettingsButton = button("設定を捨てて最初から", "small", () => {
   if (!material) return;
-  if (!confirm("区間・マーカー・手直し・書き出し設定をすべて捨てて、解析結果から作り直します(探索範囲と出典メモは残ります)。よろしいですか?(元に戻すで戻せます)")) return;
+  if (!confirm("区間・マーカー・手直し・書き出し設定をすべて捨てて、解析結果から作り直します(探索範囲は残ります)。よろしいですか?(元に戻すで戻せます)")) return;
   const hadCorrections = material.corrections.length > 0;
   material.corrections = [];
   freshCuts();
@@ -1311,7 +1296,6 @@ const resetSettingsButton = button("設定を捨てて最初から", "small", ()
 const benchButton = button("負荷を測る", "small", () => benchmark());
 const benchResult = el("span", { className: "fine" });
 
-materialPanel.append(el("details", { className: "sub credit" }, [el("summary", { textContent: "出典メモ(この素材の。親作品登録・クレジット用。曲や単音の WAV に書き込まれます)" }), ...creditFields]));
 
 const detailsPanel = el("details", { className: "panel params" }, [
   el("summary", { textContent: "細かい設定(基準ピッチ・鳴らし方・揺らぎ・最初から作り直す)" }),
@@ -1343,7 +1327,7 @@ const detailsPanel = el("details", { className: "panel params" }, [
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "最初から作り直す" }),
-      el("p", { className: "fine help", textContent: "この素材の区間・マーカー・手直し・書き出し設定を捨てて、解析結果から作り直します(探索範囲と出典メモは残ります)。" }),
+      el("p", { className: "fine help", textContent: "この素材の区間・マーカー・手直し・書き出し設定を捨てて、解析結果から作り直します(探索範囲は残ります)。" }),
       el("div", { className: "row tight" }, [resetSettingsButton, settingsStatus]),
     ]),
     location.search.includes("bench") ? el("div", { className: "row" }, [benchButton, benchResult]) : el("span"),
@@ -2421,7 +2405,7 @@ function exportSource(): PreparedSource {
 }
 
 function inputFor(cut: Cut, source: PreparedSource): BuildInput {
-  return { baseName: baseNameFor(cut), source, cut, settings: exportSettings, credit };
+  return { baseName: baseNameFor(cut), source, cut, settings: exportSettings };
 }
 
 const yieldToScreen = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -2430,7 +2414,7 @@ const yieldToScreen = () => new Promise<void>((resolve) => setTimeout(resolve, 0
 function currentKey(): string | null {
   if (!material || !cuts[current]) return null;
   syncCut();
-  return JSON.stringify([cuts[current], exportSettings, exportSource().sampleRate, credit]);
+  return JSON.stringify([cuts[current], exportSettings, exportSource().sampleRate]);
 }
 
 /** Builds the current cut's file (cached until something changes). */
@@ -2473,7 +2457,7 @@ function schedulePrebuild(): void {
 let builtAll: { key: string; result: Built } | null = null;
 function allKey(): string {
   syncCut();
-  return JSON.stringify(["all", material!.name, cuts, exportSettings, exportSource().sampleRate, credit]);
+  return JSON.stringify(["all", material!.name, cuts, exportSettings, exportSource().sampleRate]);
 }
 
 async function buildAll(): Promise<Built | null> {
@@ -2701,7 +2685,6 @@ function settingsBody(): Omit<SettingsFile, "app" | "version" | "savedAt"> {
   return {
     material: { name: material!.name, durationSec: material!.analysis.durationSec, sampleRate: material!.sampleRate, channels: material!.channels.length },
     export: exportSettings,
-    credit: { ...credit },
     cuts: cuts.map(({ id, name, markers: m, params: p, note: n, noteMode: mode }) => ({ id, name, markers: m, params: p, note: n, noteMode: mode })),
     currentCut: current,
     corrections: material!.corrections,
@@ -2863,8 +2846,6 @@ function applySettings(file: SettingsFile, analysed = false): void {
   });
   current = file.currentCut;
   exportSettings = file.export;
-  Object.assign(credit, file.credit);
-  setCreditInputs();
   applyCurrentCut();
   if (analysed) {
     refreshFixBar();
@@ -3040,26 +3021,6 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
   return out;
 }
 
-/**
- * The 出典メモ of every material the song plays (a cut on a track, or clips on an audio track), one line each
- * ("素材名: 作品名 / URL / 時刻 / メモ"); materials without one are left out.
- */
-function songCredits(project: ReturnType<typeof rollPanel.snapshot>): string[] {
-  const used = new Set<string>();
-  for (const t of project.tracks) {
-    if (t.kind === "melodic" && t.instrument?.includes("/")) used.add(t.instrument.split("/")[0]);
-    if (t.kind === "audio") for (const n of t.notes) if (n.clip) used.add(n.clip.material);
-  }
-  const lines: string[] = [];
-  for (const id of used) {
-    const entry = library.get(id);
-    if (!entry) continue;
-    const line = creditLine(entry.material === material ? credit : (entry.settings?.credit ?? { title: "", url: "", timecode: "", memo: "" }));
-    if (line) lines.push(`${entry.material.name}: ${line}`);
-  }
-  return lines;
-}
-
 /** A song file's name: the project's name and the time (e.g. 「新曲_20261028-1530」). */
 function songFileStamp(): string {
   const d = new Date();
@@ -3092,12 +3053,9 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
       })()
     : tempoMapSec(project);
   const stamp = songFileStamp() + (range ? "_loop" : "");
-  // The materials' 出典メモ go with the song: in the WAV's comment, and as a text file beside the stems.
-  const credits = kind === "mid" ? [] : songCredits(project);
-  const songInfo = { ISFT: "EasySampler", ...(credits.length ? { ICMT: `出典: ${credits.join(" ／ ")}` } : {}) };
-  const creditNote = credits.length ? `、出典 ${credits.length} 件入り` : "";
+  const songInfo = { ISFT: "EasySampler" };
   const window = range ? { fromSec: range.lengthSec, lengthSec: range.lengthSec } : undefined;
-  const key = JSON.stringify([kind, range, project, credits, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
+  const key = JSON.stringify([kind, range, project, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
   let built = songBuilt?.key === key ? songBuilt : null;
   if (!built) {
     songBuilding = true;
@@ -3117,7 +3075,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
         const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, range), tempoMap, window }, progress);
         const fileName = `${stamp}.wav`;
         const lowered = song.gain < 1 ? `。音割れしないよう全体を ${(20 * Math.log10(song.gain)).toFixed(1)} dB 下げました` : "";
-        built = { key, blob: new Blob([encodeWavBytes(song.channels, song.sampleRate, songInfo, undefined, { bits: 24 })], { type: "audio/wav" }), fileName, summary: `${(song.channels[0].length / song.sampleRate).toFixed(1)} 秒、${song.sampleRate / 1000} kHz / 24bit${creditNote}${lowered}` };
+        built = { key, blob: new Blob([encodeWavBytes(song.channels, song.sampleRate, songInfo, undefined, { bits: 24 })], { type: "audio/wav" }), fileName, summary: `${(song.channels[0].length / song.sampleRate).toFixed(1)} 秒、${song.sampleRate / 1000} kHz / 24bit${lowered}` };
       } else {
         // Every stem from 0, at one gain and one length: laid side by side they add up to the mix (without the master).
         const rendered: { name: string; channels: [Float32Array, Float32Array] }[] = [];
@@ -3137,9 +3095,8 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
         }
         const even = evenStems(rendered.map((r) => r.channels));
         const entries: ZipEntry[] = rendered.map((r, i) => ({ name: `${stamp}/${r.name}`, data: new Uint8Array(encodeWavBytes(even.stems[i], rate, songInfo, undefined, { bits: 24 })) }));
-        if (credits.length) entries.push({ name: `${stamp}/出典.txt`, data: new TextEncoder().encode(credits.join("\r\n") + "\r\n") });
         const lowered = even.gain < 1 ? `。音割れしないよう全部を同じだけ ${(20 * Math.log10(even.gain)).toFixed(1)} dB 下げました` : "";
-        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `${stamp}_トラック別.zip`, summary: `WAV ${rendered.length} 本(24bit、同じ長さ、各トラックのエフェクト込み・マスターなし${creditNote})${lowered}` };
+        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `${stamp}_トラック別.zip`, summary: `WAV ${rendered.length} 本(24bit、同じ長さ、各トラックのエフェクト込み・マスターなし)${lowered}` };
       }
       songBuilt = built;
     } catch (error) {
@@ -3344,8 +3301,6 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
 
 /** The sound a new project starts with: a synthesized piano note (C4), played as a decaying instrument. */
 async function loadPiano(): Promise<void> {
-  Object.assign(credit, { title: "EasySampler 内蔵ピアノ(合成音)", url: "", timecode: "", memo: "" });
-  setCreditInputs();
   longClip = null;
   pickerClip = null;
   rePickButton.hidden = true;

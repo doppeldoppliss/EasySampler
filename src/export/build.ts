@@ -5,7 +5,7 @@
 
 import { encodeWavBytes, type WavInfo } from "../audio/wav";
 import type { PreparedSource } from "../engine/engine";
-import { exportLengthSec, type Credit, type ExportSettings } from "../instrument/types";
+import { exportLengthSec, type ExportSettings } from "../instrument/types";
 import { applyLoop, LOOP_MIN_HOLD_SEC } from "./loop";
 import { dspresetText, planZones, readmeText, sfzText, type Zone } from "./multisample";
 import { exportFileName, fileNoteName, renderNote, safeBaseName, type Rendered } from "./render";
@@ -19,7 +19,6 @@ export interface BuildInput {
   source: PreparedSource;
   cut: CutSettings;
   settings: ExportSettings;
-  credit: Credit;
 }
 
 export interface Built {
@@ -34,27 +33,17 @@ export interface Built {
 
 export type Progress = (done: number, total: number) => Promise<void> | void;
 
-export function wavInfo(credit: Credit): WavInfo {
-  return {
-    INAM: credit.title,
-    IART: credit.url,
-    ICMT: [credit.timecode, credit.memo].filter(Boolean).join(" / "),
-    ISFT: "EasySampler",
-  };
-}
-
-export function creditLine(credit: Credit): string {
-  return [credit.title, credit.url, credit.timecode, credit.memo].filter((s) => s && s.trim()).join(" / ");
-}
+/** What the files say about themselves (INFO): the app that made them. */
+const WAV_INFO: WavInfo = { ISFT: "EasySampler" };
 
 /** The pieces of one cut in its chosen format: the files (relative paths) and a preview. */
 export async function buildEntries(input: BuildInput, progress?: Progress): Promise<{ entries: ZipEntry[]; preview: Rendered; summary: string }> {
-  const { source, cut, settings, credit } = input;
+  const { source, cut, settings } = input;
   const base = safeBaseName(input.baseName);
   // Nothing to hold (a one-shot, or the sustain switched off): one WAV, no length in its name.
   const oneShot = cut.params.sustainMode === "none" || !cut.params.sustainEnabled;
   const holdSec = exportLengthSec(settings);
-  const info = wavInfo(credit);
+  const info = WAV_INFO;
 
   if (settings.format === "wavetable" && !cut.params.sustainEnabled) {
     throw new Error("持続区間がオフなので、Vital 用ウェーブテーブルは作れません。「鳴らす部分」で持続区間を ON にしてください");
@@ -105,7 +94,7 @@ export async function buildEntries(input: BuildInput, progress?: Progress): Prom
     if (zone.note === cut.note) preview = rendered;
     await progress?.(i + 1, plan.length);
   }
-  const meta = { name: base, samplesDir, releaseSec: cut.params.amp.release, credit: creditLine(credit) || undefined };
+  const meta = { name: base, samplesDir, releaseSec: cut.params.amp.release };
   const encoder = new TextEncoder();
   entries.push(
     { name: `${base}/${base}.sfz`, data: encoder.encode(sfzText(zones, meta)) },

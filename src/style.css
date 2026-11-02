@@ -560,7 +560,6 @@ select,
   min-width: 0;
 }
 
-.credit .control,
 .params .control:has(select) {
   grid-template-columns: minmax(8em, 13em) minmax(0, 1fr);
 }
@@ -577,12 +576,6 @@ legend {
   font-weight: 700;
   margin-bottom: 4px;
   padding: 0;
-}
-
-details.credit summary {
-  cursor: pointer;
-  font-weight: 700;
-  margin-bottom: 6px;
 }
 
 /* The on-screen keyboard: absolute keys in a strip, all touch handled by script. */
@@ -934,10 +927,6 @@ body.keys-pinned {
 
 .keys-panel.pinned > .fine:last-child {
   display: none;
-}
-
-details.sub.credit > summary {
-  font-weight: 600;
 }
 
 /* 打ち込み: the piano roll. */

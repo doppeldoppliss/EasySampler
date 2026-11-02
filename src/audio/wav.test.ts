@@ -22,7 +22,7 @@ describe("encodeWav", () => {
     expect(bytes.getInt16(46, true)).toBeLessThan(0);
   });
 
-  it("carries the credit in a LIST/INFO chunk that reads back, with Japanese text and odd lengths", async () => {
+  it("carries INFO tags in a LIST/INFO chunk that reads back, with Japanese text and odd lengths", async () => {
     const info = { INAM: "デモ素材(合成音声「さー」)", IART: "https://example.com/watch/sm1", ICMT: "abc", ISFT: "MADDAW" };
     const blob = encodeWav([new Float32Array([0, 0.1, 0.2])], 44100, info);
     const bytes = await blob.arrayBuffer();
@@ -31,7 +31,7 @@ describe("encodeWav", () => {
     expect(readWavInfo(bytes)).toEqual(info);
   });
 
-  it("writes no LIST chunk when the credit is empty", async () => {
+  it("writes no LIST chunk when the tags are empty", async () => {
     const blob = encodeWav([new Float32Array([0, 0])], 44100, { INAM: "", ICMT: "  " });
     expect((await blob.arrayBuffer()).byteLength).toBe(44 + 4);
   });

@@ -20,8 +20,7 @@ function setup() {
   const analysis = analyzeMaterial([material], SR);
   const source = prepareSource([material], analysis, SR);
   const cut: CutSettings = { id: "c1", name: "区間 1", markers: analysis.markers, params: { ...DEFAULT_PARAMS, root: analysis.root!.midi }, note: 62, noteMode: "auto" };
-  const credit = { title: "テスト", url: "https://example.com/sm1", timecode: "0:12", memo: "" };
-  return { material, analysis, source, cut, credit };
+  return { material, analysis, source, cut };
 }
 
 describe("zip (store)", () => {
@@ -75,7 +74,7 @@ describe("multisample plan and definitions", () => {
 
   it("writes SFZ regions and dspreset samples with the loops", () => {
     const zones = planZones(60).map((z) => ({ ...z, fileName: `x_${z.note}.wav`, loop: z.note === 60 ? { start: 1000, end: 5000, crossfade: 100 } : null }));
-    const meta = { name: "x", samplesDir: "samples", releaseSec: 0.02, credit: "作品 / https://e.com" };
+    const meta = { name: "x", samplesDir: "samples", releaseSec: 0.02 };
     const sfz = sfzText(zones, meta);
     expect(sfz).toContain("default_path=samples/");
     expect(sfz).toContain("<region> sample=x_60.wav pitch_keycenter=60 lokey=59 hikey=61 loop_mode=loop_continuous loop_start=1000 loop_end=4999");
@@ -88,19 +87,19 @@ describe("multisample plan and definitions", () => {
 });
 
 describe("buildOne / buildBatch", () => {
-  it("single: a WAV with the credit and the unity note", async () => {
-    const { source, cut, credit } = setup();
-    const built = await buildOne({ baseName: "ore", source, cut, settings: { ...DEFAULT_EXPORT, format: "single" }, credit });
+  it("single: a WAV with the unity note", async () => {
+    const { source, cut } = setup();
+    const built = await buildOne({ baseName: "ore", source, cut, settings: { ...DEFAULT_EXPORT, format: "single" } });
     expect(built.fileName).toBe("ore_D4_2beat@120.wav");
     const chunks = readWavChunks(await built.blob.arrayBuffer());
-    expect(chunks.info.INAM).toBe("テスト");
+    expect(chunks.info.ISFT).toBe("EasySampler");
     expect(chunks.sampler?.unityNote).toBe(62);
     expect(chunks.sampler?.loop).toBeUndefined();
   });
 
   it("loop: a longer WAV with loop points in the smpl chunk", async () => {
-    const { source, cut, credit } = setup();
-    const built = await buildOne({ baseName: "ore", source, cut, settings: { ...DEFAULT_EXPORT, format: "loop" }, credit });
+    const { source, cut } = setup();
+    const built = await buildOne({ baseName: "ore", source, cut, settings: { ...DEFAULT_EXPORT, format: "loop" } });
     expect(built.fileName).toBe("ore_D4_loop.wav");
     const chunks = readWavChunks(await built.blob.arrayBuffer());
     expect(chunks.frames / SR).toBeGreaterThan(1.9);
@@ -109,9 +108,9 @@ describe("buildOne / buildBatch", () => {
   });
 
   it("multisample: a zip with one WAV per zone at its own pitch, the SFZ, the dspreset and a README", async () => {
-    const { source, cut, credit } = setup();
+    const { source, cut } = setup();
     const steps: number[] = [];
-    const built = await buildOne({ baseName: "ore", source, cut, settings: { ...DEFAULT_EXPORT, format: "multisample" }, credit }, (d) => void steps.push(d));
+    const built = await buildOne({ baseName: "ore", source, cut, settings: { ...DEFAULT_EXPORT, format: "multisample" } }, (d) => void steps.push(d));
     expect(built.fileName).toBe("ore.zip");
     expect(steps).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     const list = listZip(new Uint8Array(await built.blob.arrayBuffer()));
@@ -141,14 +140,14 @@ describe("buildOne / buildBatch", () => {
   });
 
   it("batch: every cut's file plus settings.json in one zip", async () => {
-    const { source, cut, credit, analysis } = setup();
+    const { source, cut, analysis } = setup();
     const second: CutSettings = { ...cut, name: "区間 2", note: 65 };
     const settings = { ...DEFAULT_EXPORT, format: "single" as const };
-    const json = serializeSettings({ material: { name: "ore", durationSec: analysis.durationSec, sampleRate: SR, channels: 1 }, export: settings, credit, cuts: [cut, second], currentCut: 0, corrections: [] });
+    const json = serializeSettings({ material: { name: "ore", durationSec: analysis.durationSec, sampleRate: SR, channels: 1 }, export: settings, cuts: [cut, second], currentCut: 0, corrections: [] });
     const built = await buildBatch(
       [
-        { baseName: "ore_区間 1", source, cut, settings, credit },
-        { baseName: "ore_区間 2", source, cut: second, settings, credit },
+        { baseName: "ore_区間 1", source, cut, settings },
+        { baseName: "ore_区間 2", source, cut: second, settings },
       ],
       json,
       "ore",
@@ -159,12 +158,12 @@ describe("buildOne / buildBatch", () => {
   });
 
   it("batch: two cuts with the same name do not land on the same path", async () => {
-    const { source, cut, credit } = setup();
+    const { source, cut } = setup();
     const settings = { ...DEFAULT_EXPORT, format: "single" as const };
     const built = await buildBatch(
       [
-        { baseName: "ore_a", source, cut, settings, credit },
-        { baseName: "ore_a", source, cut, settings, credit },
+        { baseName: "ore_a", source, cut, settings },
+        { baseName: "ore_a", source, cut, settings },
       ],
       null,
       "ore",
@@ -182,9 +181,9 @@ describe("buildOne / buildBatch", () => {
 
 describe("settings file", () => {
   it("round-trips, fills gaps from the defaults and rejects other files", () => {
-    const { cut, credit, analysis } = setup();
+    const { cut, analysis } = setup();
     const corrections = [{ start: 0.1, end: 0.2, kind: "octave-down" as const }];
-    const json = serializeSettings({ material: { name: "ore.mp4", durationSec: analysis.durationSec, sampleRate: SR, channels: 1 }, export: { ...DEFAULT_EXPORT, bpm: 165, format: "loop" }, credit, cuts: [cut], currentCut: 0, corrections });
+    const json = serializeSettings({ material: { name: "ore.mp4", durationSec: analysis.durationSec, sampleRate: SR, channels: 1 }, export: { ...DEFAULT_EXPORT, bpm: 165, format: "loop" }, cuts: [cut], currentCut: 0, corrections });
     const back = parseSettings(json);
     expect(back.material.name).toBe("ore.mp4");
     expect(back.export.bpm).toBe(165);
@@ -193,7 +192,6 @@ describe("settings file", () => {
     expect(back.cuts[0].params.wavetableCycles).toBe(1);
     expect(back.cuts[0].markers).toEqual(cut.markers);
     expect(back.cuts[0].params.flatten).toBe(1);
-    expect(back.credit.url).toBe("https://example.com/sm1");
 
     const sparse = parseSettings(JSON.stringify({ app: "MADDAW", version: 1, cuts: [{ markers: { rangeStart: 0, rangeEnd: 1, sustainStart: 0.3, sustainEnd: 0.6 }, params: { flatten: 2 } }], corrections: [{ start: 1, end: 0.5, kind: "voiced" }, { start: 0, end: 1, kind: "nonsense" }, "x"] }));
     expect(sparse.corrections).toEqual([]); // every one of those is malformed
@@ -223,17 +221,17 @@ describe("suggestMarkersWithin", () => {
 
 describe("exports with the sustain switched off", () => {
   it("a loop WAV becomes a single one-shot WAV (no length in the name, no loop)", async () => {
-    const { source, cut, credit } = setup();
+    const { source, cut } = setup();
     const off = { ...cut, params: { ...cut.params, sustainEnabled: false } };
-    const built = await buildOne({ baseName: "ore", source, cut: off, settings: { ...DEFAULT_EXPORT, format: "loop" }, credit });
+    const built = await buildOne({ baseName: "ore", source, cut: off, settings: { ...DEFAULT_EXPORT, format: "loop" } });
     expect(built.fileName).toBe("ore_D4.wav");
     const chunks = readWavChunks(await built.blob.arrayBuffer());
     expect(chunks.sampler?.loop).toBeUndefined();
   });
 
   it("refuses the Vital wavetable (it is made of the sustain)", async () => {
-    const { source, cut, credit } = setup();
+    const { source, cut } = setup();
     const off = { ...cut, params: { ...cut.params, sustainEnabled: false } };
-    await expect(buildOne({ baseName: "ore", source, cut: off, settings: { ...DEFAULT_EXPORT, format: "wavetable" }, credit })).rejects.toThrow(/持続区間がオフ/);
+    await expect(buildOne({ baseName: "ore", source, cut: off, settings: { ...DEFAULT_EXPORT, format: "wavetable" } })).rejects.toThrow(/持続区間がオフ/);
   });
 });

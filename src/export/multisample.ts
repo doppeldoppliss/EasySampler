@@ -38,14 +38,12 @@ export interface MultisampleMeta {
   /** Sample folder inside the instrument folder. */
   samplesDir: string;
   releaseSec: number;
-  credit?: string;
 }
 
 /** The SFZ text. Paths are relative to the .sfz file. */
 export function sfzText(zones: readonly Zone[], meta: MultisampleMeta): string {
   const lines = [
     `// ${meta.name} — made with EasySampler (a material synth-ified in the browser)`,
-    meta.credit ? `// source: ${meta.credit.replace(/\r?\n/g, " ")}` : "",
     "",
     "<control>",
     `default_path=${meta.samplesDir}/`,
@@ -74,7 +72,7 @@ export function dspresetText(zones: readonly Zone[], meta: MultisampleMeta): str
     .join("\n");
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
-    `<!-- ${esc(meta.name)} — made with EasySampler${meta.credit ? ` / source: ${esc(meta.credit.replace(/\r?\n/g, " ").replace(/--/g, "-"))}` : ""} -->`,
+    `<!-- ${esc(meta.name)} — made with EasySampler -->`,
     `<DecentSampler minVersion="1.0.0">`,
     `  <ui width="812" height="375" bgColor="FF1D1B26">`,
     `    <tab name="main">`,
@@ -107,7 +105,6 @@ export function readmeText(meta: MultisampleMeta, zones: readonly Zone[], kind: 
     "iPhone / iPad: この zip を .dslibrary に名前を変えて(EasySampler の読み込む先で Decent Sampler を選ぶと最初からその名前です)「ファイル」App からタップすると、Decent Sampler に取り込まれます。",
     "PC: Decent Sampler の File → Install DecentSampler Library で .dslibrary(zip)を選ぶか、展開して File → Load Preset で .dspreset を選びます。sforzando には .sfz をドラッグします。",
     "",
-    meta.credit ? `出典: ${meta.credit}` : "",
     "",
   ].join("\n");
 }

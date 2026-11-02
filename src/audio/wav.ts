@@ -1,6 +1,6 @@
 // 16-bit (or 24-bit) PCM WAV, mono or multichannel — what the app writes out. Optional
-// chunks: LIST/INFO with the credit (作品名 etc.), which samplers and editors
-// that read INFO tags show, and `smpl` with the root note and a loop, which
+// chunks: LIST/INFO tags (the app that made it, a name…), which samplers and
+// editors that read INFO tags show, and `smpl` with the root note and a loop, which
 // samplers read to hold a note indefinitely.
 
 /** INFO tags: 4-character ids (INAM = name, IART = artist/source, ICMT = comment, ISFT = software). */
@@ -151,7 +151,7 @@ function encodeSampler(sampler: WavSampler | undefined, sampleRate: number): Arr
   return buffer;
 }
 
-/** Reads the INFO tags and the sampler chunk back out of a WAV (for tests and for showing a file's credit). */
+/** Reads the INFO tags and the sampler chunk back out of a WAV (for tests). */
 export function readWavChunks(bytes: ArrayBuffer): { info: WavInfo; sampler?: WavSampler; clm?: string; frames: number; channels: number; sampleRate: number } {
   const view = new DataView(bytes);
   const tag = (at: number) => String.fromCharCode(view.getUint8(at), view.getUint8(at + 1), view.getUint8(at + 2), view.getUint8(at + 3));

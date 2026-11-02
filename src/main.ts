@@ -222,6 +222,11 @@ async function matchEngineRateOnce(): Promise<void> {
     m.exportSources.set(source.sampleRate, source);
     client.setSource(source, m.id);
   }
+  for (const [id, x] of longAudio) {
+    if (x.source.sampleRate === client.sampleRate) continue;
+    x.source = longSource(x.channels, x.sampleRate);
+    client.setSource(x.source, id);
+  }
   client.resendInstrument();
   rebuildKit(true);
 }
@@ -1605,6 +1610,7 @@ async function saveProjectFile(): Promise<void> {
     channels: m.channels,
     settings: material && m.id === material.id ? serializeSettings(settingsBody()) : settings ? serializeSettings(settings) : null,
   }));
+  for (const [id, x] of longAudio) materials.push({ id, name: x.name, sampleRate: x.sampleRate, channels: x.channels, settings: null });
   // The kit's recordings travel as materials without settings (the song's kit lists them; they never join the material list).
   for (const slot of rollPanel.kit.slots) {
     const audio = slot.sample ? kitAudio.get(slot.sample) : undefined;
@@ -1821,8 +1827,74 @@ function forgetKitAudioIfUnused(id: string | null): void {
 }
 rollPanel.kitSoundReady = (key) => kitBuffers.has(key);
 rollPanel.materialSeconds = (id) => {
-  const m = library.get(id)?.material;
+  const m = library.get(id)?.material ?? longAudio.get(id);
   return m ? m.channels[0].length / m.sampleRate : null;
+};
+
+// ---------------------------------------------------------------- 原曲・伴奏: long recordings for audio tracks
+
+/**
+ * A long recording (an original song, an off-vocal) placed on an audio track: decoded and kept like a material,
+ * but never analysed for pitch, never cut, never on the 素材 side. Played at the engine's rate as it is.
+ */
+const longAudio = new Map<string, { name: string; channels: Float32Array[]; sampleRate: number; source: PreparedSource }>();
+const LONG_AUDIO_MAX_SEC = IOS ? 300 : 1800;
+
+/** The recording at the engine's rate, as a source the audio thread's clip player reads (no pitch marks). */
+function longSource(channels: Float32Array[], sampleRate: number): PreparedSource {
+  const rate = client.sampleRate;
+  const resampled = rate === sampleRate ? channels : channels.map((c) => resample(c, rate / sampleRate));
+  return { sampleRate: rate, channels: resampled, marks: new Float64Array(0), voiced: new Uint8Array(0), f0: new Float32Array(0) };
+}
+
+function registerLongAudio(id: string, name: string, channels: Float32Array[], sampleRate: number): void {
+  const source = longSource(channels, sampleRate);
+  longAudio.set(id, { name, channels, sampleRate, source });
+  client.setSource(source, id);
+}
+
+/** Seconds of recordings the project holds (materials and long ones): an iPhone keeps to a limit. */
+function projectAudioSec(): number {
+  let total = 0;
+  for (const { material: x } of library.values()) total += x.channels[0].length / x.sampleRate;
+  for (const x of longAudio.values()) total += x.channels[0].length / x.sampleRate;
+  return total;
+}
+
+rollPanel.onPickLongAudio = (file) => void addLongAudio(file);
+async function addLongAudio(file: File): Promise<void> {
+  const say = (text: string) => (rollPanel.info.textContent = text);
+  try {
+    say(`「${file.name}」を読み込んでいます…`);
+    const { channels, sampleRate } = await decode(file);
+    const seconds = channels[0].length / sampleRate;
+    if (seconds > LONG_AUDIO_MAX_SEC) {
+      say(`「${file.name}」は長すぎます(${clock(seconds)})。${clock(LONG_AUDIO_MAX_SEC)}までにしてください。`);
+      return;
+    }
+    if (projectAudioSec() + seconds > (IOS ? PROJECT_AUDIO_LIMIT_SEC + 300 : Infinity)) {
+      say(`素材と長い音声の合計が iPhone / iPad で扱える長さを超えます。使っていない素材を外してから置いてください。`);
+      return;
+    }
+    const id = newCutId();
+    // (Kept as it was decoded: the engine's copy is made again whenever its rate changes.)
+    const kept = channels.map((c) => c.slice());
+    void keep(`audio:${id}`, { name: file.name, sampleRate, channels: kept });
+    askToPersist();
+    registerLongAudio(id, file.name, kept, sampleRate);
+    rollPanel.addLongAudio({ id, name: file.name }, seconds);
+  } catch (error) {
+    say(error instanceof TooLongError ? `読み込めませんでした: ${error.message}` : `読み込めませんでした(${formatHint(file)}): ${error instanceof Error ? error.message : error}`);
+  }
+}
+
+rollPanel.onRemoveLongAudio = (id) => {
+  const entry = longAudio.get(id);
+  if (!entry || !confirm(`「${entry.name}」をプロジェクトから外しますか?置いたクリップは鳴らなくなります。`)) return;
+  longAudio.delete(id);
+  client.setSource(null, id);
+  rollPanel.removeMaterial(id);
+  void rollPanel.flush().then(() => whenSaved()).then(() => forget(`audio:${id}`));
 };
 
 /** The longest a drum sound is kept (seconds): a hit, not a song. */
@@ -2987,7 +3059,7 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
     if (t.kind === "audio") {
       // Clips: their recordings (as the page has them). A loop range starting inside a clip starts it part-way.
       const seq = clipsToSeq(t.notes, project);
-      const clips = seq.clips.map((c) => ({ channels: library.get(c.material)?.material.source.channels ?? null, offsetSec: c.offsetSec }));
+      const clips = seq.clips.map((c) => ({ channels: library.get(c.material)?.material.source.channels ?? longAudio.get(c.material)?.source.channels ?? null, offsetSec: c.offsetSec }));
       let notes = seq.notes;
       if (range) {
         notes = notes.map((n) => {
@@ -3514,7 +3586,13 @@ void (async () => {
   rollPanel.onSaved = touchProject;
   refreshProjectButton();
   const project = await rollPanel.restore();
-  const order = [...project.materials].sort((a, b) => Number(a.id === project.editing) - Number(b.id === project.editing));
+  // The long recordings (原曲・伴奏) first: kept for the audio tracks, never analysed or opened in the editor.
+  for (const m of project.materials.filter((x) => x.long)) {
+    const audio = (await kept(`audio:${m.id}`)) as { name: string; sampleRate: number; channels: Float32Array[] } | undefined;
+    if (audio?.channels?.length) registerLongAudio(m.id, audio.name, audio.channels, audio.sampleRate);
+    else rollPanel.removeMaterial(m.id);
+  }
+  const order = [...project.materials].filter((x) => !x.long).sort((a, b) => Number(a.id === project.editing) - Number(b.id === project.editing));
   for (const m of order) {
     let audio = (await kept(`audio:${m.id}`)) as { name: string; sampleRate: number; channels: Float32Array[] } | undefined;
     if (!audio?.channels?.length) {

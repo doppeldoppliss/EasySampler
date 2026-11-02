@@ -249,6 +249,13 @@ export class RollPanel {
     dup: button("トラックを複製", "small", () => this.duplicateTrack(), "選んだトラックを、音符・エフェクト・音量ごと複製します"),
   };
   private readonly markerList = el("div", { className: "row tempo-list marker-list" });
+  // 原曲・伴奏: a long recording on an audio track of its own (the page decodes and keeps it).
+  private readonly longInput = el("input", { type: "file", accept: "audio/*,video/*", className: "visually-hidden" });
+  private readonly longList = el("div", { className: "row long-list" });
+  /** A long recording chosen: the page decodes and keeps it, then calls addLongAudio. */
+  onPickLongAudio: (file: File) => void = () => {};
+  /** A long recording taken out of the project (the page forgets its samples). */
+  onRemoveLongAudio: (id: string) => void = () => {};
   // 拍子: one for the whole song.
   private readonly sigNum = el("select", { ariaLabel: "拍子(分子)" }, [...Array(16).keys()].map((i) => el("option", { value: String(i + 1), textContent: String(i + 1) })));
   private readonly sigDen = el("select", { ariaLabel: "拍子(分母)" }, TIME_SIG_DENS.map((d) => el("option", { value: String(d), textContent: String(d) })));
@@ -333,7 +340,7 @@ export class RollPanel {
   private readonly seekBar = el("input", { type: "range", min: "0", max: "16", step: "any", value: "0", className: "song-seek", ariaLabel: "再生位置" });
   private seeking = false;
   private seekTimer = 0;
-  private readonly info = el("p", { className: "fine", role: "status" });
+  readonly info = el("p", { className: "fine", role: "status" });
 
   constructor(client: EngineClient) {
     this.client = client;
@@ -378,6 +385,11 @@ export class RollPanel {
     };
 
     for (const s of [this.sigNum, this.sigDen]) s.addEventListener("change", () => this.setTimeSignature(Number(this.sigNum.value), Number(this.sigDen.value)));
+    this.longInput.addEventListener("change", () => {
+      const file = this.longInput.files?.[0];
+      this.longInput.value = "";
+      if (file) this.onPickLongAudio(file);
+    });
     this.bpmInput.addEventListener("change", () => {
       const bpm = Math.max(20, Math.min(400, Number(this.bpmInput.value) || this.project.bpm));
       this.setTempos([{ beat: 0, bpm }, ...this.project.tempos]);
@@ -416,7 +428,8 @@ export class RollPanel {
       this.markerList,
       this.trackList,
       el("div", { className: "row track-ops" }, [el("span", { className: "fine", textContent: "選んだトラックを:" }), ...Object.values(this.trackOpButtons)]),
-      el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack("melodic")), button("＋ ドラムトラックを追加", "small", () => this.addTrack("drum")), button("＋ 音声トラックを追加", "small", () => this.addTrack("audio"), "素材の録音を、高さも速さも変えずにそのまま並べるトラック(声ネタ・効果音・ループ素材)")]),
+      el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack("melodic")), button("＋ ドラムトラックを追加", "small", () => this.addTrack("drum")), button("＋ 音声トラックを追加", "small", () => this.addTrack("audio"), "素材の録音を、高さも速さも変えずにそのまま並べるトラック(声ネタ・効果音・ループ素材)"), button("＋ 原曲・伴奏を置く", "small", () => this.longInput.click(), "長い音声(原曲・オフボーカルなど)を、曲の頭から鳴る音声トラックとして置きます(音程の解析はしません)"), this.longInput]),
+      this.longList,
       this.padList,
       this.glideRow,
       el("div", { className: "row roll-defaults" }, [
@@ -487,6 +500,37 @@ export class RollPanel {
   get exportRange(): { start: number; end: number } | null {
     const { loop } = this.project;
     return this.loopOnlyBox.checked && loop.on && loop.end > loop.start ? { start: loop.start, end: loop.end } : null;
+  }
+
+/**
+   * A long recording joins the project, on a new audio track of its own: one clip from the song's start, as long as it is.
+   * (The material list keeps it; the 素材 side never shows it.)
+   */
+  addLongAudio(material: { id: string; name: string }, seconds: number): void {
+    if (!this.project.materials.some((m) => m.id === material.id)) this.project.materials.push({ ...material, long: true });
+    const t = newAudioTrack(material.name.replace(/\.[^.]+$/, "").slice(0, 30) || "原曲", material.id);
+    t.notes = [{ id: newId(), start: 0, length: Math.max(1 / 16, secToBeats(seconds, this.project)), pitch: 0, velocity: 1, clip: { material: material.id, offset: 0 } }];
+    this.project.tracks.push(t);
+    this.selected = this.project.tracks.length - 1;
+    this.showTrackInRoll();
+    this.reload();
+    this.renderTracks();
+    this.showRoot();
+    this.refreshButtons();
+    this.onTrackChange();
+    this.scheduleSave();
+    this.commit();
+    this.info.textContent = `「${material.name}」を音声トラック「${t.name}」に置きました(曲の頭から)。ずれていればクリップをドラッグで動かします。書き出す曲にも入ります(入れないならミュート)。`;
+  }
+
+  /** The long recordings, each with a way out. */
+  private renderLongList(): void {
+    const long = this.project.materials.filter((m) => m.long);
+    this.longList.hidden = long.length === 0;
+    this.longList.replaceChildren(
+      el("span", { className: "fine", textContent: "原曲・伴奏:" }),
+      ...long.map((m) => el("span", { className: "tempo-item" }, [el("span", { className: "fine", textContent: m.name }), button("外す", "small", () => this.onRemoveLongAudio(m.id), "この長い音声をプロジェクトから外します(置いたクリップは鳴らなくなります)")])),
+    );
   }
 
   /** The names of the tracks that play a cut (shown with it; a warning before it goes). */
@@ -1126,6 +1170,7 @@ export class RollPanel {
   private renderTracks(): void {
     this.summarize();
     this.refreshTrackOps();
+    this.renderLongList();
     this.refreshSeekRange(secToBeats(this.from, this.project));
     const rows = this.project.tracks.map((t, i) => {
       const selected = i === this.selected;

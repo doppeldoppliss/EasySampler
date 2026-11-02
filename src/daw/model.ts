@@ -149,6 +149,8 @@ export function newTrackId(): string {
 export interface ProjectMaterial {
   id: string;
   name: string;
+  /** A long recording (原曲・伴奏) for audio tracks only: no pitch analysis, no cuts, not on the 素材 side. */
+  long?: boolean;
 }
 
 export interface Project {
@@ -377,7 +379,7 @@ export function sanitizeProject(raw: unknown): Project {
     materials: Array.isArray(r.materials)
       ? r.materials
           .filter((m): m is Record<string, unknown> => !!m && typeof m === "object" && typeof (m as Record<string, unknown>).id === "string")
-          .map((m) => ({ id: m.id as string, name: typeof m.name === "string" ? m.name : "素材" }))
+          .map((m) => ({ id: m.id as string, name: typeof m.name === "string" ? m.name : "素材", ...(m.long === true ? { long: true } : {}) }))
       : [],
     editing: typeof r.editing === "string" ? r.editing : null,
     loop: end > start ? { start, end, on: loop.on === true } : d.loop,

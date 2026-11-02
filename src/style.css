@@ -13,8 +13,9 @@
   --outside: rgba(28, 26, 36, 0.06);
   --grid: #efedf4;
   --grid-strong: #d7d3e2;
-  --pitch-original: #e69f00;
-  --pitch-edited: #b8960b;
+  /* The pitch lines: before (gray, dashed) and after the shaping (vermillion, solid) — told apart by colour and stroke. */
+  --pitch-original: #8a85a0;
+  --pitch-edited: #d55e00;
   --strip: #ecebf2;
   --band-head: #56b4e9;
   --band-sustain: #009e73;
@@ -42,8 +43,8 @@
     --outside: rgba(0, 0, 0, 0.35);
     --grid: #24222e;
     --grid-strong: #34313f;
-    --pitch-original: #e69f00;
-    --pitch-edited: #f0e442;
+    --pitch-original: #8f8aa8;
+    --pitch-edited: #ff8c42;
     --strip: #24222e;
     --band-head: #3d8fc0;
     --band-sustain: #00845f;

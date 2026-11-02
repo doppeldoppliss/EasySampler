@@ -28,6 +28,21 @@ describe("writeMidi", () => {
       [1, 42, 9],
     ]);
   });
+
+  it("writes the time signature and the markers", () => {
+    const p = emptyProject();
+    p.timeSig = { num: 6, den: 8 };
+    p.beatsPerBar = 3;
+    p.markers = [{ beat: 6, name: "サビ" }];
+    p.tracks = [{ ...newTrack("メロ", "m/c"), notes: [n(0, 1, 60)] }];
+    const bytes = writeMidi(p);
+    expect(parseMidi(bytes).timeSig).toEqual({ num: 6, den: 8 });
+    // The marker's meta event (FF 06) with its name.
+    const name = [...new TextEncoder().encode("サビ")];
+    const at = bytes.findIndex((b, i) => b === 0xff && bytes[i + 1] === 0x06 && bytes[i + 2] === name.length);
+    expect(at).toBeGreaterThan(0);
+    expect([...bytes.slice(at + 3, at + 3 + name.length)]).toEqual(name);
+  });
 });
 
 describe("renderSong", () => {

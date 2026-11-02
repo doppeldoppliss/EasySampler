@@ -2,7 +2,7 @@
 // stretch deleted, or a stretch played twice — on every track at once, notes
 // and lines (automation) alike, so the parts stay together.
 
-import { newId, setTempoList, sortNotes, tempoAt, type BeatPoint, type Note, type Project, type TempoChange } from "./model";
+import { newId, setTempoList, sortNotes, tempoAt, type BeatPoint, type Marker, type Note, type Project, type TempoChange } from "./model";
 
 export type ArrangeKind = "insert" | "delete" | "duplicate";
 
@@ -75,6 +75,14 @@ export function arrangeNotes(notes: readonly Note[], kind: ArrangeKind, from: nu
   return sortNotes(out);
 }
 
+/** The markers after the operation: those after the stretch move with the song; a deleted stretch's go with it; a copy has none of its own. */
+export function arrangeMarkers(markers: readonly Marker[], kind: ArrangeKind, from: number, to: number): Marker[] {
+  const len = to - from;
+  if (kind === "insert") return markers.map((m) => (m.beat >= from - 1e-9 ? { ...m, beat: m.beat + len } : { ...m }));
+  if (kind === "delete") return markers.filter((m) => m.beat < from - 1e-9 || m.beat >= to - 1e-9).map((m) => (m.beat >= to - 1e-9 ? { ...m, beat: m.beat - len } : { ...m }));
+  return markers.map((m) => (m.beat >= to - 1e-9 ? { ...m, beat: m.beat + len } : { ...m }));
+}
+
 /** The tempo list (the start's first) after the operation: each stretch keeps the tempos it had. */
 export function arrangeTempos(project: Project, kind: ArrangeKind, from: number, to: number): TempoChange[] {
   const len = to - from;
@@ -100,6 +108,7 @@ export function arrange(project: Project, kind: ArrangeKind, from: number, to: n
     t.panAuto = arrangeLine(t.panAuto, kind, from, to);
   }
   project.masterAuto = arrangeLine(project.masterAuto, kind, from, to);
+  project.markers = arrangeMarkers(project.markers, kind, from, to);
   setTempoList(project, arrangeTempos(project, kind, from, to));
   // A copy: the loop moves onto it (pressing again makes the next one).
   if (kind === "duplicate") project.loop = { ...project.loop, start: to, end: to + (to - from) };

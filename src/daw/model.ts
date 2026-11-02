@@ -113,6 +113,17 @@ export function setTempoList(project: Project, list: readonly TempoChange[]): vo
   project.tempos = out;
 }
 
+/** The denominators a time signature may have. */
+export const TIME_SIG_DENS = [2, 4, 8, 16] as const;
+
+/** A time signature into the project (and the bar length that follows from it). */
+export function setTimeSig(project: Project, num: number, den: number): void {
+  const n = Math.max(1, Math.min(16, Math.round(num) || 4));
+  const d = (TIME_SIG_DENS as readonly number[]).includes(den) ? den : 4;
+  project.timeSig = { num: n, den: d };
+  project.beatsPerBar = (n * 4) / d;
+}
+
 /** A track that plays the plain backing synth (簡易シンセ) instead of a cut: what a MIDI file's parts start on. */
 export const BACKING = "backing";
 
@@ -143,7 +154,9 @@ export interface ProjectMaterial {
 export interface Project {
   version: 1;
   bpm: number;
-  /** Beats in a bar (4/4 for now: no time-signature changes, design.md 13). */
+  /** The time signature (one for the whole song: no changes). */
+  timeSig: { num: number; den: number };
+  /** A bar's length in beats (quarter notes): `timeSig.num × 4 / timeSig.den` (6/8 → 3). */
   beatsPerBar: number;
   tracks: Track[];
   /** The materials, in the order they were opened. */
@@ -160,6 +173,14 @@ export interface Project {
   masterAuto: BeatPoint[];
   /** The drum kit the drum tracks and the kit view's keyboard play (design.md 13.2). */
   kit: Kit;
+  /** Named places in the song (Aメロ, サビ…), sorted by beat. */
+  markers: Marker[];
+}
+
+/** A named place in the song. */
+export interface Marker {
+  beat: number;
+  name: string;
 }
 
 export const MIN_LENGTH = 1 / 64;
@@ -168,7 +189,7 @@ export const DEFAULT_VELOCITY = 0.8;
 const LEGATO_OVERLAP_SEC = 0.002;
 
 export function emptyProject(): Project {
-  return { version: 1, bpm: 120, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, tempos: [], masterFx: structuredClone(DEFAULT_FX), masterAuto: [], kit: emptyKit() };
+  return { version: 1, bpm: 120, timeSig: { num: 4, den: 4 }, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, tempos: [], masterFx: structuredClone(DEFAULT_FX), masterAuto: [], kit: emptyKit(), markers: [] };
 }
 
 let nextId = 1;
@@ -346,7 +367,12 @@ export function sanitizeProject(raw: unknown): Project {
   return {
     version: 1,
     bpm: num(r.bpm, d.bpm, 20, 400),
-    beatsPerBar: Math.round(num(r.beatsPerBar, 4, 1, 16)),
+    ...(() => {
+      const ts = (r.timeSig && typeof r.timeSig === "object" ? r.timeSig : {}) as Record<string, unknown>;
+      const p = { timeSig: { num: 4, den: 4 }, beatsPerBar: 4 } as Project;
+      setTimeSig(p, num(ts.num, Math.round(num(r.beatsPerBar, 4, 1, 16)), 1, 16), num(ts.den, 4, 2, 16));
+      return { timeSig: p.timeSig, beatsPerBar: p.beatsPerBar };
+    })(),
     tracks: tracks.length ? tracks : d.tracks,
     materials: Array.isArray(r.materials)
       ? r.materials
@@ -357,6 +383,12 @@ export function sanitizeProject(raw: unknown): Project {
     loop: end > start ? { start, end, on: loop.on === true } : d.loop,
     masterFx: sanitizeFx(r.masterFx),
     masterAuto: line(r.masterAuto, 0, VOLUME_AUTO_MAX),
+    markers: Array.isArray(r.markers)
+      ? r.markers
+          .filter((q): q is Record<string, unknown> => !!q && typeof q === "object")
+          .map((q) => ({ beat: num(q.beat, 0, 0, 100_000), name: typeof q.name === "string" ? q.name.slice(0, 40) : "マーカー" }))
+          .sort((a, b) => a.beat - b.beat)
+      : [],
     tempos: Array.isArray(r.tempos)
       ? r.tempos
           .filter((c): c is Record<string, unknown> => !!c && typeof c === "object")

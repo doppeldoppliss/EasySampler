@@ -35,7 +35,6 @@ const TAP_PX = COARSE ? 10 : 4;
 const DOUBLE_TAP_MS = 350;
 /** A finger held still this long opens the menu (as a right-click does). */
 const LONG_PRESS_MS = 550;
-const HISTORY = 200;
 /** The scroll bars' thickness, and the shortest a thumb gets. */
 const SCROLLBAR = COARSE ? 14 : 10;
 const MIN_THUMB = COARSE ? 36 : 24;
@@ -82,6 +81,8 @@ export class PianoRoll {
   /** A pitch to sound briefly (a note placed or moved, a key on the left). */
   onPreview: (pitch: number) => void = () => {};
   onTogglePlay: () => void = () => {};
+  /** Ctrl+Z / Ctrl+Y on the roll: the song's undo (the panel keeps it). */
+  onUndoKey: (redo: boolean) => void = () => {};
   /** Selection or history changed (for the buttons around the roll). */
   onStateChange: () => void = () => {};
   /** The menu asked for (a right-click, a long press) at a page position, on a note or on empty grid. */
@@ -124,6 +125,14 @@ export class PianoRoll {
 
   setTempoMarks(marks: readonly { beat: number; bpm: number }[]): void {
     this.tempoMarks = marks.map((m) => ({ ...m }));
+    this.draw();
+  }
+
+  /** The song's markers (Aメロ, サビ…), named on the ruler. */
+  private markers: { beat: number; name: string }[] = [];
+
+  setMarkers(markers: readonly { beat: number; name: string }[]): void {
+    this.markers = markers.map((m) => ({ ...m }));
     this.draw();
   }
 
@@ -209,8 +218,6 @@ export class PianoRoll {
   private notesList: Note[] = [];
   private selected = new Set<number>();
   private clipboard: Note[] = [];
-  private undoStack: string[] = [];
-  private redoStack: string[] = [];
   private beatsPerBar = 4;
   private loop: Loop = { start: 0, end: 16, on: false };
   private playhead: number | null = null;
@@ -303,36 +310,11 @@ export class PianoRoll {
     return this.selected.size;
   }
 
-  get canUndo(): boolean {
-    return this.undoStack.length > 0;
-  }
-
-  get canRedo(): boolean {
-    return this.redoStack.length > 0;
-  }
-
-  /** The undo / redo history (to keep it while another track is shown). */
-  takeHistory(): { undo: string[]; redo: string[] } {
-    return { undo: [...this.undoStack], redo: [...this.redoStack] };
-  }
-
-  /** Puts a kept history back (right after the same notes were set again). */
-  giveHistory(history: { undo: string[]; redo: string[] }): void {
-    this.undoStack = [...history.undo];
-    this.redoStack = [...history.redo];
-    this.onStateChange();
-  }
-
-  /** Replaces the notes (a load or an import); `keepHistory` makes it one undoable step. */
-  setNotes(notes: Note[], keepHistory = false): void {
-    // (A drag under way belongs to the notes being replaced: it ends here, so it cannot land in the new ones' history.)
+  /** Replaces the notes (a load, an import, the song's undo). */
+  setNotes(notes: Note[]): void {
+    // (A drag under way belongs to the notes being replaced: it ends here.)
     this.drag = null;
     this.clearLongPress();
-    if (keepHistory) this.pushUndo();
-    else {
-      this.undoStack = [];
-      this.redoStack = [];
-    }
     this.notesList = sortNotes(notes.map((n) => ({ ...n })));
     this.gestureStart = this.snapshot();
     this.selected.clear();
@@ -601,20 +583,6 @@ export class PianoRoll {
     });
   }
 
-  undo(): void {
-    const prev = this.undoStack.pop();
-    if (prev === undefined) return;
-    this.redoStack.push(this.snapshot());
-    this.restore(prev);
-  }
-
-  redo(): void {
-    const next = this.redoStack.pop();
-    if (next === undefined) return;
-    this.undoStack.push(this.snapshot());
-    this.restore(next);
-  }
-
   zoom(factor: number, atX = this.keysW + (this.width() - this.keysW) / 2): void {
     const beat = this.beatAt(atX);
     this.pxPerBeat = Math.max(6, Math.min(400, this.pxPerBeat * factor));
@@ -632,12 +600,6 @@ export class PianoRoll {
     return JSON.stringify(this.notesList);
   }
 
-  private pushUndo(state = this.snapshot()): void {
-    this.undoStack.push(state);
-    if (this.undoStack.length > HISTORY) this.undoStack.shift();
-    this.redoStack = [];
-  }
-
   private restore(state: string): void {
     this.notesList = (JSON.parse(state) as Note[]).map((n) => ({ ...n, id: newId() }));
     this.selected.clear();
@@ -646,13 +608,12 @@ export class PianoRoll {
     this.onStateChange();
   }
 
-  /** One undoable change. */
+  /** One change (a step of the song's undo). */
   private edit(change: () => void): void {
     const before = this.snapshot();
     change();
     sortNotes(this.notesList);
     if (this.snapshot() === before) return;
-    this.pushUndo(before);
     this.draw();
     this.onChange(this.notesList);
     this.onStateChange();
@@ -1163,7 +1124,6 @@ export class PianoRoll {
   private finishGesture(): void {
     sortNotes(this.notesList);
     if (this.snapshot() !== this.gestureStart) {
-      this.pushUndo(this.gestureStart);
       this.onChange(this.notesList);
     }
     this.draw();
@@ -1210,8 +1170,8 @@ export class PianoRoll {
     else if (mod && k === "x") this.copy(true);
     else if (mod && k === "v") this.paste();
     else if (mod && k === "d") this.duplicateSelected();
-    else if (mod && (k === "y" || (k === "z" && e.shiftKey))) this.redo();
-    else if (mod && k === "z") this.undo();
+    else if (mod && (k === "y" || (k === "z" && e.shiftKey))) this.onUndoKey(true);
+    else if (mod && k === "z") this.onUndoKey(false);
     else if (k === "arrowup" || k === "arrowdown") this.transposeSelected((k === "arrowup" ? 1 : -1) * (e.shiftKey ? 12 : 1));
     else if (k === "arrowleft" || k === "arrowright") this.nudgeSelected((k === "arrowright" ? 1 : -1) * (this.grid || 0.25));
     else if (mod && (k === "pageup" || k === "pagedown")) this.onTrackStep(k === "pageup" ? -1 : 1);
@@ -1502,6 +1462,14 @@ export class PianoRoll {
       if (x < this.keysW - 1 || x > cw) continue;
       g.fillRect(Math.round(x), 0, 2, RULER_H);
       g.fillText(`♩${+m.bpm.toFixed(1)}`, x + 4, RULER_H - 5);
+    }
+    // Markers: a flag and the name, high on the ruler.
+    g.fillStyle = cssVar("--accent");
+    for (const m of this.markers) {
+      const x = this.xOf(m.beat);
+      if (x < this.keysW - 1 || x > cw) continue;
+      g.fillRect(Math.round(x), 0, 2, RULER_H);
+      g.fillText(m.name, x + 4, 9);
     }
     g.fillStyle = cssVar("--line");
     g.fillRect(0, RULER_H - 1, cw, 1);

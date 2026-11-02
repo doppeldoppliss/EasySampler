@@ -1,6 +1,6 @@
-// What a loaded song offers to "曲で試す": its parts (a track each; a drum
-// track also as one part per drum sound), and the note lists the engine
-// plays — the material on one part, a plain backing on the rest.
+// What a loaded MIDI file offers 「MIDI を開く」: its parts — a track each (a
+// part per channel when a track holds several), a drum track also as one part
+// per drum sound.
 
 import { pitchLabel } from "../analysis/pitch";
 import type { Song, SongNote } from "./midi";
@@ -94,7 +94,13 @@ export function songParts(song: Song): SongPart[] {
     const title = track.name ? `#${track.index} ${track.name}` : `#${track.index}`;
     const melodic = track.notes.filter((n) => n.channel !== DRUM_CHANNEL);
     const drums = track.notes.filter((n) => n.channel === DRUM_CHANNEL);
-    if (melodic.length > 0) {
+    const channels = [...new Set(melodic.map((n) => n.channel))].sort((a, b) => a - b);
+    if (channels.length > 1) {
+      for (const ch of channels) {
+        const notes = melodic.filter((n) => n.channel === ch);
+        parts.push({ id: `t${track.index}c${ch}`, label: `${title} ch${ch + 1}(${notes.length} 音・${rangeLabel(notes)})`, notes, drum: false, drumPitch: null, duplicateOf: null, shiftSec: 0 });
+      }
+    } else if (melodic.length > 0) {
       parts.push({ id: `t${track.index}`, label: `${title}(${melodic.length} 音・${rangeLabel(melodic)})`, notes: melodic, drum: false, drumPitch: null, duplicateOf: null, shiftSec: 0 });
     }
     if (drums.length > 0) {

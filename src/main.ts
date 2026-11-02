@@ -2792,11 +2792,11 @@ window.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   if (key === "z" && !event.shiftKey) {
     event.preventDefault();
-    if (view === "song") rollPanel.roll.undo();
+    if (view === "song") rollPanel.undo();
     else undo();
   } else if (key === "y" || (key === "z" && event.shiftKey)) {
     event.preventDefault();
-    if (view === "song") rollPanel.roll.redo();
+    if (view === "song") rollPanel.redo();
     else redo();
   }
 });

@@ -11,6 +11,10 @@ import type { TrackSpec } from "../engine/messages";
 import {
   autoToSec,
   BACKING,
+  clampPitch,
+  newTrackId,
+  setTimeSig,
+  TIME_SIG_DENS,
   beatsToSec,
   DEFAULT_VELOCITY,
   emptyProject,
@@ -226,17 +230,36 @@ export class RollPanel {
   private readonly insertButton = button("前に空白を挿入", "small", () => this.arrange("insert"), "ループ範囲と同じ長さの空白を、範囲の始まりに入れます(全トラック。後ろはずれます)");
   private readonly removeRangeButton = button("削除して詰める", "small", () => this.arrange("delete"), "ループ範囲を全トラックから消し、後ろを詰めます");
   private readonly duplicateRangeButton = button("複製(後ろに続ける)", "small", () => this.arrange("duplicate"), "ループ範囲を全トラックで、範囲のすぐ後ろにもう一度入れます。ループ範囲は複製した側へ移ります(続けて押すと、さらに後ろへ)");
-  private readonly arrangeUndoButton = button("小節の操作を取り消す", "small", () => this.undoArrange(), "直前の挿入・削除・複製の前に戻します(そのあと音符を編集すると戻せなくなります)");
   /** The song before the last stretch operation (until a note is edited again). */
-  private arrangeUndo: string | null = null;
+  /**
+   * The song's undo (design.md 13): every change — notes, lines, tracks, the mixer, effects, tempo, signature,
+   * markers, bar operations — is a step; the kit, the materials and the loop range are left as they are.
+   */
+  private undoStack: string[] = [];
+  private redoStack: string[] = [];
+  /** The song as it was after the last step (what the next step's undo goes back to). */
+  private lastState = "";
+  private commitTimer = 0;
+  // 選んだトラック: the whole track up or down, and a copy of it.
+  private readonly trackOpButtons = {
+    down: button("半音下げる", "small", () => this.transposeTrack(-1), "選んだトラックの音符を全部、半音下げます"),
+    up: button("半音上げる", "small", () => this.transposeTrack(1), "選んだトラックの音符を全部、半音上げます"),
+    octDown: button("1 オクターブ下げる", "small", () => this.transposeTrack(-12)),
+    octUp: button("1 オクターブ上げる", "small", () => this.transposeTrack(12)),
+    dup: button("トラックを複製", "small", () => this.duplicateTrack(), "選んだトラックを、音符・エフェクト・音量ごと複製します"),
+  };
+  private readonly markerList = el("div", { className: "row tempo-list marker-list" });
+  // 拍子: one for the whole song.
+  private readonly sigNum = el("select", { ariaLabel: "拍子(分子)" }, [...Array(16).keys()].map((i) => el("option", { value: String(i + 1), textContent: String(i + 1) })));
+  private readonly sigDen = el("select", { ariaLabel: "拍子(分母)" }, TIME_SIG_DENS.map((d) => el("option", { value: String(d), textContent: String(d) })));
   private readonly bpmInput = el("input", { type: "number", min: "20", max: "400", step: "any", inputMode: "decimal", ariaLabel: "BPM" });
   private readonly gridSelect = el("select", { ariaLabel: "吸着" }, GRIDS.map(([v, label]) => el("option", { value: String(v), textContent: label })));
   private readonly selectToggle = button("", "small", () => {
     this.roll.selectMode = !this.roll.selectMode;
     this.refreshButtons();
   });
-  private readonly undoButton = button("元に戻す", "small", () => this.roll.undo(), "Ctrl+Z");
-  private readonly redoButton = button("やり直す", "small", () => this.roll.redo(), "Ctrl+Y");
+  private readonly undoButton = button("元に戻す", "small", () => this.undo(), "Ctrl+Z — 音符・トラック・ミキサー・エフェクト・テンポなど、曲の変更を 1 つ戻します");
+  private readonly redoButton = button("やり直す", "small", () => this.redo(), "Ctrl+Y");
   private readonly deleteButton = button("削除", "small", () => this.roll.deleteSelected());
   private readonly duplicateButton = button("複製", "small", () => this.roll.duplicateSelected(), "選んだ音符の直後にコピーを置きます(Ctrl+D)");
   private readonly transposeButtons = [
@@ -249,7 +272,7 @@ export class RollPanel {
   private readonly midiButton = button("MIDI を開く", "small", () => this.midiInput.click(), "MIDI ファイルのパートを、それぞれトラックとして加えます");
   private readonly clearButton = button("このトラックの音符をすべて消す", "small", () => {
     if (!this.roll.notes.length) return;
-    this.roll.setNotes([], true);
+    this.roll.setNotes([]);
     this.changed(this.roll.notes);
     this.info.textContent = "すべて消しました。「元に戻す」で戻せます。";
   });
@@ -301,8 +324,6 @@ export class RollPanel {
   /** The menu (a right-click or a long press on the roll), while open. */
   private menu: HTMLElement | null = null;
   /** Each track's undo history while another is shown (with the drum rows it was made on). */
-  private readonly histories = new Map<string, { undo: string[]; redo: string[]; rows: string }>();
-  private shownTrack: string | null = null;
   /** Export only the loop range (WAV / stems), seamless. */
   private readonly loopOnlyBox = el("input", { type: "checkbox", ariaLabel: "ループ範囲だけ書き出す" });
   private readonly position = el("span", { className: "fine num" });
@@ -323,6 +344,7 @@ export class RollPanel {
     });
 
     this.roll.onChange = (notes) => this.changed(notes);
+    this.roll.onUndoKey = (redo) => (redo ? this.redo() : this.undo());
     this.roll.onMenu = (x, y, note) => this.openMenu(x, y, note);
     this.roll.onDefaultsChange = () => {
       this.track.noteLength = this.roll.lastLength;
@@ -355,6 +377,7 @@ export class RollPanel {
       this.scheduleSave();
     };
 
+    for (const s of [this.sigNum, this.sigDen]) s.addEventListener("change", () => this.setTimeSignature(Number(this.sigNum.value), Number(this.sigDen.value)));
     this.bpmInput.addEventListener("change", () => {
       const bpm = Math.max(20, Math.min(400, Number(this.bpmInput.value) || this.project.bpm));
       this.setTempos([{ beat: 0, bpm }, ...this.project.tempos]);
@@ -372,6 +395,7 @@ export class RollPanel {
       t.glide = Number(this.glideSelect.value) || 0;
       this.reload();
       this.scheduleSave();
+      this.commit();
     });
 
     this.element = el("section", { className: "panel roll-panel" }, [
@@ -383,12 +407,15 @@ export class RollPanel {
         this.metronomeToggle,
         this.loopButton,
         el("label", { className: "inline" }, ["BPM ", this.bpmInput]),
+        el("span", { className: "inline time-sig" }, ["拍子 ", this.sigNum, "/", this.sigDen]),
         el("label", { className: "inline" }, ["吸着 ", this.gridSelect]),
         this.position,
       ]),
       el("div", { className: "row song-seek-row" }, [this.seekBar]),
       this.tempoList,
+      this.markerList,
       this.trackList,
+      el("div", { className: "row track-ops" }, [el("span", { className: "fine", textContent: "選んだトラックを:" }), ...Object.values(this.trackOpButtons)]),
       el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack("melodic")), button("＋ ドラムトラックを追加", "small", () => this.addTrack("drum")), button("＋ 音声トラックを追加", "small", () => this.addTrack("audio"), "素材の録音を、高さも速さも変えずにそのまま並べるトラック(声ネタ・効果音・ループ素材)")]),
       this.padList,
       this.glideRow,
@@ -400,7 +427,7 @@ export class RollPanel {
       ]),
       el("div", { className: "row roll-tools" }, [this.undoButton, this.redoButton, this.selectAllButton, this.copyButton, this.pasteButton, this.deleteButton, this.duplicateButton, ...this.nudgeButtons, ...this.transposeButtons, this.quantizeButton, this.sliceButton]),
       el("div", { className: "row roll-tools" }, [this.laneSelect, this.onionToggle, this.selectToggle, button("−", "small", () => this.roll.zoom(1 / 1.5), "縮小"), button("+", "small", () => this.roll.zoom(1.5), "拡大")]),
-      el("div", { className: "row roll-tools arrange-row" }, [this.arrangeLabel, this.insertButton, this.removeRangeButton, this.duplicateRangeButton, this.arrangeUndoButton]),
+      el("div", { className: "row roll-tools arrange-row" }, [this.arrangeLabel, this.insertButton, this.removeRangeButton, this.duplicateRangeButton]),
       el("div", { className: "row step-input" }, [this.stepToggle, this.stepRestButton, this.stepTieButton, this.stepBackButton, this.stepHelp]),
       this.roll.element,
       el("p", {
@@ -486,6 +513,7 @@ export class RollPanel {
       this.selected = 0;
       this.applyProject();
     }
+    this.resetUndo();
     return this.project;
   }
 
@@ -551,8 +579,8 @@ export class RollPanel {
     this.client.setTempo(this.project.bpm);
     this.selected = Math.min(this.selected, this.project.tracks.length - 1);
     this.bpmInput.value = String(this.project.bpm);
+    this.showTimeSig();
     this.renderTempos();
-    this.roll.setBeatsPerBar(this.project.beatsPerBar);
     this.roll.setLoop(this.project.loop);
     this.showTrackInRoll();
     if (this.track.kind === "melodic") this.roll.frame(60);
@@ -565,13 +593,91 @@ export class RollPanel {
   }
 
   private changed(notes: Note[]): void {
-    this.arrangeUndo = null;
     this.track.notes = this.track.kind === "drum" ? notes.map((n) => ({ ...n, pitch: this.rowKeys[n.pitch] ?? n.pitch })) : notes;
     this.closeMenu();
     this.info.textContent = "";
     this.reload();
     this.scheduleSave();
     this.renderTracks();
+    this.commit();
+  }
+
+  // ------------------------------------------------------------- undo
+
+  /** The song as an undo step keeps it (the kit, the materials and the loop are not part of it). */
+  private state(): string {
+    const { kit: _kit, materials: _materials, editing: _editing, loop: _loop, ...song } = this.project;
+    return JSON.stringify(song);
+  }
+
+  /** A change is done: the song before it becomes a step to undo. */
+  private commit(): void {
+    clearTimeout(this.commitTimer);
+    this.commitTimer = 0;
+    const now = this.state();
+    if (now === this.lastState) return;
+    if (this.lastState) {
+      this.undoStack.push(this.lastState);
+      if (this.undoStack.length > 200) this.undoStack.shift();
+    }
+    this.redoStack = [];
+    this.lastState = now;
+    this.refreshUndo();
+  }
+
+  /** A slider being dragged (volume, pan, an effect): one step once it has settled. */
+  private commitSoon(): void {
+    clearTimeout(this.commitTimer);
+    this.commitTimer = window.setTimeout(() => this.commit(), 600);
+  }
+
+  /** A fresh song (opened or switched to): nothing to undo. */
+  private resetUndo(): void {
+    clearTimeout(this.commitTimer);
+    this.commitTimer = 0;
+    this.undoStack = [];
+    this.redoStack = [];
+    this.lastState = this.state();
+    this.refreshUndo();
+  }
+
+  undo(): void {
+    if (this.commitTimer) this.commit();
+    const prev = this.undoStack.pop();
+    if (prev === undefined) return;
+    this.redoStack.push(this.lastState);
+    this.restoreState(prev);
+    this.info.textContent = "元に戻しました。";
+  }
+
+  redo(): void {
+    const next = this.redoStack.pop();
+    if (next === undefined) return;
+    this.undoStack.push(this.lastState);
+    this.restoreState(next);
+    this.info.textContent = "やり直しました。";
+  }
+
+  private restoreState(json: string): void {
+    this.stop();
+    const { kit, materials, editing, loop } = this.project;
+    this.project = { ...sanitizeProject({ ...JSON.parse(json), kit, materials, editing, loop }), kit, materials, editing, loop };
+    this.lastState = this.state();
+    this.applyProject();
+    this.reload();
+    for (const t of this.project.tracks) this.client.setTrackMix(t.id, this.mixOf(t));
+    this.onLiveChange();
+    this.scheduleSave();
+    this.refreshUndo();
+  }
+
+  private refreshUndo(): void {
+    this.undoButton.disabled = this.undoStack.length === 0 && !this.commitTimer;
+    this.redoButton.disabled = this.redoStack.length === 0;
+  }
+
+  get canUndo(): boolean {
+    return this.undoStack.length > 0 || this.commitTimer !== 0;
   }
 
   private scheduleSave(): void {
@@ -628,6 +734,8 @@ export class RollPanel {
     this.project.tracks = [...this.project.tracks.filter((t) => t.notes.length > 0), ...added];
     // (Kept to 0.001 BPM: a rounded tempo drifts from the file over a song — a video timed to the MIDI would too.)
     const exact = (bpm: number) => Math.round(bpm * 1000) / 1000;
+    setTimeSig(this.project, song.timeSig?.num ?? 4, song.timeSig?.den ?? 4);
+    this.showTimeSig();
     setTempoList(this.project, [{ beat: 0, bpm: exact(song.bpm) }, ...song.tempos.map((c) => ({ beat: c.beat, bpm: exact(c.bpm) }))]);
     this.bpmInput.value = String(this.project.bpm);
     this.renderTempos();
@@ -641,6 +749,7 @@ export class RollPanel {
     this.refreshButtons();
     this.onTrackChange();
     this.scheduleSave();
+    this.commit();
     const tempo = this.project.tempos.length ? `、途中のテンポ変更 ${this.project.tempos.length} か所` : "";
     this.info.textContent = `「${file.name}」のパート ${added.length} 本をトラックにしました(${this.project.bpm} BPM${tempo})。${leadTrack && this.editedInstrument ? `いちばん音符の多い「${leadTrack.name}」は編集中の区間で、` : ""}ほかは簡易シンセで鳴ります。素材で鳴らすには、トラックの区間を選び直してください。${copies ? `(ほかのパートとまったく同じ中身のパート ${copies} 本は省きました。)` : ""}`;
   }
@@ -650,10 +759,6 @@ export class RollPanel {
   /** The roll shows the selected track: keys for a melodic one, its rows for a drum track. */
   private showTrackInRoll(): void {
     const t = this.track;
-    // The track being left keeps its undo history (unless it is the same track shown again).
-    if (this.shownTrack && this.shownTrack !== t.id) {
-      this.histories.set(this.shownTrack, { ...this.roll.takeHistory(), rows: this.rowKeys.join() });
-    }
     this.glideRow.hidden = t.kind !== "melodic";
     const audio = t.kind === "audio";
     this.roll.noteFactory = audio ? (start) => this.newClip(start) : null;
@@ -690,13 +795,6 @@ export class RollPanel {
       this.roll.setRows(null);
       this.roll.setNotes(t.notes);
     }
-    // Back on a track: its history comes back (for a drum track, only if its rows are the same).
-    if (this.shownTrack !== t.id) {
-      const kept = this.histories.get(t.id);
-      if (kept && (t.kind !== "drum" || kept.rows === this.rowKeys.join())) this.roll.giveHistory(kept);
-      this.histories.delete(t.id);
-      this.shownTrack = t.id;
-    }
     if (t.kind !== "melodic") this.roll.frame(0);
     this.showLane();
   }
@@ -728,6 +826,7 @@ export class RollPanel {
       this.client.setTrackMix(t.id, this.mixOf(t));
     }
     this.scheduleSave();
+    this.commit();
   }
 
   /** What the mixer gets for a track: volume, pan, mute, solo, effects and its lines (in seconds). */
@@ -768,6 +867,82 @@ export class RollPanel {
       button("＋ 再生位置の小節からテンポを変える", "small", () => this.addTempo(), "再生位置のある小節の頭から、別のテンポにします(曲の頭のテンポは BPM 欄)"),
     );
     this.roll.setTempoMarks(this.project.tempos);
+    this.renderMarkers();
+  }
+
+  /** The markers: each a jump, its name, ×; and one more at the position. */
+  private renderMarkers(): void {
+    const bpb = this.project.beatsPerBar;
+    const where = (beat: number) => {
+      const bar = Math.floor(beat / bpb + 1e-9);
+      const inBar = +(beat - bar * bpb + 1).toFixed(2);
+      return inBar === 1 ? `${bar + 1} 小節` : `${bar + 1} 小節 ${inBar} 拍`;
+    };
+    const items = this.project.markers.map((m, i) => {
+      const jump = button(`▸ ${where(m.beat)}`, "small", () => this.seekTo(m.beat), "ここへ再生位置を動かします");
+      const name = el("input", { type: "text", value: m.name, maxLength: 40, ariaLabel: `${where(m.beat)}のマーカーの名前`, className: "marker-name" });
+      name.addEventListener("change", () => {
+        m.name = name.value.trim() || "マーカー";
+        this.roll.setMarkers(this.project.markers);
+        this.scheduleSave();
+        this.commit();
+      });
+      return el("span", { className: "tempo-item" }, [
+        jump,
+        name,
+        button("×", "small", () => {
+          this.project.markers.splice(i, 1);
+          this.renderMarkers();
+          this.scheduleSave();
+          this.commit();
+        }, "このマーカーを消す"),
+      ]);
+    });
+    this.markerList.replaceChildren(
+      el("span", { className: "fine", textContent: this.project.markers.length ? "マーカー:" : "マーカーなし" }),
+      ...items,
+      button("＋ 再生位置にマーカー", "small", () => this.addMarker(), "再生位置のある拍に、名前の付いた目印(Aメロ・サビなど)を置きます"),
+    );
+    this.roll.setMarkers(this.project.markers);
+  }
+
+  private addMarker(): void {
+    const beat = Math.max(0, Math.round(this.currentBeat() * 4) / 4);
+    if (this.project.markers.some((m) => Math.abs(m.beat - beat) < 1e-9)) return;
+    const names = ["イントロ", "Aメロ", "Bメロ", "サビ", "間奏", "Cメロ", "ラスサビ", "アウトロ"];
+    const name = names[this.project.markers.length] ?? `マーカー ${this.project.markers.length + 1}`;
+    this.project.markers = [...this.project.markers, { beat, name }].sort((a, b) => a.beat - b.beat);
+    this.renderMarkers();
+    this.scheduleSave();
+    this.commit();
+  }
+
+  /** The playing position moved to a beat (a marker's). */
+  private seekTo(beat: number): void {
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.pause();
+    this.from = beatsToSec(beat, this.project);
+    this.showPosition(this.from);
+    this.roll.setPlayhead(beat);
+    if (wasPlaying) this.toggle();
+  }
+
+  private showTimeSig(): void {
+    this.sigNum.value = String(this.project.timeSig.num);
+    this.sigDen.value = String(this.project.timeSig.den);
+    this.roll.setBeatsPerBar(this.project.beatsPerBar);
+  }
+
+  /** A new time signature: the bar lines, the metronome and the bar operations follow (the notes stay where they are). */
+  private setTimeSignature(num: number, den: number): void {
+    setTimeSig(this.project, num, den);
+    this.showTimeSig();
+    this.renderTempos();
+    this.refreshSeekRange(this.currentBeat());
+    this.showPosition(this.from);
+    if (this.playing) this.reload();
+    this.scheduleSave();
+    this.commit();
   }
 
   private addTempo(): void {
@@ -795,6 +970,7 @@ export class RollPanel {
     this.reload();
     this.showPosition(this.from);
     this.scheduleSave();
+    this.commit();
   }
 
   /** How long a material's recording is (seconds), when the page has it. */
@@ -815,41 +991,18 @@ export class RollPanel {
   /** Inserts, deletes or duplicates the loop range on every track (notes and lines). */
   private arrange(kind: ArrangeKind): void {
     const { start, end } = this.project.loop;
-    if (kind === "delete" && !window.confirm(`${this.rangeText()}を全トラックから削除して、後ろを詰めますか?(「小節の操作を取り消す」で戻せます)`)) return;
-    const before = JSON.stringify({ tracks: this.project.tracks.map((t) => ({ id: t.id, notes: t.notes, volumeAuto: t.volumeAuto, panAuto: t.panAuto })), masterAuto: this.project.masterAuto, loop: this.project.loop, bpm: this.project.bpm, tempos: this.project.tempos });
+    if (kind === "delete" && !window.confirm(`${this.rangeText()}を全トラックから削除して、後ろを詰めますか?(「元に戻す」で戻せます)`)) return;
     arrange(this.project, kind, start, end);
     this.afterArrange();
-    this.arrangeUndo = before;
+    this.commit();
     this.refreshButtons();
     this.info.textContent = kind === "insert" ? "空白を入れました。" : kind === "delete" ? "削除して詰めました。" : "複製しました(ループ範囲は複製した側へ移りました)。";
   }
 
-  private undoArrange(): void {
-    if (!this.arrangeUndo) return;
-    const before = JSON.parse(this.arrangeUndo) as { tracks: Pick<Track, "id" | "notes" | "volumeAuto" | "panAuto">[]; masterAuto: BeatPoint[]; loop: Project["loop"]; bpm: number; tempos: TempoChange[] };
-    for (const t of this.project.tracks) {
-      const was = before.tracks.find((b) => b.id === t.id);
-      if (!was) continue;
-      t.notes = was.notes;
-      t.volumeAuto = was.volumeAuto;
-      t.panAuto = was.panAuto;
-    }
-    this.project.masterAuto = before.masterAuto;
-    this.project.loop = before.loop;
-    this.project.bpm = before.bpm;
-    this.project.tempos = before.tempos;
-    this.afterArrange();
-    this.arrangeUndo = null;
-    this.refreshButtons();
-    this.info.textContent = "小節の操作を取り消しました。";
-  }
-
-  /** Every track changed at once: the roll shows the track afresh (the tracks' undo histories no longer fit). */
+  /** Every track changed at once: the roll shows the track afresh. */
   private afterArrange(): void {
     this.renderTempos();
     this.bpmInput.value = String(this.project.bpm);
-    this.histories.clear();
-    this.shownTrack = null;
     this.roll.setLoop(this.project.loop);
     this.showTrackInRoll();
     this.renderTracks();
@@ -899,13 +1052,44 @@ export class RollPanel {
     this.refreshButtons();
     this.onTrackChange();
     this.scheduleSave();
+    this.commit();
+  }
+
+  /** The selected track's notes all moved up or down (a melodic track: its key, or an octave). */
+  private transposeTrack(semitones: number): void {
+    const t = this.track;
+    if (t.kind !== "melodic" || !t.notes.length) return;
+    const out = t.notes.some((n) => n.pitch + semitones < 0 || n.pitch + semitones > 127);
+    t.notes = t.notes.map((n) => ({ ...n, pitch: clampPitch(n.pitch + semitones) }));
+    this.showTrackInRoll();
+    this.reload();
+    this.renderTracks();
+    this.scheduleSave();
+    this.commit();
+    const what = Math.abs(semitones) === 12 ? "1 オクターブ" : `${Math.abs(semitones)} 半音`;
+    this.info.textContent = `「${t.name}」を${what}${semitones > 0 ? "上げ" : "下げ"}ました。${out ? "(鍵盤の端を超える音は端で止めました)" : ""}`;
+  }
+
+  /** A copy of the selected track (notes, effects, mixer, lines), right after it. */
+  private duplicateTrack(): void {
+    const t = this.track;
+    const copy: Track = { ...structuredClone(t), id: newTrackId(), name: `${t.name} のコピー`.slice(0, 30), notes: t.notes.map((n) => ({ ...structuredClone(n), id: newId() })), solo: false };
+    this.project.tracks.splice(this.selected + 1, 0, copy);
+    this.selected++;
+    this.showTrackInRoll();
+    this.reload();
+    this.renderTracks();
+    this.showRoot();
+    this.refreshButtons();
+    this.onTrackChange();
+    this.scheduleSave();
+    this.commit();
   }
 
   private removeTrack(index: number): void {
     if (this.project.tracks.length < 2) return;
     const t = this.project.tracks[index];
-    if (!window.confirm(`トラック「${t.name}」${t.notes.length ? `と音符 ${t.notes.length} 個` : ""}を消しますか?(元に戻せません)`)) return;
-    this.histories.delete(t.id);
+    if (!window.confirm(`トラック「${t.name}」${t.notes.length ? `と音符 ${t.notes.length} 個` : ""}を消しますか?(「元に戻す」で戻せます)`)) return;
     this.project.tracks.splice(index, 1);
     this.selected = Math.min(this.selected > index ? this.selected - 1 : this.selected, this.project.tracks.length - 1);
     this.showTrackInRoll();
@@ -914,6 +1098,7 @@ export class RollPanel {
     this.showRoot();
     this.onTrackChange();
     this.scheduleSave();
+    this.commit();
   }
 
   /** Volume, pan, mute, solo of a track: heard at once, kept. */
@@ -921,6 +1106,8 @@ export class RollPanel {
     change(t);
     this.client.setTrackMix(t.id, this.mixOf(t));
     this.scheduleSave();
+    this.commitSoon();
+    this.refreshUndo();
   }
 
   /** The folded panel's line: how big the song is, and whether it plays. */
@@ -929,8 +1116,16 @@ export class RollPanel {
     this.summaryInfo.textContent = `トラック ${this.project.tracks.length}・音符 ${notes}${this.playing ? "・再生中" : ""}`;
   }
 
+  /** 選んだトラックを: moving its notes up or down needs a melodic track with notes. */
+  private refreshTrackOps(): void {
+    const t = this.track;
+    const melodic = t.kind === "melodic" && t.notes.length > 0;
+    for (const x of [this.trackOpButtons.down, this.trackOpButtons.up, this.trackOpButtons.octDown, this.trackOpButtons.octUp]) x.disabled = !melodic;
+  }
+
   private renderTracks(): void {
     this.summarize();
+    this.refreshTrackOps();
     this.refreshSeekRange(secToBeats(this.from, this.project));
     const rows = this.project.tracks.map((t, i) => {
       const selected = i === this.selected;
@@ -939,6 +1134,7 @@ export class RollPanel {
       name.addEventListener("change", () => {
         t.name = name.value.trim() || `トラック ${i + 1}`;
         this.scheduleSave();
+        this.commit();
       });
       const instrument: HTMLElement =
         t.kind === "drum"
@@ -960,6 +1156,7 @@ export class RollPanel {
           this.reload();
           this.showRoot();
           this.scheduleSave();
+          this.commit();
           this.onLiveChange();
           // (Its row says whether it sounds.)
           this.renderTracks();
@@ -1347,6 +1544,7 @@ export class RollPanel {
     t.fx = fx;
     this.client.setTrackMix(t.id, this.mixOf(t, fx));
     this.scheduleSave();
+    this.commitSoon();
     this.onLiveChange();
     const on = Object.values(fx).some((g) => (g as { on?: boolean }).on);
     if (on !== !!this.trackList.children[this.selected]?.querySelector(".fx-mark")) this.renderTracks();
@@ -1363,6 +1561,7 @@ export class RollPanel {
     this.project.masterFx = fx;
     this.client.setMasterFx(fx);
     this.scheduleSave();
+    this.commitSoon();
   }
 
   /** The tracks as played: with the metronome when it sounds. */
@@ -1564,7 +1763,7 @@ export class RollPanel {
       const merged = [...t.notes, ...rec.notes];
       const rows = drumRows(this.project.kit, merged);
       if (rows.join() === this.rowKeys.join()) {
-        this.roll.setNotes(merged.map((n) => ({ ...n, pitch: rows.indexOf(n.pitch) })), true);
+        this.roll.setNotes(merged.map((n) => ({ ...n, pitch: rows.indexOf(n.pitch) })));
         this.changed(this.roll.notes);
       } else {
         // New rows: the roll is drawn again (its undo starts afresh).
@@ -1573,9 +1772,10 @@ export class RollPanel {
         this.reload();
         this.renderTracks();
         this.scheduleSave();
+        this.commit();
       }
     } else {
-      this.roll.setNotes([...this.roll.notes, ...rec.notes], true);
+      this.roll.setNotes([...this.roll.notes, ...rec.notes]);
       this.changed(this.roll.notes);
     }
     this.refreshButtons();
@@ -1586,12 +1786,14 @@ export class RollPanel {
   private metronomeSpec(): TrackSpec | null {
     if (!(this.metronome || this.recording)) return null;
     const bpb = this.project.beatsPerBar;
-    const fromBeat = Math.floor(secToBeats(this.from, this.project)) - bpb;
+    const { num, den } = this.project.timeSig;
+    const unit = 4 / den;
+    const fromBar = Math.floor(secToBeats(this.from, this.project) / bpb) - 1;
     const last = Math.max(this.lastBeat(), this.project.loop.on ? this.project.loop.end : 0, secToBeats(this.from, this.project)) + bpb * 64;
     const notes = [];
-    for (let beat = Math.max(-bpb, fromBeat); beat < last; beat++) {
-      const start = beatsToSec(beat, this.project);
-      const down = ((beat % bpb) + bpb) % bpb === 0;
+    for (let k = Math.max(-1, fromBar) * num; k * unit < last; k++) {
+      const start = beatsToSec(k * unit, this.project);
+      const down = ((k % num) + num) % num === 0;
       notes.push({ start, end: start + 0.03, note: down ? 76 : 77, velocity: down ? 1 : 0.55, drum: true });
     }
     return { id: METRONOME, instrument: "backing", notes, gain: 2, pan: 0, mute: false, solo: false, fx: null };
@@ -1634,7 +1836,8 @@ export class RollPanel {
     }
     const bpb = this.project.beatsPerBar;
     const bar = Math.floor(beat / bpb + 1e-9);
-    this.position.textContent = this.recording && beat < this.recording.startBeat ? `カウント ${Math.ceil(this.recording.startBeat - beat)}` : `${bar + 1} 小節 ${Math.floor(beat - bar * bpb + 1e-9) + 1} 拍`;
+    const unit = 4 / this.project.timeSig.den;
+    this.position.textContent = this.recording && beat < this.recording.startBeat ? `カウント ${Math.ceil((this.recording.startBeat - beat) / unit)}` : `${bar + 1} 小節 ${Math.floor((beat - bar * bpb) / unit + 1e-9) + 1} 拍`;
     if (!this.playing) this.roll.setPlayhead(beat);
   }
 
@@ -1650,12 +1853,11 @@ export class RollPanel {
     this.deleteButton.disabled = none;
     this.duplicateButton.disabled = none;
     for (const b of this.transposeButtons) b.disabled = none;
-    this.undoButton.disabled = !this.roll.canUndo;
-    this.redoButton.disabled = !this.roll.canRedo;
+    this.refreshUndo();
+    this.refreshTrackOps();
     const { loop } = this.project;
     const range = this.rangeText();
     this.arrangeLabel.textContent = `範囲(${range}、目盛りをドラッグで選ぶ):`;
-    this.arrangeUndoButton.disabled = this.arrangeUndo === null;
     this.loopButton.textContent = `ループ: ${loop.on ? `オン(${range})` : "オフ"}`;
     this.loopButton.classList.toggle("on", loop.on);
     this.selectToggle.textContent = `範囲選択: ${this.roll.selectMode ? "オン" : "オフ"}`;

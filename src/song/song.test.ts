@@ -324,3 +324,53 @@ describe("echo layers", () => {
     expect(echo.label).toContain("ずらした重ね");
   });
 });
+
+describe("MIDI: channels, the sustain pedal, the time signature", () => {
+  const PPQ = 96;
+  const vlq = (v: number) => {
+    const out = [v & 0x7f];
+    while ((v >>= 7)) out.unshift((v & 0x7f) | 0x80);
+    return out;
+  };
+  function file(events: number[][], extraMeta: number[][] = []): Uint8Array {
+    const body: number[] = [];
+    for (const [delta, ...e] of [...extraMeta, ...events]) body.push(...vlq(delta), ...e);
+    body.push(0, 0xff, 0x2f, 0);
+    const len = body.length;
+    return new Uint8Array([0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, 0, PPQ, 0x4d, 0x54, 0x72, 0x6b, (len >>> 24) & 255, (len >>> 16) & 255, (len >>> 8) & 255, len & 255, ...body]);
+  }
+
+  it("splits a track that holds two channels into two parts", () => {
+    const song = parseMidi(file([[0, 0x90, 60, 100], [0, 0x91, 40, 100], [PPQ, 0x80, 60, 0], [0, 0x81, 40, 0]]));
+    const parts = songParts(song).filter((p) => !p.drum);
+    expect(parts.map((p) => p.notes.map((n) => n.pitch))).toEqual([[60], [40]]);
+    expect(parts[1].label).toContain("ch2");
+  });
+
+  it("holds a note let go under the sustain pedal until the pedal comes up, or the key is struck again", () => {
+    const song = parseMidi(
+      file([
+        [0, 0xb0, 64, 127], // pedal down
+        [0, 0x90, 60, 100],
+        [PPQ, 0x80, 60, 0], // let go at beat 1: rings on
+        [0, 0x90, 64, 100],
+        [PPQ, 0x80, 64, 0], // beat 2: rings on
+        [0, 0x90, 60, 100], // C struck again at beat 2: the first C ends here
+        [PPQ, 0x80, 60, 0],
+        [PPQ, 0xb0, 64, 0], // pedal up at beat 4
+      ]),
+    );
+    const notes = song.tracks[0].notes.map((n) => [n.pitch, n.startBeat, n.endBeat]);
+    expect(notes).toEqual([
+      [60, 0, 2],
+      [64, 1, 4],
+      [60, 2, 4],
+    ]);
+  });
+
+  it("reads the time signature at the start", () => {
+    const song = parseMidi(file([[0, 0x90, 60, 100], [PPQ, 0x80, 60, 0]], [[0, 0xff, 0x58, 4, 6, 3, 24, 8]]));
+    expect(song.timeSig).toEqual({ num: 6, den: 8 });
+    expect(parseMidi(file([[0, 0x90, 60, 100], [PPQ, 0x80, 60, 0]])).timeSig).toBeNull();
+  });
+});

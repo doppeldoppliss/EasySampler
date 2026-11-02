@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, arrangeLine, arrangeNotes } from "./arrange";
+import { arrange, arrangeLine, arrangeMarkers, arrangeNotes } from "./arrange";
 import { emptyProject, type Note } from "./model";
 
 const note = (start: number, length: number, pitch = 60): Note => ({ id: 0, start, length, pitch, velocity: 0.8 });
@@ -42,5 +42,14 @@ describe("arrange", () => {
     expect(p.tracks.map((t) => t.notes.map((n) => n.start))).toEqual([[0, 4], [2, 6]]);
     expect(p.loop).toEqual({ start: 4, end: 8, on: true });
     expect(p.masterAuto.length).toBeGreaterThan(1);
+  });
+});
+
+describe("arrange: markers", () => {
+  const ms = [{ beat: 0, name: "イントロ" }, { beat: 8, name: "Aメロ" }, { beat: 16, name: "サビ" }];
+  it("move with the song, go with a deleted stretch, and a copy brings none of its own", () => {
+    expect(arrangeMarkers(ms, "insert", 8, 12).map((m) => m.beat)).toEqual([0, 12, 20]);
+    expect(arrangeMarkers(ms, "delete", 8, 12).map((m) => [m.name, m.beat])).toEqual([["イントロ", 0], ["サビ", 12]]);
+    expect(arrangeMarkers(ms, "duplicate", 8, 12).map((m) => m.beat)).toEqual([0, 8, 20]);
   });
 });

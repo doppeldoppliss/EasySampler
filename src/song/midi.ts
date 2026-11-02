@@ -1,7 +1,8 @@
 // Reading a Standard MIDI File (.mid) for 打ち込み's 「MIDI を開く」: every note with its
 // start and end in seconds (the tempo map applied), per track, plus where
-// the bars fall. Controllers, pitch bends, sysex and the like are skipped —
-// the material plays the notes, nothing more.
+// the bars fall. The sustain pedal (CC64) lengthens the notes it holds;
+// other controllers, pitch bends, sysex and the like are skipped — the
+// material plays the notes, nothing more.
 
 export interface SongNote {
   /** Seconds from the start of the file. */
@@ -40,6 +41,8 @@ export interface Song {
   hasTempoChanges: boolean;
   /** The tempo changes after the start (beats from the start, sorted). */
   tempos: { beat: number; bpm: number }[];
+  /** The time signature at the start (null when the file sets none: 4/4). */
+  timeSig: { num: number; den: number } | null;
 }
 
 export class MidiParseError extends Error {}
@@ -124,6 +127,9 @@ export function parseMidi(data: ArrayBuffer | Uint8Array): Song {
     const notes: RawNote[] = [];
     // Notes still held, by channel × pitch (a stack, for overlapping same-pitch notes).
     const open = new Map<number, RawNote[]>();
+    // The sustain pedal per channel, and the notes let go while it was down (they ring on until it comes up).
+    const pedal = new Array<boolean>(16).fill(false);
+    const pedalled: RawNote[][] = Array.from({ length: 16 }, () => []);
     while (p < end) {
       tick += vlq();
       let status = b[p];
@@ -155,6 +161,13 @@ export function parseMidi(data: ArrayBuffer | Uint8Array): Song {
       const c = kind === 0xc0 || kind === 0xd0 ? 0 : u8();
       const key = channel * 128 + a;
       if (kind === 0x90 && c > 0) {
+        // A key struck again while its last note still rings on the pedal: that one ends here.
+        const ringing = pedalled[channel];
+        for (let i = ringing.length - 1; i >= 0; i--) {
+          if (ringing[i].pitch !== a) continue;
+          ringing[i].endTick = tick;
+          ringing.splice(i, 1);
+        }
         const n: RawNote = { startTick: tick, endTick: -1, pitch: a, velocity: c, channel };
         notes.push(n);
         const stack = open.get(key);
@@ -162,7 +175,17 @@ export function parseMidi(data: ArrayBuffer | Uint8Array): Song {
         else open.set(key, [n]);
       } else if (kind === 0x80 || (kind === 0x90 && c === 0)) {
         const n = open.get(key)?.shift();
-        if (n) n.endTick = tick;
+        if (n) {
+          if (pedal[channel]) pedalled[channel].push(n);
+          else n.endTick = tick;
+        }
+      } else if (kind === 0xb0 && a === 64) {
+        const down = c >= 64;
+        if (pedal[channel] && !down) {
+          for (const n of pedalled[channel]) n.endTick = tick;
+          pedalled[channel] = [];
+        }
+        pedal[channel] = down;
       } else if (kind === 0xc0 && program === null) {
         program = a;
       }
@@ -210,6 +233,7 @@ export function parseMidi(data: ArrayBuffer | Uint8Array): Song {
     bpm: 60e6 / tempos[0].usPerBeat,
     hasTempoChanges: tempos.some((x) => x.usPerBeat !== tempos[0].usPerBeat),
     tempos: tempos.filter((x) => x.tick > 0).map((x) => ({ beat: x.tick / ppq, bpm: 60e6 / x.usPerBeat })),
+    timeSig: signatures.length && signatures[0].tick === 0 ? { num: signatures[0].numerator, den: signatures[0].denominator } : null,
   };
 }
 

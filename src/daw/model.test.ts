@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fromSongNotes, sanitizeProject, shifted, snap, snapDown, songEnd, toSeqNotes, type Note } from "./model";
+import { emptyProject, fromSongNotes, sanitizeProject, setTimeSig, shifted, snap, snapDown, songEnd, toSeqNotes, type Note } from "./model";
 
 const note = (start: number, length: number, pitch: number): Note => ({ id: 0, start, length, pitch, velocity: 0.8 });
 
@@ -68,5 +68,19 @@ describe("daw model", () => {
     expect(p.tracks[0].notes[0].length).toBeGreaterThan(0);
     expect(p.loop).toEqual({ start: 0, end: 16, on: false });
     expect(sanitizeProject(null).tracks).toHaveLength(1);
+  });
+});
+
+describe("time signature", () => {
+  it("sets the bar length in quarter beats, and a saved song keeps it", () => {
+    const p = emptyProject();
+    setTimeSig(p, 6, 8);
+    expect(p.beatsPerBar).toBe(3);
+    setTimeSig(p, 7, 8);
+    expect(p.beatsPerBar).toBe(3.5);
+    const back = sanitizeProject(JSON.parse(JSON.stringify(p)));
+    expect([back.timeSig, back.beatsPerBar]).toEqual([{ num: 7, den: 8 }, 3.5]);
+    // An older save (beatsPerBar only): n/4.
+    expect(sanitizeProject({ beatsPerBar: 3 }).timeSig).toEqual({ num: 3, den: 4 });
   });
 });

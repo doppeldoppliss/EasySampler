@@ -49,7 +49,7 @@ export interface LevelShape {
 /** Where playback is: in display time (the material as shown) or in output time (the "after" lane). */
 export type Playhead = { kind: "display"; sec: number } | { kind: "output"; sec: number } | null;
 
-type Handle = Exclude<keyof Markers, "removed">;
+type Handle = Exclude<keyof Markers, "removed" | "tailStart">;
 /** The grips on the level line: where the fade-in ends, where the fade-out starts. */
 type LaneGrip = "fadeIn" | "fadeOut";
 /** The longest each fade may be dragged to (seconds), and the grip's reach. */
@@ -75,6 +75,8 @@ const MIN_VIEW_SEC = 0.05;
 
 // (No tailStart: 語尾 was taken out; the tail's start follows the sustain's end.)
 const HANDLE_ORDER: Handle[] = ["rangeStart", "attack", "sustainStart", "sustainEnd", "rangeEnd"];
+/** The handles the user may reach: the range's end only where the cut plays on past its sustain (a one-shot). */
+const HELD_HANDLES: Handle[] = HANDLE_ORDER.filter((h) => h !== "rangeEnd");
 
 export class MaterialEditor {
   readonly element: HTMLElement;
@@ -324,15 +326,11 @@ export class MaterialEditor {
     const fine = event.pointerType === "mouse" || event.pointerType === "pen"; // a pencil points as precisely as a mouse
     if (!fine && inPlot) return null;
     const reach = fine ? (inPlot ? 3 : HANDLE_REACH_MOUSE) : HANDLE_REACH_TOUCH;
-    const inStripLower = y > box.height - LANE_HEIGHT - STRIP_HEIGHT / 2;
     let best: Handle | null = null;
     let bestDistance = reach;
-    for (const handle of HANDLE_ORDER) {
+    for (const handle of this.handles()) {
       const hx = this.xCss(this.markers[handle], box.width);
-      let distance = Math.abs(hx - x);
-      // Sustain end and tail start often coincide: the lower half of the strip grabs the tail.
-      if (handle === "tailStart") distance += inStripLower ? -0.5 : 0.5;
-      if (handle === "sustainEnd") distance += inStripLower ? 0.5 : -0.5;
+      const distance = Math.abs(hx - x);
       if (distance < bestDistance) {
         bestDistance = distance;
         best = handle;
@@ -395,7 +393,20 @@ export class MaterialEditor {
     if (!this.markers) return false;
     const box = this.canvas.getBoundingClientRect();
     const x = event.clientX - box.left;
-    return HANDLE_ORDER.some((h) => Math.abs(this.xCss(this.markers![h], box.width) - x) < HANDLE_REACH_MOUSE);
+    return this.handles().some((h) => Math.abs(this.xCss(this.markers![h], box.width) - x) < HANDLE_REACH_MOUSE);
+  }
+
+  /**
+   * The handles shown and reached. A cut that holds (伸ばす) or plays its head only never sounds past its sustain,
+   * so its range's end does nothing: it is not shown (it stays where it was, for a one-shot to use again).
+   */
+  private handles(): Handle[] {
+    return this.parts.tail ? HANDLE_ORDER : HELD_HANDLES;
+  }
+
+  /** Where the cut's sound ends in the material: the range's end for a one-shot, the sustain's end when held, the head's for 頭部だけ. */
+  private playedEnd(markers: Markers): number {
+    return this.parts.tail ? markers.rangeEnd : this.parts.sustain ? markers.sustainEnd : markers.sustainStart;
   }
 
   /** Source time → CSS px within a width. */
@@ -647,7 +658,7 @@ export class MaterialEditor {
     // Outside the range: shaded.
     g.fillStyle = cssVar("--outside");
     g.fillRect(0, 0, Math.max(0, x(markers.rangeStart)), stripBottom);
-    g.fillRect(Math.min(width, x(markers.rangeEnd)), 0, width, stripBottom);
+    g.fillRect(Math.min(width, x(this.playedEnd(markers))), 0, width, stripBottom);
 
     // Waveform (min/max per column), reading the source through the display mapping. The columns are
     // kept between redraws (the playhead and the hover redraw every frame; a minute of material is millions of samples).
@@ -785,7 +796,7 @@ export class MaterialEditor {
     // After flattening, as it will be written (on the target note): yellow, thick, solid — within the range.
     g.strokeStyle = cssVar("--pitch-edited");
     g.lineWidth = 3 * dpr;
-    curve((p) => this.target + (1 - this.flatten) * (p - this.root), markers.rangeStart, markers.rangeEnd);
+    curve((p) => this.target + (1 - this.flatten) * (p - this.root), markers.rangeStart, this.playedEnd(markers));
 
     // Marker strip: head / sustain / tail bands with labels.
     const bands: [number, number, string, string][] = [
@@ -963,7 +974,7 @@ export class MaterialEditor {
     // Handles: a line through the plot and the strip, a grip in the strip.
     // The range handles (the cut) are bigger, with a bracket at the top,
     // since they are the first thing to reach for.
-    for (const handle of HANDLE_ORDER) {
+    for (const handle of this.handles()) {
       const hx = Math.round(x(markers[handle]));
       if (hx < -12 * dpr || hx > width + 12 * dpr) continue;
       const active = this.dragging?.handle === handle || this.hover === handle;
@@ -976,8 +987,7 @@ export class MaterialEditor {
         g.fillRect(hx - (dir > 0 ? 1 : 9) * dpr, plotHeight - 3 * dpr, 10 * dpr, 3 * dpr);
         g.fillRect(hx - 5 * dpr, plotHeight + 2 * dpr, 10 * dpr, strip - 4 * dpr);
       } else {
-        const gripTop = handle === "tailStart" ? plotHeight + strip / 2 : plotHeight;
-        g.fillRect(hx - 3 * dpr, gripTop + 2 * dpr, 6 * dpr, strip / 2 - 4 * dpr);
+        g.fillRect(hx - 3 * dpr, plotHeight + 2 * dpr, 6 * dpr, strip / 2 - 4 * dpr);
       }
     }
 

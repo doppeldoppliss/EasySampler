@@ -50,7 +50,7 @@ export function parseSettings(text: string): SettingsFile {
   const material = isRecord(raw.material) ? raw.material : {};
   const cutsRaw = Array.isArray(raw.cuts) ? raw.cuts : [];
   const cuts = cutsRaw.map((c, i) => sanitizeCut(c, i)).filter((c): c is CutSettings => c !== null);
-  if (cuts.length === 0) throw new Error("区間がありません");
+  if (cuts.length === 0) throw new Error("サンプリング済音源がありません");
   const exp = sanitizeExport(raw.export);
   return {
     app: "EasySampler",
@@ -121,7 +121,8 @@ function sanitizeCut(raw: unknown, index: number): CutSettings | null {
   else delete markers.removed;
   return {
     id: typeof raw.id === "string" && raw.id ? raw.id : newCutId(),
-    name: typeof raw.name === "string" && raw.name.trim() ? raw.name : `区間 ${index + 1}`,
+    // (Named before 区間 became 音源: the default names follow.)
+    name: typeof raw.name === "string" && raw.name.trim() ? raw.name.replace(/^区間 (\d+)$/, "音源 $1") : `音源 ${index + 1}`,
     markers,
     params: sanitizeParams(raw.params),
     note: Math.max(0, Math.min(127, Math.round(num(raw.note, 60)))),

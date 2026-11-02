@@ -172,7 +172,7 @@ export class RollPanel {
   onOpenFx: () => void = () => {};
   /** 「ドラムキットを開く」: the page shows the kit view. */
   onOpenKit: () => void = () => {};
-  /** A track's 「区間を編集」: the page opens that cut on the 素材 side. */
+  /** A track's 「音源を編集」: the page opens that cut on the 素材 side. */
   onEditCut: (instrument: string) => void = () => {};
   /** A drum track's rows as the roll shows them: the GM key of each (top to bottom). */
   private rowKeys: number[] = [];
@@ -795,7 +795,7 @@ export class RollPanel {
     this.scheduleSave();
     this.commit();
     const tempo = this.project.tempos.length ? `、途中のテンポ変更 ${this.project.tempos.length} か所` : "";
-    this.info.textContent = `「${file.name}」のパート ${added.length} 本をトラックにしました(${this.project.bpm} BPM${tempo})。${leadTrack && this.editedInstrument ? `いちばん音符の多い「${leadTrack.name}」は編集中の区間で、` : ""}ほかは簡易シンセで鳴ります。素材で鳴らすには、トラックの区間を選び直してください。${copies ? `(ほかのパートとまったく同じ中身のパート ${copies} 本は省きました。)` : ""}`;
+    this.info.textContent = `「${file.name}」のパート ${added.length} 本をトラックにしました(${this.project.bpm} BPM${tempo})。${leadTrack && this.editedInstrument ? `いちばん音符の多い「${leadTrack.name}」は編集中の音源で、` : ""}ほかは簡易シンセで鳴ります。素材で鳴らすには、トラックの音源を選び直してください。${copies ? `(ほかのパートとまったく同じ中身のパート ${copies} 本は省きました。)` : ""}`;
   }
 
   // ------------------------------------------------------------- tracks
@@ -1073,7 +1073,7 @@ export class RollPanel {
     this.onTrackChange();
   }
 
-  /** A new track playing a cut (the 素材 side's 「この区間でトラックを作る」), selected. */
+  /** A new track playing a cut (the 素材 side's 「この音源でトラックを作る」), selected. */
   addTrackWith(instrument: string, name: string): void {
     this.addTrack("melodic", instrument, name);
   }
@@ -1189,8 +1189,8 @@ export class RollPanel {
                 el("option", { value: "", textContent: "(置く素材を選ぶ)" }),
                 ...this.project.materials.map((m) => el("option", { value: m.id, textContent: `置く素材: ${m.name}` })),
               ])
-            : el("select", { ariaLabel: "鳴らす区間" }, [
-                el("option", { value: "", textContent: "(区間を選ぶ)" }),
+            : el("select", { ariaLabel: "鳴らす音源" }, [
+                el("option", { value: "", textContent: "(音源を選ぶ)" }),
                 ...this.options.map((o) => el("option", { value: o.id, textContent: o.label })),
                 el("option", { value: BACKING, textContent: "簡易シンセ(伴奏)" }),
               ]);
@@ -1231,7 +1231,7 @@ export class RollPanel {
       // A melodic track with no cut plays nothing: it says so. Effects on: an FX mark that opens them.
       const silent =
         t.kind === "melodic" && !t.instrument
-          ? el("span", { className: "warn fine", textContent: "区間を選ぶと鳴ります" })
+          ? el("span", { className: "warn fine", textContent: "音源を選ぶと鳴ります" })
           : t.kind === "audio" && !t.notes.length
             ? el("span", { className: "fine", textContent: "ピアノロールをタップで素材を置きます" })
             : null;
@@ -1246,7 +1246,7 @@ export class RollPanel {
       // A track on a cut: straight to that cut's settings on the 素材 side.
       const editCut =
         t.kind === "melodic" && t.instrument && t.instrument !== BACKING
-          ? button("区間を編集", "small", () => this.onEditCut(t.instrument!), "このトラックが鳴らしている区間を、素材の画面で開きます")
+          ? button("音源を編集", "small", () => this.onEditCut(t.instrument!), "このトラックが鳴らしているサンプリング済音源を、素材の画面で開きます")
           : null;
       const row = el("div", { className: `track-row${selected ? " selected" : ""}` }, [
         el("span", { className: "track-count fine num", textContent: `${t.notes.length}` }),
@@ -1753,7 +1753,7 @@ export class RollPanel {
       return;
     }
     if (this.track.kind === "audio") {
-      this.info.textContent = "音声トラックには録音できません。音符を入れるトラック(区間のトラックかドラムトラック)を選んでください。";
+      this.info.textContent = "音声トラックには録音できません。音符を入れるトラック(音源のトラックかドラムトラック)を選んでください。";
       return;
     }
     if (this.playing) this.stop();

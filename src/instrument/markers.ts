@@ -93,7 +93,7 @@ export function suggestMarkers(track: PitchTrack, durationSec: number): Markers 
   return clampMarkers({ rangeStart, rangeEnd, attack, sustainStart, sustainEnd, tailStart: sustainEnd });
 }
 
-/** Markers for a cut of the material: the suggestion made within [from, to) seconds only (a second 区間 of a long clip). */
+/** Markers for a cut of the material: the suggestion made within [from, to) seconds only (a second 音源 from another stretch of a long clip). */
 export function suggestMarkersWithin(track: PitchTrack, from: number, to: number): Markers {
   const hop = track.hopSec;
   const first = Math.max(0, Math.floor(from / hop));

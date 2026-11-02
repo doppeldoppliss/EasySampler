@@ -100,7 +100,7 @@ interface Material {
   exportSources: Map<number, PreparedSource>;
 }
 
-/** One cut (区間) of the material: its own markers, parameters and note. */
+/** One cut (サンプリング済音源, 音源 for short; once 区間) of the material: its own markers, parameters and note. */
 interface Cut extends CutSettings {
   /** The root as detected for the cut's markers (for "back to detected"). */
   detectedRoot: number | null;
@@ -339,7 +339,7 @@ const guide = el("aside", { className: "steps", hidden: safeStorage(GUIDE_KEY) =
   el("ol", {}, [
     el("li", {}, [el("strong", { textContent: "聴いて確かめる" }), " — ▶ で鳴らし、判定した高さと帯(頭部・持続区間)がずれていれば直します"]),
     el("li", {}, [el("strong", { textContent: "作り方を選ぶ" }), " — 伸ばす(シンセ化)・移調・1 回鳴らす。鍵盤で弾いて確かめます"]),
-    el("li", {}, [el("strong", { textContent: "曲にする" }), " — 「曲(打ち込み)」のトラックでこの区間を選び、MIDI を開くか打ち込みます"]),
+    el("li", {}, [el("strong", { textContent: "曲にする" }), " — 「曲(打ち込み)」のトラックでこのサンプリング済音源を選び、MIDI を開くか打ち込みます"]),
   ]),
   button("閉じる", "small", () => {
     guide.hidden = true;
@@ -349,21 +349,21 @@ const guide = el("aside", { className: "steps", hidden: safeStorage(GUIDE_KEY) =
 
 // ---------------------------------------------------------------- panel 1: the material and its cuts
 
-const cutSelect = el("select", { ariaLabel: "区間", className: "cut-select" });
+const cutSelect = el("select", { ariaLabel: "音源", className: "cut-select" });
 cutSelect.addEventListener("change", () => selectCut(Number(cutSelect.value)));
-const cutName = el("input", { type: "text", className: "cut-name", ariaLabel: "区間の名前", maxLength: 40 });
+const cutName = el("input", { type: "text", className: "cut-name", ariaLabel: "音源の名前", maxLength: 40 });
 cutName.addEventListener("input", () => {
   cuts[current].name = cutName.value;
   rebuildCutSelect();
   refreshExport();
   refreshInstruments();
 });
-const addCutButton = button("＋ 区間を追加", "small", () => addCut("next"));
+const addCutButton = button("＋ 音源を追加", "small", () => addCut("next"));
 const dupCutButton = button("複製", "small", () => addCut("copy"));
-const removeCutButton = button("この区間を削除", "small", () => removeCut());
+const removeCutButton = button("この音源を削除", "small", () => removeCut());
 // Which tracks play this cut, and a new one that does (the song side, without hunting for it there).
 const cutUsage = el("span", { className: "fine" });
-const newTrackButton = button("＋ この区間でトラックを作る", "small", () => {
+const newTrackButton = button("＋ この音源でトラックを作る", "small", () => {
   const cut = cuts[current];
   if (!material || !cut) return;
   syncCut();
@@ -371,7 +371,7 @@ const newTrackButton = button("＋ この区間でトラックを作る", "small
   rollPanel.addTrackWith(instrumentId(material.id, cut.id), cut.name);
   setView("song");
 });
-newTrackButton.title = "この区間を鳴らすトラックを曲に足して、曲の画面に移ります";
+newTrackButton.title = "この音源を鳴らすトラックを曲に足して、曲の画面に移ります";
 function refreshCutUsage(): void {
   const cut = cuts[current];
   const names = material && cut ? rollPanel.tracksUsing(instrumentId(material.id, cut.id)) : [];
@@ -381,7 +381,7 @@ const materialSelect = el("select", { ariaLabel: "編集する素材", className
 materialSelect.addEventListener("change", () => switchMaterial(materialSelect.value));
 const removeMaterialButton = button("この素材を外す", "small", () => material && removeMaterial(material.id));
 const cutBar = el("div", { className: "cut-bar" }, [
-  el("span", { className: "control-label", textContent: "区間" }),
+  el("span", { className: "control-label", textContent: "サンプリング済音源" }),
   cutSelect,
   cutName,
   addCutButton,
@@ -542,7 +542,7 @@ const seekClock = el("span", { className: "fine num seek-clock" });
 // Undo / redo (the history itself lives further down, with the settings).
 const undoButton = button("元に戻す", "small", () => undo());
 const redoButton = button("やり直す", "small", () => redo());
-undoButton.title = "Ctrl + Z — つまみ・マーカー・削除・手直し・区間など、すべての変更を 1 つ戻します";
+undoButton.title = "Ctrl + Z — つまみ・マーカー・削除・手直し・音源など、すべての変更を 1 つ戻します";
 redoButton.title = "Ctrl + Y";
 let seekLength = 0;
 function showSeek(sec: number): void {
@@ -1151,7 +1151,7 @@ controlsRefreshers.push(refreshFxSummaries);
 const FORMATS: { id: ExportFormat; label: string; note: string }[] = [
   { id: "single", label: "単音 WAV", note: "1本の WAV。どのサンプラーでも読み込めます。" },
   { id: "loop", label: "ループ WAV(ループ点入り)", note: "持続区間を長めに作り、ループ範囲を WAV に埋め込みます(smpl)。ループ点を読むサンプラー(Logic、Kontakt、sforzando など)では、いくらでも伸ばせます。" },
-  { id: "multisample", label: "マルチサンプル音源(zip: SFZ + Decent Sampler)", note: "±1 オクターブを 3 半音おきに、それぞれの高さで作った WAV と、.sfz / .dspreset の定義を zip にまとめます。高音で途切れず、低音で間延びしません。" },
+  { id: "multisample", label: "マルチサンプル(zip: SFZ + Decent Sampler)", note: "±1 オクターブを 3 半音おきに、それぞれの高さで作った WAV と、.sfz / .dspreset の定義を zip にまとめます。高音で途切れず、低音で間延びしません。" },
   { id: "wavetable", label: "Vital 用ウェーブテーブル(WAV)", note: "持続区間の 1 周期ずつを 2048 サンプルに揃えて並べた WAV(最大 256 フレーム)。Vital の OSC にドラッグ(または Import Wavetable)で読み込むと、素材の声色そのものをウェーブテーブルとして掃引できます。音名と長さは使いません。" },
 ];
 const DESTINATIONS: { id: Destination; label: string; help: (n: string, format: ExportFormat) => string }[] = [
@@ -1215,12 +1215,12 @@ const saveButton = button("保存(ダウンロード)", "big primary", () => voi
 saveButton.hidden = SHARE_ONLY;
 const shareButton = button("共有", SHARE_ONLY ? "big primary" : "big", () => void deliver("share", false));
 shareButton.hidden = !canShareFiles();
-const batchButton = button("すべての区間をまとめて保存(zip)", "", () => void deliver(exportHow(), true));
+const batchButton = button("すべての音源をまとめて保存(zip)", "", () => void deliver(exportHow(), true));
 const exportStatus = el("p", { className: "fine", role: "status" });
 
 // Files of the cut for another DAW or sampler (the export-era tool): folded away, the song is made in the 曲 view.
 const exportPanel = el("details", { className: "panel export" }, [
-  el("summary", { textContent: "単音・音源として書き出す(ほかの DAW やサンプラー用のファイル)" }),
+  el("summary", { textContent: "単音・マルチサンプルとして書き出す(ほかの DAW やサンプラー用のファイル)" }),
   lengthBlock,
   el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "読み込む先(DAW / サンプラー)" }), destinationSelect]),
   destinationHelp,
@@ -1282,7 +1282,7 @@ async function setPitchRange(range: { low: number; high: number } | null): Promi
 }
 const resetSettingsButton = button("設定を捨てて最初から", "small", () => {
   if (!material) return;
-  if (!confirm("区間・マーカー・手直し・書き出し設定をすべて捨てて、解析結果から作り直します(探索範囲は残ります)。よろしいですか?(元に戻すで戻せます)")) return;
+  if (!confirm("サンプリング済音源・マーカー・手直し・書き出し設定をすべて捨てて、解析結果から作り直します(探索範囲は残ります)。よろしいですか?(元に戻すで戻せます)")) return;
   const hadCorrections = material.corrections.length > 0;
   material.corrections = [];
   freshCuts();
@@ -1327,7 +1327,7 @@ const detailsPanel = el("details", { className: "panel params" }, [
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "最初から作り直す" }),
-      el("p", { className: "fine help", textContent: "この素材の区間・マーカー・手直し・書き出し設定を捨てて、解析結果から作り直します(探索範囲は残ります)。" }),
+      el("p", { className: "fine help", textContent: "この素材のサンプリング済音源・マーカー・手直し・書き出し設定を捨てて、解析結果から作り直します(探索範囲は残ります)。" }),
       el("div", { className: "row tight" }, [resetSettingsButton, settingsStatus]),
     ]),
     location.search.includes("bench") ? el("div", { className: "row" }, [benchButton, benchResult]) : el("span"),
@@ -1656,7 +1656,7 @@ async function openProjectPanel(): Promise<void> {
         await switchProject(entry.id);
       }),
     ]),
-    el("p", { className: "fine", textContent: "編集はこのブラウザに自動で保存されます。ファイルに保存すると、素材の音声・区間の設定・打ち込みが 1 つにまとまり、別の端末やブラウザで「ファイルから開く」で続きができます(ファイルはページにドロップしても開けます)。" }),
+    el("p", { className: "fine", textContent: "編集はこのブラウザに自動で保存されます。ファイルに保存すると、素材の音声・サンプリング済音源の設定・打ち込みが 1 つにまとまり、別の端末やブラウザで「ファイルから開く」で続きができます(ファイルはページにドロップしても開けます)。" }),
     el("div", { className: "project-list" }, rows),
     room,
     projectFileInput,
@@ -2206,7 +2206,7 @@ function freshCuts(): void {
   if (!material) return;
   const hint = nextPresetHint;
   nextPresetHint = "";
-  cuts = [cutFor(material.analysis.track, material.analysis.markers, "区間 1", DEFAULT_PARAMS, hint, false)];
+  cuts = [cutFor(material.analysis.track, material.analysis.markers, "音源 1", DEFAULT_PARAMS, hint, false)];
   current = 0;
 }
 
@@ -2264,7 +2264,7 @@ function addCut(how: "copy" | "next"): void {
     let from = markers.rangeEnd;
     if (duration - from < 0.05) from = Math.max(0, duration - length); // at the end already: overlap instead
     const to = Math.min(duration, from + length);
-    cut = cutFromAnalysis(suggestMarkersWithin(material.analysis.track, from, to), `区間 ${cuts.length + 1}`, params);
+    cut = cutFromAnalysis(suggestMarkersWithin(material.analysis.track, from, to), `音源 ${cuts.length + 1}`, params);
   }
   cuts.splice(current + 1, 0, cut);
   current++;
@@ -2276,7 +2276,7 @@ function removeCut(): void {
   if (cuts.length < 2) return;
   const gone = cuts[current];
   const users = material && gone ? rollPanel.tracksUsing(instrumentId(material.id, gone.id)) : [];
-  if (!confirm(`区間「${gone.name}」を削除しますか?${users.length ? `\nこの区間を鳴らしているトラック(${users.join("、")})は鳴らなくなります。` : ""}`)) return;
+  if (!confirm(`音源「${gone.name}」を削除しますか?${users.length ? `\nこの音源を鳴らしているトラック(${users.join("、")})は鳴らなくなります。` : ""}`)) return;
   cuts.splice(current, 1);
   current = Math.min(current, cuts.length - 1);
   applyCurrentCut();
@@ -3316,12 +3316,12 @@ async function addPiano(): Promise<void> {
   if (there) {
     if (there.material !== material) switchMaterial(there.material.id);
     refreshMaterialSelect();
-    status.textContent = `「${PIANO_NAME}」に切り替えました。トラックで鳴らすには、トラック一覧の区間の欄で選んでください。`;
+    status.textContent = `「${PIANO_NAME}」に切り替えました。トラックで鳴らすには、トラック一覧の音源の欄で選んでください。`;
     return;
   }
   await loadPiano();
   refreshInstruments();
-  if (material?.name === PIANO_NAME) status.textContent = `「${PIANO_NAME}」を素材に加えました。トラックで鳴らすには、トラック一覧の区間の欄で選ぶか、「＋ トラックを追加」で新しいトラックを作ってください。`;
+  if (material?.name === PIANO_NAME) status.textContent = `「${PIANO_NAME}」を素材に加えました。トラックで鳴らすには、トラック一覧の音源の欄で選ぶか、「＋ トラックを追加」で新しいトラックを作ってください。`;
 }
 
 async function openFile(file: File): Promise<void> {
@@ -3333,7 +3333,7 @@ async function openFile(file: File): Promise<void> {
         return;
       }
       applySettings(settings);
-      status.textContent = `設定ファイル「${file.name}」を読み込みました(区間 ${settings.cuts.length} 個)。`;
+      status.textContent = `設定ファイル「${file.name}」を読み込みました(音源 ${settings.cuts.length} 個)。`;
     } catch (error) {
       status.textContent = `設定を読み込めませんでした: ${error instanceof Error ? error.message : error}`;
     }

@@ -19,7 +19,7 @@ function setup() {
   const material = demoSyllable(SR);
   const analysis = analyzeMaterial([material], SR);
   const source = prepareSource([material], analysis, SR);
-  const cut: CutSettings = { id: "c1", name: "区間 1", markers: analysis.markers, params: { ...DEFAULT_PARAMS, root: analysis.root!.midi }, note: 62, noteMode: "auto" };
+  const cut: CutSettings = { id: "c1", name: "音源 1", markers: analysis.markers, params: { ...DEFAULT_PARAMS, root: analysis.root!.midi }, note: 62, noteMode: "auto" };
   return { material, analysis, source, cut };
 }
 
@@ -141,20 +141,20 @@ describe("buildOne / buildBatch", () => {
 
   it("batch: every cut's file plus settings.json in one zip", async () => {
     const { source, cut, analysis } = setup();
-    const second: CutSettings = { ...cut, name: "区間 2", note: 65 };
+    const second: CutSettings = { ...cut, name: "音源 2", note: 65 };
     const settings = { ...DEFAULT_EXPORT, format: "single" as const };
     const json = serializeSettings({ material: { name: "ore", durationSec: analysis.durationSec, sampleRate: SR, channels: 1 }, export: settings, cuts: [cut, second], currentCut: 0, corrections: [] });
     const built = await buildBatch(
       [
-        { baseName: "ore_区間 1", source, cut, settings },
-        { baseName: "ore_区間 2", source, cut: second, settings },
+        { baseName: "ore_音源 1", source, cut, settings },
+        { baseName: "ore_音源 2", source, cut: second, settings },
       ],
       json,
       "ore",
     );
     expect(built.fileName).toBe("ore_cuts.zip");
     const names = listZip(new Uint8Array(await built.blob.arrayBuffer())).map((e) => e.name);
-    expect(names).toEqual(["ore_区間 1_D4_2beat@120.wav", "ore_区間 2_F4_2beat@120.wav", "settings.json"]);
+    expect(names).toEqual(["ore_音源 1_D4_2beat@120.wav", "ore_音源 2_F4_2beat@120.wav", "settings.json"]);
   });
 
   it("batch: two cuts with the same name do not land on the same path", async () => {
@@ -195,7 +195,7 @@ describe("settings file", () => {
 
     const sparse = parseSettings(JSON.stringify({ app: "MADDAW", version: 1, cuts: [{ markers: { rangeStart: 0, rangeEnd: 1, sustainStart: 0.3, sustainEnd: 0.6 }, params: { flatten: 2 } }], corrections: [{ start: 1, end: 0.5, kind: "voiced" }, { start: 0, end: 1, kind: "nonsense" }, "x"] }));
     expect(sparse.corrections).toEqual([]); // every one of those is malformed
-    expect(sparse.cuts[0].name).toBe("区間 1");
+    expect(sparse.cuts[0].name).toBe("音源 1");
     expect(sparse.cuts[0].params.flatten).toBe(1);
     expect(sparse.cuts[0].params.wobble.micro).toBe(true);
     expect(sparse.export.beats).toBe(2);

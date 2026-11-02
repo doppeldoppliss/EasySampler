@@ -1231,13 +1231,13 @@ export class RollPanel {
       // A melodic track with no cut plays nothing: it says so. Effects on: an FX mark that opens them.
       const silent =
         t.kind === "melodic" && !t.instrument
-          ? el("span", { className: "warn fine", textContent: "音源を選ぶと鳴ります" })
+          ? el("span", { className: "warn fine track-note", textContent: "音源を選ぶと鳴ります" })
           : t.kind === "audio" && !t.notes.length
-            ? el("span", { className: "fine", textContent: "ピアノロールをタップで素材を置きます" })
+            ? el("span", { className: "fine track-note", textContent: "ピアノロールをタップで素材を置きます" })
             : null;
       const fxOn = Object.values(t.fx).some((g) => (g as { on?: boolean }).on);
       const fxMark = fxOn
-        ? button("FX", "small toggle on fx-mark", () => {
+        ? button("FX", "small toggle on fx-mark track-fx", () => {
             this.selectTrack(i);
             this.onOpenFx();
           }, "このトラックにエフェクトがかかっています(押すとエフェクトを開きます)")
@@ -1246,19 +1246,20 @@ export class RollPanel {
       // A track on a cut: straight to that cut's settings on the 素材 side.
       const editCut =
         t.kind === "melodic" && t.instrument && t.instrument !== BACKING
-          ? button("音源を編集", "small", () => this.onEditCut(t.instrument!), "このトラックが鳴らしているサンプリング済音源を、素材の画面で開きます")
+          ? button("音源を編集", "small track-edit", () => this.onEditCut(t.instrument!), "このトラックが鳴らしているサンプリング済音源を、素材の画面で開きます")
           : null;
       const row = el("div", { className: `track-row${selected ? " selected" : ""}` }, [
         el("span", { className: "track-count fine num", textContent: `${t.notes.length}` }),
         name,
         instrument,
-        ...(editCut ? [editCut] : []),
+        // (A row without one keeps its place empty: the columns line up from row to row.)
+        editCut ?? el("span", { className: "track-slot track-edit" }),
         mute,
         solo,
         el("label", { className: "inline fine" }, ["音量 ", volume]),
         el("label", { className: "inline fine" }, ["パン ", pan]),
-        ...(fxMark ? [fxMark] : []),
-        ...(silent ? [silent] : []),
+        fxMark ?? el("span", { className: "track-slot track-fx" }),
+        silent ?? el("span", { className: "track-slot track-note" }),
         remove,
       ]);
       row.addEventListener("pointerdown", (e) => {

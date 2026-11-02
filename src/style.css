@@ -996,6 +996,41 @@ body.keys-pinned {
   cursor: pointer;
 }
 
+/*
+ * Every row the same grid, so a row without an optional part (音源を編集, FX, a note) keeps its place empty and
+ * the parts line up. The children come in a fixed order: count, name, instrument, 音源を編集, M, S, 音量, パン,
+ * FX, note, ×. Narrow: wrapped lines of fixed widths (name, FX, 音源を編集, × / the instrument / M S 音量 パン / the note).
+ */
+@media (max-width: 899px) {
+  .track-row > :nth-child(1) { order: 1; width: 2em; }
+  .track-row > :nth-child(2) { order: 2; flex: 1 1 0; min-width: 0; width: auto; }
+  .track-row > :nth-child(9) { order: 3; width: 2.6rem; }
+  .track-row > :nth-child(4) { order: 4; width: 6.5rem; }
+  .track-row > :nth-child(11) { order: 5; width: 2.4rem; }
+  .track-row > :nth-child(3) { order: 6; flex: 1 1 100%; width: auto; max-width: none; }
+  .track-row > :nth-child(5) { order: 7; }
+  .track-row > :nth-child(6) { order: 8; }
+  .track-row > :nth-child(7) { order: 9; }
+  .track-row > :nth-child(8) { order: 10; }
+  .track-row > :nth-child(10) { order: 11; flex: 1 1 100%; }
+  .track-row > .track-note:empty { display: none; }
+  .track-row input[type="range"] { width: 64px; }
+}
+
+/* Wide enough: a grid of the same columns in every row, so a row without an optional button stays in line. */
+@media (min-width: 900px) {
+  .track-row {
+    display: grid;
+    grid-template-columns: 2.2em 9em 16em 7em auto auto auto auto 3em minmax(0, 1fr) auto;
+  }
+  .track-row > .track-edit { width: 7em; }
+  .track-row > select,
+  .track-row > .track-drum {
+    width: 100%;
+    max-width: none;
+  }
+}
+
 .track-row.selected {
   border-color: var(--accent);
   box-shadow: inset 3px 0 0 var(--accent);

@@ -6,7 +6,6 @@
 
 /** How the sustain fills the note: a random walk over steady periods, a loop, a wavetable of a few periods,
  * the whole region slowed to fit ("stretch": its natural change kept, VocalShifter-style), or not at all. */
-import type { ScaleId } from "./scale";
 
 export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
 export type PitchMode = "preserve-length" | "resample";
@@ -48,17 +47,13 @@ export interface InstrumentParams {
   /** 0 = the material's own inflection, 1 = flat on the note (★3). */
   flatten: number;
   /**
-   * What the pitch is flattened toward: the one root (one note out of the clip),
-   * or the nearest note of a scale, frame by frame (a clip with several notes
-   * keeps them; with flatten = 1 and no wobble it is VocalShifter's ケロケロ).
+   * The pitch is flattened toward the one detected note (the root): one note out of the clip,
+   * which is what シンセ化 wants (a scale-following, ケロケロ mode was taken out on 2026-11-03).
    */
   tune: {
-    mode: "flatten" | "scale";
-    scale: ScaleId;
-    key: number;
     /**
-     * How fast the pitch is pulled toward its target, as a time constant in seconds
-     * (Auto-Tune's Retune Speed): 0 = at once (ケロケロ), ~0.03 = natural, long = only slow drift goes.
+     * How fast the pitch is pulled toward the note, as a time constant in seconds
+     * (Auto-Tune's Retune Speed): 0 = at once, ~0.03 = natural, long = only slow drift goes.
      */
     retuneSec: number;
   };
@@ -103,7 +98,7 @@ export interface InstrumentParams {
   heldSustainMode: Exclude<SustainMode, "none">;
   /**
    * 移調 (a one-shot only): the pitch is moved as a whole, its contour untouched — the pitch shaping
-   * (平坦化, 音程の整え方, リチューン, the kept wobble, 細かい揺れ) is not applied, whatever it is set to.
+   * (平坦化, リチューン, the kept wobble, 細かい揺れ) is not applied, whatever it is set to.
    */
   transposeOnly: boolean;
   /** Wavetable sustain: how many consecutive periods are cycled (1 = one period over and over). */
@@ -213,7 +208,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   rootMode: "auto",
   pitchMode: "preserve-length",
   flatten: 1,
-  tune: { mode: "flatten", scale: "chromatic", key: 0, retuneSec: 0 },
+  tune: { retuneSec: 0 },
   unvoicedFollow: false,
   fixedPitch: false,
   stopOnRelease: false,
@@ -285,7 +280,7 @@ function presetBase(p: InstrumentParams): InstrumentParams {
     ...p,
     pitchMode: "preserve-length",
     flatten: 1,
-    tune: { ...p.tune, mode: "flatten", retuneSec: 0 },
+    tune: { retuneSec: 0 },
     unvoicedFollow: d.unvoicedFollow,
     levelEven: d.levelEven,
     unvoicedGainDb: d.unvoicedGainDb,

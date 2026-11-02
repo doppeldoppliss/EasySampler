@@ -348,22 +348,7 @@ describe("sustain mode \"stretch\"", () => {
   });
 });
 
-describe("音階に合わせる (tune mode \"scale\")", () => {
-  it("lands the note on the scale's nearest note instead of the root", () => {
-    const material = demoSyllable(SR); // D4 −6¢
-    const { analysis } = setup(material);
-    const root = analysis.root!.midi;
-    const played = Math.round(root);
-    // E major: the material's D4 −6¢ (61.94) sits nearest C#4 (61).
-    const out = play(setup(material, { tune: { ...DEFAULT_PARAMS.tune, mode: "scale", scale: "major", key: 4 } }).engine, played, 1.2, 0.1);
-    const pitch = rootPitch(analyzePitch(out.slice(Math.round(0.3 * SR), Math.round(1.1 * SR)), SR))!;
-    expect(Math.abs(pitch.midi - 61)).toBeLessThan(0.2);
-    // Chromatic: on the nearest semitone, D4.
-    const chroma = play(setup(material, { tune: { ...DEFAULT_PARAMS.tune, mode: "scale", scale: "chromatic", key: 0 } }).engine, played, 1.2, 0.1);
-    const p2 = rootPitch(analyzePitch(chroma.slice(Math.round(0.3 * SR), Math.round(1.1 * SR)), SR))!;
-    expect(Math.abs(p2.midi - 62)).toBeLessThan(0.2);
-  });
-
+describe("vibrato and tremolo", () => {
   it("vibrato: a release fades it, a phase moves it; tremolo shakes the level", () => {
     const material = demoSyllable(SR);
     // (A long release keeps the note sounding after the key is let go: that is where the vibrato's release shows.)
@@ -531,7 +516,7 @@ describe("Engine portamento (a song track's glide)", () => {
 });
 
 describe("Engine: resampling presets leave the pitch shaping unused", () => {
-  it("sounds the same whatever 平坦化 / 整え方 / リチューン say", async () => {
+  it("sounds the same whatever 平坦化 / リチューン say", async () => {
     const { PRESETS } = await import("../instrument/types");
     const vowel = synthVoice({ sampleRate: SR, durationSec: 0.6, pitch: demoPhrasePitch(57, 0.6) });
     const render = (over: Partial<InstrumentParams>) => {
@@ -541,7 +526,7 @@ describe("Engine: resampling presets leave the pitch shaping unused", () => {
       return play(engine, 62, 0.3, 0.5);
     };
     const plain = render({});
-    const shaped = render({ flatten: 1, tune: { ...DEFAULT_PARAMS.tune, mode: "scale", retuneSec: 0.05 }, unvoicedGainDb: -20 });
+    const shaped = render({ flatten: 1, tune: { retuneSec: 0.05 }, unvoicedGainDb: -20 });
     expect(shaped.length).toBe(plain.length);
     let diff = 0;
     for (let i = 0; i < plain.length; i++) diff = Math.max(diff, Math.abs(plain[i] - shaped[i]));

@@ -49,7 +49,6 @@ import { cssVar, el, isTypingTarget } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 import { clock, RangePicker } from "./ui/rangePicker";
-import { KEY_NAMES, quantizeToScale, SCALE_LABELS, type ScaleId } from "./instrument/scale";
 import { isMidiFile } from "./song/midi";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 import { evenStems, renderSong, type RenderTrack } from "./daw/songRender";
@@ -694,11 +693,6 @@ const timePanel = el("details", { className: "sub" }, [
   el("p", { className: "fine", textContent: "1.00 が録音のまま。伸ばす作り方では、持続区間の長さは押している長さ(音符の長さ)で決まります。" }),
   range("頭部 ×", 0.25, 4, 0.05, () => params.stretch.head, (p, v) => (p.stretch.head = v), stretchFormat),
 ]);
-// 音階: the key and the scale (shown in "scale" mode).
-const tuneScaleRow = el("div", { className: "row tight" }, [
-  select("キー", KEY_NAMES.map((n, i) => [String(i), n] as [string, string]), () => String(params.tune.key), (p, v) => (p.tune.key = Number(v))),
-  select("音階", (Object.keys(SCALE_LABELS) as ScaleId[]).map((id) => [id, SCALE_LABELS[id]] as [ScaleId, string]), () => params.tune.scale, (p, v) => (p.tune.scale = v)),
-]);
 
 const vibratoPanel = el("details", { className: "sub" }, [
   el("summary", { textContent: "ビブラート" }),
@@ -827,7 +821,7 @@ function refreshMakeMode(): void {
 
 // Played by resampling (無加工, ドラム・効果音…), a cut's pitch only follows the key, sped up or slowed down:
 // the pitch shaping and the voiceless-sound handling are not used, and are shown so (dimmed, out of reach).
-const pitchModeNote = el("p", { className: "fine help pitch-mode-note", hidden: true, textContent: "「ピッチの変え方」が速度連動(録音を早回し・遅回しして高さを変える)なので、音程の調整(平坦化・整え方・リチューン・揺れの残し方)・フォルマント・子音・息の扱いは使われません。使うときは、細かい設定の「ピッチの変え方」を「長さ保持」にしてください。" });
+const pitchModeNote = el("p", { className: "fine help pitch-mode-note", hidden: true, textContent: "「ピッチの変え方」が速度連動(録音を早回し・遅回しして高さを変える)なので、音程の調整(平坦化・リチューン・揺れの残し方)・フォルマント・子音・息の扱いは使われません。使うときは、細かい設定の「ピッチの変え方」を「長さ保持」にしてください。" });
 const pitchGroups: HTMLElement[] = [];
 function pitchGroup(children: HTMLElement[]): HTMLElement {
   const group = el("div", { className: "pitch-group" }, children);
@@ -874,11 +868,8 @@ const tunePanel = el("section", { className: "panel tune" }, [
   pitchModeNote,
   shaping(pitchGroup([
     range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
-    select("音程の整え方", [["flatten", "判定した 1 音に寄せる"], ["scale", "音階の最寄りの音に、場所ごとに寄せる(複数の音を残す)"]], () => params.tune.mode, (p, v) => (p.tune.mode = v)),
-    tuneScaleRow,
-    range("音程を寄せる速さ(リチューン)", 0, 0.3, 0.005, () => params.tune.retuneSec, (p, v) => (p.tune.retuneSec = v), (v) => (v === 0 ? "即座(ケロケロ向き)" : ms(v))),
-    el("p", { className: "fine help", textContent: "判定した高さから鳴らす高さへ寄せるときの速さ(Auto-Tune の Retune Speed)。即座だと貼り付いたように、30 ms 前後だと自然に、長いとゆっくりした狂いだけが直ります。" }),
-    el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなし・リチューン即座でケロケロになります。" }),
+    range("音程を寄せる速さ(リチューン)", 0, 0.3, 0.005, () => params.tune.retuneSec, (p, v) => (p.tune.retuneSec = v), (v) => (v === 0 ? "即座" : ms(v))),
+    el("p", { className: "fine help", textContent: "音程は、判定した 1 音(を鳴らす高さへ移したもの)に寄せます。これはその寄せる速さ(Auto-Tune の Retune Speed)。即座だとぴたりと、30 ms 前後だと自然に、長いとゆっくりした狂いだけが直ります。" }),
   ])),
   held(range("持続部の音量を揃える", 0, 1, 0.05, () => params.levelEven, (p, v) => (p.levelEven = v), pct)),
   held(el("p", { className: "fine help", textContent: "素材の持続区間が減衰していても、伸ばした音の音量が一定になります。0% で録音どおりの強弱(頭部は常にそのまま)。" })),
@@ -2334,7 +2325,6 @@ function refreshExport(): void {
   client.setHold(exportLengthSec(exportSettings));
   refreshInstruments();
   refreshCutUsage();
-  tuneScaleRow.hidden = params.tune.mode !== "scale";
   refreshMakeMode();
   if (noteMode === "auto") note = Math.max(24, Math.min(96, Math.round(params.root)));
   noteSelect.value = String(note);
@@ -2379,15 +2369,8 @@ function refreshExport(): void {
   if (markers) {
     const flatten = params.transposeOnly ? 0 : params.flatten;
     editor.setParts(playedParts(params));
-    const shaper =
-      params.tune.mode === "scale" && !params.transposeOnly
-        ? (p: number) => {
-            const transposed = p + (note - params.root);
-            return transposed - params.flatten * (transposed - quantizeToScale(transposed, params.tune.scale, params.tune.key));
-          }
-        : null;
     // (録音した高さで鳴らす: the output stays at the recording's own pitch, whatever the note.)
-    editor.setState(markers, params.root, flatten, params.fixedPitch ? params.root : note, params.fixedPitch ? null : shaper);
+    editor.setState(markers, params.root, flatten, params.fixedPitch ? params.root : note);
     refreshFadeGrips();
     editor.setLayout(
       outputLayout(markers, params, held),

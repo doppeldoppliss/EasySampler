@@ -280,13 +280,7 @@ export function sanitizeFx(raw: unknown): FxSettings {
 
 function sanitizeTune(raw: unknown, d: InstrumentParams["tune"]): InstrumentParams["tune"] {
   const r = isRecord(raw) ? raw : {};
-  const scales = ["chromatic", "major", "minor", "pentatonic"] as const;
-  return {
-    mode: r.mode === "scale" ? "scale" : "flatten",
-    scale: scales.includes(r.scale as never) ? (r.scale as InstrumentParams["tune"]["scale"]) : d.scale,
-    key: clamp(Math.round(num(r.key, d.key)), 0, 11),
-    retuneSec: clamp(num(r.retuneSec, d.retuneSec), 0, 1),
-  };
+  return { retuneSec: clamp(num(r.retuneSec, d.retuneSec), 0, 1) };
 }
 
 function sanitizeExport(raw: unknown): ExportSettings {

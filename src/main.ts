@@ -349,6 +349,8 @@ const guide = el("aside", { className: "steps", hidden: safeStorage(GUIDE_KEY) =
 
 // ---------------------------------------------------------------- panel 1: the material and its cuts
 
+/** The legend's 持続区間: what it does in the cut's 作り方 (gone when the sustain is off, 頭部だけ). */
+const sustainLegend = el("span", {}, [el("span", { className: "band-dot sustain" }), el("span")]);
 const cutSelect = el("select", { ariaLabel: "音源", className: "cut-select" });
 cutSelect.addEventListener("change", () => selectCut(Number(cutSelect.value)));
 const cutName = el("input", { type: "text", className: "cut-name", ariaLabel: "音源の名前", maxLength: 40 });
@@ -619,10 +621,7 @@ const materialPanel = el("section", { className: "panel" }, [
     el("span", { className: "swatch original" }), "元のピッチ  ",
     el("span", { className: "swatch edited" }), "整えたあと(試聴の高さで鳴らしたとき)",
   ]),
-  el("p", { className: "fine band-legend" }, [
-    el("span", { className: "band-dot head" }), "頭部 = 1 回だけ鳴る出だし　",
-    el("span", { className: "band-dot sustain" }), "持続区間 = 押している間伸ばす部分",
-  ]),
+  el("p", { className: "fine band-legend" }, [el("span", { className: "band-dot head" }), "頭部 = 1 回だけ鳴る出だし　", sustainLegend]),
   fixBar,
 ]);
 
@@ -793,6 +792,8 @@ function refreshMakeMode(): void {
   releaseRow.hidden = !hold && !params.stopOnRelease;
   refreshVolumeSummary();
   sustainStretchRow.hidden = hold || !params.sustainEnabled;
+  sustainLegend.hidden = !params.sustainEnabled;
+  sustainLegend.lastElementChild!.textContent = hold ? "持続区間 = 押している間伸ばす部分" : "持続区間 = ここから後ろが「持続区間から後の長さ」で伸び縮み";
   const texts: Record<string, string> = {
     pool: "持続区間の安定した周期をつなぎ合わせて、押している間いくらでも伸ばします(自然)。",
     stretch: "持続区間全体を「長さ」に収まるようゆっくり鳴らします(VocalShifter の TIME のように、声の変化が残る)。長さを超えて押すと持続区間の終わりから「自然」で続きます。",

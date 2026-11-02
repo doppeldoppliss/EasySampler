@@ -75,8 +75,9 @@ const MIN_VIEW_SEC = 0.05;
 
 // (No tailStart: 語尾 was taken out; the tail's start follows the sustain's end.)
 const HANDLE_ORDER: Handle[] = ["rangeStart", "attack", "sustainStart", "sustainEnd", "rangeEnd"];
-/** The handles the user may reach: the range's end only where the cut plays on past its sustain (a one-shot). */
+/** The handles the user may reach: the range's end only where the cut plays on past its sustain (a one-shot), the sustain's end only where the sustain plays. */
 const HELD_HANDLES: Handle[] = HANDLE_ORDER.filter((h) => h !== "rangeEnd");
+const HEAD_HANDLES: Handle[] = HANDLE_ORDER.filter((h) => h !== "rangeEnd" && h !== "sustainEnd");
 
 export class MaterialEditor {
   readonly element: HTMLElement;
@@ -397,11 +398,12 @@ export class MaterialEditor {
   }
 
   /**
-   * The handles shown and reached. A cut that holds (伸ばす) or plays its head only never sounds past its sustain,
-   * so its range's end does nothing: it is not shown (it stays where it was, for a one-shot to use again).
+   * The handles shown and reached. A cut that holds (伸ばす) never sounds past its sustain, so its range's end does
+   * nothing; one that plays its head only (頭部だけ) has no sustain either, so the sustain's end goes too. They are not
+   * shown (they stay where they were, for the settings that use them again).
    */
   private handles(): Handle[] {
-    return this.parts.tail ? HANDLE_ORDER : HELD_HANDLES;
+    return this.parts.tail ? HANDLE_ORDER : this.parts.sustain ? HELD_HANDLES : HEAD_HANDLES;
   }
 
   /** Where the cut's sound ends in the material: the range's end for a one-shot, the sustain's end when held, the head's for 頭部だけ. */

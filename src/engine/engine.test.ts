@@ -534,24 +534,6 @@ describe("Engine: resampling presets leave the pitch shaping unused", () => {
   });
 });
 
-describe("Engine: 録音した高さで鳴らす (fixed pitch)", () => {
-  const vowel = synthVoice({ sampleRate: SR, durationSec: 0.8, pitch: demoPhrasePitch(57, 0.8) });
-  it("plays every key at the recording's pitch, by resampling or by grains", async () => {
-    const { PRESETS } = await import("../instrument/types");
-    for (const [preset, pitchMode] of [["short", "resample"], ["synth", "preserve-length"]] as const) {
-      const { engine, analysis } = setup(vowel);
-      const root = analysis.root!.midi;
-      const params: InstrumentParams = { ...PRESETS.find((p) => p.id === preset)!.apply({ ...DEFAULT_PARAMS, root }), pitchMode, fixedPitch: true };
-      engine.setInstrument(analysis.markers, params);
-      for (const key of [Math.round(root) - 12, Math.round(root) + 7]) {
-        const out = play(engine, key, 0.6, 0.3);
-        const got = rootPitch(analyzePitch(out.slice(0, Math.round(0.6 * SR)), SR))!.midi;
-        expect(Math.abs(got - root)).toBeLessThan(0.35);
-      }
-    }
-  });
-});
-
 describe("Engine: 減衰 (synthesized, dying away while held)", () => {
   it("draws the vowel out while its level falls to nothing; it ends on its own, and stops soon when let go", async () => {
     const { PRESETS } = await import("../instrument/types");

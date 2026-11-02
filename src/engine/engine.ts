@@ -302,10 +302,10 @@ export class Engine {
     return false;
   }
 
-  /** Semitones a voice is moved from the recording: its key (and slide) from the root, or none with 録音した高さで鳴らす. */
+  /** Semitones a voice is moved from the recording: its key (and slide) from the root. */
   private shiftOf(note: number, bend = 0): number {
     const params = this.params!;
-    return params.fixedPitch ? 0 : note + bend - params.root;
+    return note + bend - params.root;
   }
 
   /** How fast the read position moves through the material here: 1 ÷ the part's stretch factor (from the sustain on, the sustain's). */

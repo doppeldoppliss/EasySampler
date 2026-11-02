@@ -826,25 +826,14 @@ function pitchGroup(children: HTMLElement[]): HTMLElement {
   pitchGroups.push(group);
   return group;
 }
-// 録音した高さで鳴らす: what it means for the keys and the files, while it is on.
-const fixedPitchNote = el("p", { className: "fine help", hidden: true, textContent: "どの鍵・どの音符でも録音したままの高さで鳴ります(書き出す単音も録音した高さ)。打ち込みでは、音符の高さは鳴らす位置の目印だけになります。打楽器ならドラムキット、録音を置くだけなら音声トラックも使えます。" });
-controlsRefreshers.push(() => (fixedPitchNote.hidden = !params.fixedPitch));
-const fixedPitchCheck = check("鍵に関係なく、録音した高さで鳴らす(効果音向け)", () => params.fixedPitch, (p, v) => (p.fixedPitch = v));
-// (Its note and the editor's output line change with it.)
-fixedPitchCheck.querySelector("input")!.addEventListener("change", () => {
-  refreshControls();
-  refreshExport();
-});
 // 試聴の高さ: the note the 仕上がり preview (and a single-note file) plays at — under the editor, by the preview.
 const noteRow = el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "試聴の高さ" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]);
 materialPanel.querySelector(".editor-bar")!.after(noteRow);
 const tunePanel = el("section", { className: "panel tune" }, [
-  fixedPitchCheck,
-  fixedPitchNote,
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "作り方" }), makeSelect]),
   makeHelp,
   el("div", { className: "row tight" }, [resetModeButton]),
-  el("p", { className: "fine help", textContent: "作り方を切り替えても、ほかの設定はそのまま残ります。「初期値に戻す」は音の設定をこの作り方の初期値にします(試聴の高さ・入りと終わりのフェード・強弱の効き方・フォルマント・「録音した高さで鳴らす」「鍵を離したらそこで止める」はそのまま)。" }),
+  el("p", { className: "fine help", textContent: "作り方を切り替えても、ほかの設定はそのまま残ります。「初期値に戻す」は音の設定をこの作り方の初期値にします(試聴の高さ・入りと終わりのフェード・強弱の効き方・フォルマント・「鍵を離したらそこで止める」はそのまま)。" }),
   held(
     select(
       "持続区間の伸ばし方",
@@ -2353,8 +2342,7 @@ function refreshExport(): void {
   if (markers) {
     const flatten = params.transposeOnly ? 0 : params.flatten;
     editor.setParts(playedParts(params));
-    // (録音した高さで鳴らす: the output stays at the recording's own pitch, whatever the note.)
-    editor.setState(markers, params.root, flatten, params.fixedPitch ? params.root : note);
+    editor.setState(markers, params.root, flatten, note);
     refreshFadeGrips();
     editor.setLayout(
       outputLayout(markers, params, held),

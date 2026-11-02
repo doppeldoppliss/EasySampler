@@ -20,11 +20,11 @@ describe("presets: each a full starting point", () => {
     }
   });
 
-  it("keeps what is the user's: the root, the fades, velocity, formant, fixed pitch", () => {
-    const mine: InstrumentParams = { ...DEFAULT_PARAMS, root: 62.3, rootMode: "manual", formantSemitones: 2, fixedPitch: true, amp: { ...DEFAULT_PARAMS.amp, attack: 0.05, fadeOut: 0.4, velocitySens: 0.9 } };
+  it("keeps what is the user's: the root, the fades, velocity, formant", () => {
+    const mine: InstrumentParams = { ...DEFAULT_PARAMS, root: 62.3, rootMode: "manual", formantSemitones: 2, amp: { ...DEFAULT_PARAMS.amp, attack: 0.05, fadeOut: 0.4, velocitySens: 0.9 } };
     for (const preset of PRESETS) {
       const p = preset.apply(mine);
-      expect([p.root, p.rootMode, p.formantSemitones, p.fixedPitch, p.amp.attack, p.amp.fadeOut, p.amp.velocitySens]).toEqual([62.3, "manual", 2, true, 0.05, 0.4, 0.9]);
+      expect([p.root, p.rootMode, p.formantSemitones, p.amp.attack, p.amp.fadeOut, p.amp.velocitySens]).toEqual([62.3, "manual", 2, 0.05, 0.4, 0.9]);
     }
   });
 });

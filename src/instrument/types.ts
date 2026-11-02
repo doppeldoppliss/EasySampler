@@ -65,12 +65,6 @@ export interface InstrumentParams {
    */
   unvoicedFollow: boolean;
   /**
-   * 録音した高さで鳴らす: every key plays the cut at its own pitch (no shift by the
-   * key; a drum or a sound effect played from anywhere on the keyboard). Not a
-   * preset's choice: it stays as set when the preset changes.
-   */
-  fixedPitch: boolean;
-  /**
    * 離したら止める: when nothing is held (伸ばさない, or the sustain switched off), letting the key go
    * still ends the note there, over the リリース — instead of the recording playing out. Not a preset's
    * choice either.
@@ -203,7 +197,6 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   flatten: 1,
   tune: { retuneSec: 0 },
   unvoicedFollow: false,
-  fixedPitch: false,
   stopOnRelease: false,
   levelEven: 1,
   formantSemitones: 0,
@@ -265,7 +258,7 @@ export interface Preset {
  * What every preset starts from: the sound settings put back to the defaults,
  * so a preset never inherits another's leftovers (伸ばし方, 音量の形…). Kept
  * as the user set them: the note and root, the fade-in and fade-out (入り /
- * 終わりのフェード), velocity sensitivity, the formant, 録音した高さで鳴らす.
+ * 終わりのフェード), velocity sensitivity, the formant.
  */
 function presetBase(p: InstrumentParams): InstrumentParams {
   const d = DEFAULT_PARAMS;

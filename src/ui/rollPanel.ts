@@ -168,6 +168,8 @@ export class RollPanel {
   onOpenFx: () => void = () => {};
   /** 「ドラムキットを開く」: the page shows the kit view. */
   onOpenKit: () => void = () => {};
+  /** A track's 「区間を編集」: the page opens that cut on the 素材 side. */
+  onEditCut: (instrument: string) => void = () => {};
   /** A drum track's rows as the roll shows them: the GM key of each (top to bottom). */
   private rowKeys: number[] = [];
   /** 書き出し: the whole song as a WAV, each track as its own WAV (zip), or the notes as MIDI. */
@@ -387,7 +389,7 @@ export class RollPanel {
       el("div", { className: "row song-seek-row" }, [this.seekBar]),
       this.tempoList,
       this.trackList,
-      el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack()), button("＋ ドラムトラックを追加", "small", () => this.addTrack("drum")), button("＋ 音声トラックを追加", "small", () => this.addTrack("audio"), "素材の録音を、高さも速さも変えずにそのまま並べるトラック(声ネタ・効果音・ループ素材)")]),
+      el("div", { className: "row" }, [button("＋ トラックを追加", "small", () => this.addTrack("melodic")), button("＋ ドラムトラックを追加", "small", () => this.addTrack("drum")), button("＋ 音声トラックを追加", "small", () => this.addTrack("audio"), "素材の録音を、高さも速さも変えずにそのまま並べるトラック(声ネタ・効果音・ループ素材)")]),
       this.padList,
       this.glideRow,
       el("div", { className: "row roll-defaults" }, [
@@ -460,7 +462,7 @@ export class RollPanel {
     return this.loopOnlyBox.checked && loop.on && loop.end > loop.start ? { start: loop.start, end: loop.end } : null;
   }
 
-  /** The names of the tracks that play a cut (to warn before the cut goes). */
+  /** The names of the tracks that play a cut (shown with it; a warning before it goes). */
   tracksUsing(instrument: string): string[] {
     return this.project.tracks.filter((t) => t.instrument === instrument).map((t) => t.name);
   }
@@ -874,15 +876,20 @@ export class RollPanel {
     this.onTrackChange();
   }
 
-  private addTrack(kind: Track["kind"] = "melodic"): void {
+  /** A new track playing a cut (the 素材 side's 「この区間でトラックを作る」), selected. */
+  addTrackWith(instrument: string, name: string): void {
+    this.addTrack("melodic", instrument, name);
+  }
+
+  private addTrack(kind: Track["kind"] = "melodic", instrument: string | null = this.editedInstrument, trackName?: string): void {
     const count = (k: Track["kind"]) => this.project.tracks.filter((x) => x.kind === k).length + 1;
-    const name = kind === "drum" ? `ドラム ${count("drum")}` : kind === "audio" ? `音声 ${count("audio")}` : `トラック ${this.project.tracks.length + 1}`;
+    const name = trackName ?? (kind === "drum" ? `ドラム ${count("drum")}` : kind === "audio" ? `音声 ${count("audio")}` : `トラック ${this.project.tracks.length + 1}`);
     const t =
       kind === "drum"
         ? newDrumTrack(name)
         : kind === "audio"
           ? newAudioTrack(name, this.project.editing ?? this.project.materials[0]?.id ?? null)
-          : newTrack(name, this.editedInstrument);
+          : newTrack(name, instrument);
     this.project.tracks.push(t);
     this.selected = this.project.tracks.length - 1;
     this.showTrackInRoll();
@@ -994,10 +1001,16 @@ export class RollPanel {
           }, "このトラックにエフェクトがかかっています(押すとエフェクトを開きます)")
         : null;
       remove.hidden = this.project.tracks.length < 2;
+      // A track on a cut: straight to that cut's settings on the 素材 side.
+      const editCut =
+        t.kind === "melodic" && t.instrument && t.instrument !== BACKING
+          ? button("区間を編集", "small", () => this.onEditCut(t.instrument!), "このトラックが鳴らしている区間を、素材の画面で開きます")
+          : null;
       const row = el("div", { className: `track-row${selected ? " selected" : ""}` }, [
         el("span", { className: "track-count fine num", textContent: `${t.notes.length}` }),
         name,
         instrument,
+        ...(editCut ? [editCut] : []),
         mute,
         solo,
         el("label", { className: "inline fine" }, ["音量 ", volume]),

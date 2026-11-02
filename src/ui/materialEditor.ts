@@ -846,7 +846,7 @@ export class MaterialEditor {
       const px = (sec: number) => laneX + (sec / layout.totalSec) * laneW;
       g.font = `${10 * dpr}px system-ui, sans-serif`;
       /** Where the lane's name ends (it is drawn over the start of the lane). */
-      const laneNameReserve = g.measureText("書き出し後").width + 8 * dpr;
+      const laneNameReserve = g.measureText("仕上がり").width + 8 * dpr;
       const ratio = (out: number, src: number) => (src > 0 ? `×${(out / src).toFixed(out / src >= 10 ? 0 : 1)}` : "");
       const parts: [number, number, string, string][] = [
         [0, layout.headSec, "--band-head", `頭部 ${ratio(layout.headSec, layout.headSrcSec)}`],
@@ -923,7 +923,7 @@ export class MaterialEditor {
       }
       // The lane's name, over whatever is under it; and how much runs on past the right edge.
       g.font = `${10 * dpr}px system-ui, sans-serif`;
-      const name = "書き出し後";
+      const name = "仕上がり";
       const nameW = g.measureText(name).width + 8 * dpr;
       g.fillStyle = cssVar("--strip");
       g.fillRect(0, stripBottom + 1 * dpr, nameW, lane - 1 * dpr);

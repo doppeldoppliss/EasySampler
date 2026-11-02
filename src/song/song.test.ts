@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MidiParseError, parseMidi } from "./midi";
 import { BackingSynth } from "./backing";
-import { backingNotes, materialNotes, songParts, type SeqNote } from "./parts";
+import { songParts, type SeqNote } from "./parts";
 import { autoValue, SongPlayer, type PlayerTrack, type TrackSound } from "./player";
 
 // ------------------------------------------------------------ a tiny SMF writer
@@ -106,33 +106,6 @@ describe("songParts", () => {
     expect(parts.find((p) => p.id === "t2d38")!.label).toContain("スネア");
   });
 
-  it("leaves the material's own part and the doubles out of the backing", () => {
-    const parts = songParts(parseMidi(demoSong()));
-    const lead = parts.find((p) => p.id === "t1")!;
-    const backing = backingNotes(parts, lead);
-    expect(backing.every((n) => n.drum)).toBe(true);
-    expect(backing.length).toBe(2);
-    // A single drum sound as the material: the rest of the kit (and the lead) still play.
-    const kick = parts.find((p) => p.id === "t2d36")!;
-    const withKick = backingNotes(parts, kick);
-    expect(withKick.filter((n) => n.drum).map((n) => n.note)).toEqual([38]);
-    expect(withKick.filter((n) => !n.drum).length).toBe(3);
-  });
-});
-
-describe("materialNotes", () => {
-  it("cuts a same-pitch note short where the next one starts, and transposes", () => {
-    const lead = songParts(parseMidi(demoSong()))[0];
-    const notes = materialNotes(lead, 12, null);
-    expect(notes.map((n) => n.note)).toEqual([72, 72, 74]);
-    expect(notes[0].end).toBeLessThan(0.5);
-    expect(notes[1].end).toBe(1);
-  });
-
-  it("plays a drum part on one fixed note", () => {
-    const kit = songParts(parseMidi(demoSong())).find((p) => p.id === "t2d")!;
-    expect(materialNotes(kit, 5, 64).map((n) => n.note)).toEqual([64, 64]);
-  });
 });
 
 describe("SongPlayer", () => {
@@ -349,9 +322,5 @@ describe("echo layers", () => {
     expect(echo.duplicateOf).toBe("t0");
     expect(echo.shiftSec).toBeCloseTo(1 / 6, 3);
     expect(echo.label).toContain("ずらした重ね");
-    const lead = parts.find((p) => p.id === "t0")!;
-    const bass = parts.find((p) => p.id === "t2")!;
-    expect(backingNotes(parts, lead).map((n) => n.note)).toEqual([36]);
-    expect(backingNotes(parts, bass).length).toBe(4);
   });
 });

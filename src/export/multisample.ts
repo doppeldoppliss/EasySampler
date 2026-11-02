@@ -19,14 +19,6 @@ export interface Zone {
   oneShot?: boolean;
 }
 
-/** A kit: each sample on one key, from `firstKey` upward, in order. */
-export function planKit(count: number, firstKey = 36): { lowKey: number; highKey: number; note: number }[] {
-  return [...Array(count).keys()].map((i) => {
-    const key = Math.min(127, firstKey + i);
-    return { lowKey: key, highKey: key, note: key };
-  });
-}
-
 /** Zones every `step` semitones from `center − below` to `center + above`, with the keys split between neighbours. */
 export function planZones(center: number, below = 12, above = 12, step = 3): { note: number; lowKey: number; highKey: number }[] {
   const notes: number[] = [];

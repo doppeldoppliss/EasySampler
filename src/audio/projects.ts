@@ -16,8 +16,6 @@ export interface ProjectEntry {
 
 const INDEX = "projects";
 const CURRENT = "currentProject";
-/** Where the single project of earlier versions was kept. */
-const LEGACY = "project";
 
 export const projectKey = (id: string) => `project:${id}`;
 
@@ -39,7 +37,7 @@ async function saveIndex(): Promise<void> {
   await keep(CURRENT, currentId);
 }
 
-/** Reads the index (call once at start). A first visit, or the single project of an earlier version, becomes the first entry. */
+/** Reads the index (call once at start). A first visit makes the first entry. */
 export async function openProjects(): Promise<ProjectEntry> {
   const stored = await kept(INDEX);
   entries = Array.isArray(stored)
@@ -52,11 +50,6 @@ export async function openProjects(): Promise<ProjectEntry> {
     const entry = { id: newId(), name: "プロジェクト 1", createdAt: now, updatedAt: now };
     entries.push(entry);
     currentId = entry.id;
-    const legacy = await kept(LEGACY);
-    if (legacy !== undefined) {
-      await keep(projectKey(entry.id), legacy);
-      await forget(LEGACY);
-    }
   }
   await saveIndex();
   return currentProject();

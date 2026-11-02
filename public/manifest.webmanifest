@@ -1,7 +1,7 @@
 {
-  "name": "EasySampler — 音MADのシンセ化",
+  "name": "EasySampler — 音MADを素材から曲まで",
   "short_name": "EasySampler",
-  "description": "素材の音程を判定して平らにし、母音を伸ばした単音 WAV を書き出す。iPhone / iPad でも。",
+  "description": "声や効果音から楽器を作り、MIDI や打ち込みで音MADの曲に仕上げる。iPhone / iPad でも。",
   "lang": "ja",
   "start_url": "./",
   "scope": "./",

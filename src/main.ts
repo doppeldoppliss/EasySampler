@@ -17,7 +17,7 @@ import { buildProjectFile, parseProjectFile, PROJECT_FILE_EXTENSION } from "./au
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, resample, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
 import type { PitchTrack } from "./analysis/pyin";
-import { buildBatch, buildKit, buildOne, type Built, type BuildInput } from "./export/build";
+import { buildBatch, buildOne, creditLine, type Built, type BuildInput } from "./export/build";
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
 import { exportFileName, safeBaseName, stripExtension } from "./export/render";
 import { newCutId, parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
@@ -44,7 +44,7 @@ import {
   type Markers,
   type PresetId,
 } from "./instrument/types";
-import { PIANO_NAME, PIANO_SECONDS, synthPiano } from "./testsignals/piano";
+import { PIANO_NAME, synthPiano } from "./testsignals/piano";
 import { cssVar, el, isTypingTarget } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
@@ -68,8 +68,6 @@ const MAX_MATERIAL_SEC = 60;
 /** Longer files are cut here when decoded (memory: 10 minutes of stereo 48 kHz is about 230 MB). */
 const MAX_DECODE_SEC = 600;
 const DEMO_RATE = 44100;
-/** The synthesized voice demo (「さー」) that earlier versions opened with: no longer offered, and taken out of saved projects. */
-const OLD_VOICE_DEMO_NAME = "デモ素材";
 const GUIDE_KEY = "maddaw.guide.v2";
 const SMALL_SCREEN = window.matchMedia("(max-width: 600px)").matches || (window.matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) <= 600);
 /** iPhone / iPad (an iPad calls itself a Mac, with touch). */
@@ -107,7 +105,6 @@ interface Material {
 
 /** One cut (区間) of the material: its own markers, parameters and note. */
 interface Cut extends CutSettings {
-  presetId: PresetId | "";
   /** The root as detected for the cut's markers (for "back to detected"). */
   detectedRoot: number | null;
 }
@@ -126,7 +123,6 @@ let current = 0;
 // The current cut, unpacked (kept in sync by syncCut()).
 let markers: Markers | null = null;
 let params: InstrumentParams = structuredClone(DEFAULT_PARAMS);
-let presetId: PresetId | "" = "synth";
 let note = 60;
 let noteMode: "auto" | "manual" = "auto";
 let exportSettings: ExportSettings = structuredClone(DEFAULT_EXPORT);
@@ -234,13 +230,10 @@ async function matchEngineRateOnce(): Promise<void> {
 
 const controlsRefreshers: (() => void)[] = [];
 
-function update(change: (p: InstrumentParams) => void, keepPreset = false): void {
+function update(change: (p: InstrumentParams) => void): void {
   const next = structuredClone(params);
   change(next);
   params = next;
-  if (!keepPreset) {
-    presetId = "";
-  }
   sendInstrument();
 }
 
@@ -251,7 +244,7 @@ function updateExport(change: (s: ExportSettings) => void): void {
   refreshExport();
 }
 
-function range(label: string, min: number, max: number, step: number, get: () => number, set: (p: InstrumentParams, v: number) => void, format: (v: number) => string, keepPreset = false): HTMLElement {
+function range(label: string, min: number, max: number, step: number, get: () => number, set: (p: InstrumentParams, v: number) => void, format: (v: number) => string): HTMLElement {
   const input = el("input", { type: "range", min: String(min), max: String(max), step: String(step) });
   const value = el("output", { className: "num" });
   const refresh = () => {
@@ -259,24 +252,24 @@ function range(label: string, min: number, max: number, step: number, get: () =>
     value.textContent = format(get());
   };
   input.addEventListener("input", () => {
-    update((p) => set(p, Number(input.value)), keepPreset);
+    update((p) => set(p, Number(input.value)));
     value.textContent = format(Number(input.value));
   });
   controlsRefreshers.push(refresh);
   return el("label", { className: "control" }, [el("span", { className: "control-label", textContent: label }), input, value]);
 }
 
-function select<T extends string>(label: string, options: [T, string][], get: () => T, set: (p: InstrumentParams, v: T) => void, keepPreset = false): HTMLElement {
+function select<T extends string>(label: string, options: [T, string][], get: () => T, set: (p: InstrumentParams, v: T) => void): HTMLElement {
   const input = el("select", {}, options.map(([value, text]) => el("option", { value, textContent: text })));
   controlsRefreshers.push(() => (input.value = get()));
-  input.addEventListener("change", () => update((p) => set(p, input.value as T), keepPreset));
+  input.addEventListener("change", () => update((p) => set(p, input.value as T)));
   return el("label", { className: "control" }, [el("span", { className: "control-label", textContent: label }), input]);
 }
 
-function check(label: string, get: () => boolean, set: (p: InstrumentParams, v: boolean) => void, keepPreset = false): HTMLElement {
+function check(label: string, get: () => boolean, set: (p: InstrumentParams, v: boolean) => void): HTMLElement {
   const input = el("input", { type: "checkbox" });
   controlsRefreshers.push(() => (input.checked = get()));
-  input.addEventListener("change", () => update((p) => set(p, input.checked), keepPreset));
+  input.addEventListener("change", () => update((p) => set(p, input.checked)));
   return el("label", { className: "control check" }, [input, el("span", { textContent: label })]);
 }
 
@@ -353,7 +346,7 @@ const status = el("p", { className: "status", role: "status" });
 
 // The listening volume (this browser only; the files are written as they are), kept for the next visit.
 const VOLUME_KEY = "easysampler.volume";
-const volumeSlider = el("input", { type: "range", min: "0", max: "100", step: "1", ariaLabel: "全体の音量(聴くときだけ)", className: "volume-slider" });
+const volumeSlider = el("input", { type: "range", min: "0", max: "100", step: "1", ariaLabel: "モニター音量(聴くときだけ)", className: "volume-slider" });
 const volumeValue = el("span", { className: "fine num volume-value" });
 function applyVolume(percent: number, keepIt: boolean): void {
   const p = Math.max(0, Math.min(100, Math.round(percent)));
@@ -369,12 +362,12 @@ volumeSlider.addEventListener("dblclick", () => applyVolume(100, true));
   const saved = Number(safeStorage(VOLUME_KEY) ?? "100");
   applyVolume(Number.isFinite(saved) ? saved : 100, false);
 }
-const volumeControl = el("label", { className: "inline volume", title: "ブラウザで聴くときの全体の音量です。書き出すファイルの音量は変わりません(ダブルクリックで 100)" }, ["🔊 ", volumeSlider, volumeValue]);
+const volumeControl = el("label", { className: "inline volume", title: "モニター音量: ブラウザで聴くときだけの音量です。曲のマスター音量や書き出すファイルは変わりません(ダブルクリックで 100)" }, ["🔊 ", volumeSlider, volumeValue]);
 
 // (Shown only once every material has been taken out: a new project starts on the built-in piano.)
 const emptyState = el("section", { className: "empty", hidden: true }, [
   el("p", { className: "empty-title", textContent: "声や効果音から楽器を作り、曲まで仕上げる。" }),
-  el("p", { textContent: "声や効果音のファイルを開くと、音程を判定して平らにし、母音を伸ばした単音の WAV を書き出せます。REAPER・GarageBand・Vital などのサンプラーにそのまま読み込めます。音域ぶんを揃えたマルチサンプル音源(SFZ / Decent Sampler)も作れます。" }),
+  el("p", { textContent: "声や効果音のファイルを開くと、音程を判定して、伸ばす・移調する・1 回鳴らす楽器にします。曲の画面で MIDI を開くか打ち込めば、その楽器で曲になります。単音の WAV やマルチサンプル音源(SFZ / Decent Sampler)として、ほかの DAW に渡すこともできます。" }),
   el("div", { className: "row" }, [el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" }), button("ピアノで始める", "", () => void loadPiano())]),
   el("p", { className: "fine", textContent: "生成AIは使っていません。素材は端末の中だけで処理され、外部には送られません。BGM の入った素材は、先に除去してから開いてください。" }),
 ]);
@@ -384,8 +377,8 @@ const emptyState = el("section", { className: "empty", hidden: true }, [
 const guide = el("aside", { className: "steps", hidden: safeStorage(GUIDE_KEY) === "seen" }, [
   el("ol", {}, [
     el("li", {}, [el("strong", { textContent: "聴いて確かめる" }), " — ▶ で鳴らし、判定した高さと帯(頭部・持続区間)がずれていれば直します"]),
-    el("li", {}, [el("strong", { textContent: "音名と長さを決める" }), " — 鍵盤は DAW で弾いたときの音の確認。●が書き出す音名です"]),
-    el("li", {}, [el("strong", { textContent: "曲にする" }), " — 「曲(打ち込み)」でこの音を鳴らして打ち込むか、1 音の WAV を保存して DAW のサンプラーで使います"]),
+    el("li", {}, [el("strong", { textContent: "作り方を選ぶ" }), " — 伸ばす(シンセ化)・移調・1 回鳴らす。鍵盤で弾いて確かめます"]),
+    el("li", {}, [el("strong", { textContent: "曲にする" }), " — 「曲(打ち込み)」のトラックでこの区間を選び、MIDI を開くか打ち込みます"]),
   ]),
   button("閉じる", "small", () => {
     guide.hidden = true;
@@ -407,12 +400,25 @@ cutName.addEventListener("input", () => {
 const addCutButton = button("＋ 区間を追加", "small", () => addCut("next"));
 const dupCutButton = button("複製", "small", () => addCut("copy"));
 const removeCutButton = button("この区間を削除", "small", () => removeCut());
+// Which tracks play this cut, and a new one that does (the song side, without hunting for it there).
+const cutUsage = el("span", { className: "fine" });
+const newTrackButton = button("＋ この区間でトラックを作る", "small", () => {
+  const cut = cuts[current];
+  if (!material || !cut) return;
+  syncCut();
+  refreshInstruments();
+  rollPanel.addTrackWith(instrumentId(material.id, cut.id), cut.name);
+  setView("song");
+});
+newTrackButton.title = "この区間を鳴らすトラックを曲に足して、曲の画面に移ります";
+function refreshCutUsage(): void {
+  const cut = cuts[current];
+  const names = material && cut ? rollPanel.tracksUsing(instrumentId(material.id, cut.id)) : [];
+  cutUsage.textContent = names.length ? `使っているトラック: ${names.join("、")}` : "まだどのトラックも使っていません";
+}
 const materialSelect = el("select", { ariaLabel: "編集する素材", className: "material-select" });
 materialSelect.addEventListener("change", () => switchMaterial(materialSelect.value));
 const removeMaterialButton = button("この素材を外す", "small", () => material && removeMaterial(material.id));
-/** Another file into the project (the one shown now stays in it). */
-const openMoreButton = el("label", { className: "button small", htmlFor: "file", textContent: "＋ 素材を追加" });
-const addPianoButton = button("＋ 内蔵ピアノ", "small", () => void addPiano());
 const cutBar = el("div", { className: "cut-bar" }, [
   el("span", { className: "control-label", textContent: "区間" }),
   cutSelect,
@@ -420,6 +426,8 @@ const cutBar = el("div", { className: "cut-bar" }, [
   addCutButton,
   dupCutButton,
   removeCutButton,
+  cutUsage,
+  newTrackButton,
 ]);
 
 const rootLabel = el("strong", { className: "root-label num", textContent: "—" });
@@ -430,7 +438,7 @@ const detectedButton = button("自動判定の値に戻す", "small", () => {
   update((p) => {
     p.root = detected;
     p.rootMode = "auto";
-  }, true);
+  });
 });
 
 function rootButton(text: string, delta: number): HTMLButtonElement {
@@ -438,7 +446,7 @@ function rootButton(text: string, delta: number): HTMLButtonElement {
     update((p) => {
       p.root = Math.round((p.root + delta) * 100) / 100;
       p.rootMode = "manual";
-    }, true),
+    }),
   );
 }
 
@@ -558,14 +566,14 @@ function refreshFixBar(): void {
   correctionsLabel.parentElement!.hidden = count === 0;
 }
 
-// One transport: what to play (元の音 / 書き出し後, a visible mode), one ▶ / ■, the position. The ruler on
+// One transport: what to play (元の音 / 仕上がり, a visible mode), one ▶ / ■, the position. The ruler on
 // the editor is the seek bar (tap = set, double-tap = play from there, drag = scrub); Space = this ▶ / ■.
 let cue = 0;
 /** Where the last playback started: ■ returns there (REAPER / Audacity), so the same spot can be heard again. */
 let playStartCue = 0;
 let previewMode: "result" | "original" = "result";
 const modeOriginal = el("button", { type: "button", className: "mode-button", textContent: "元の音" });
-const modeResult = el("button", { type: "button", className: "mode-button", textContent: "書き出し後" });
+const modeResult = el("button", { type: "button", className: "mode-button", textContent: "仕上がり" });
 const modeToggle = el("div", { className: "mode-toggle", role: "group", ariaLabel: "何を鳴らすか" }, [modeOriginal, modeResult]);
 const playButton = button("▶", "small play-button", () => void togglePreview());
 playButton.ariaLabel = "再生 / 停止(スペース)";
@@ -627,28 +635,28 @@ editor.onViewChange = (view) => {
 };
 
 const materialPanel = el("section", { className: "panel" }, [
-  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, openMoreButton, addPianoButton, removeMaterialButton]),
+  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, removeMaterialButton]),
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [
       el("span", { className: "fine", textContent: "判定した高さ" }),
       rootLabel,
       rootSource,
-      el("span", { className: "fine root-help", textContent: "素材はこの高さで鳴っているとみなし、音名との差だけ移調します(自動のときは持続区間に追従)。" }),
+      el("span", { className: "fine root-help", textContent: "素材はこの高さで鳴っているとみなし、弾いた鍵・音符の高さとの差だけ移調します(自動のときは持続区間に追従)。" }),
       el("span", { className: "row tight root-nudge" }, [rootButton("基準 −1半音", -1), rootButton("基準 −5¢", -0.05), rootButton("基準 +5¢", 0.05), rootButton("基準 +1半音", 1), detectedButton]),
     ]),
     el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, el("span", { className: "spacer" }), undoButton, redoButton, zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
   ]),
   el("details", { className: "fine hint" }, [
     el("summary", { textContent: "使い方: 両端のハンドルで範囲、帯の端でマーカー、波形を横にドラッグで選択。波形や目盛りを押すと再生位置、2 回押すと再生。" }),
-    el("p", { textContent: "波形か目盛り: 1 回押すと再生位置を置き、2 回押すとそこから元の音が鳴ります。引くと位置をなぞれます(再生中は飛びます)。下の「書き出し後」レーンも同じで、こちらは書き出し後が鳴ります。▶ / ■(スペースキー)で再生と停止、■ は再生を始めた位置に戻ります。Shift + スペースは元の音。" }),
+    el("p", { textContent: "波形か目盛り: 1 回押すと再生位置を置き、2 回押すとそこから元の音が鳴ります。引くと位置をなぞれます(再生中は飛びます)。下の「仕上がり」レーンも同じで、こちらは仕上がり(作った音)が鳴ります。▶ / ■(スペースキー)で再生と停止、■ は再生を始めた位置に戻ります。Shift + スペースは元の音。" }),
     el("p", { textContent: "判定の点線は「判定 …」の札をつかんで上下にドラッグ(半音ずつ。Alt でセント単位、ダブルクリックで最寄りの半音。動かすと手動になり、「自動判定の値に戻す」で戻ります)。削除した範囲は詰めて表示され、✂ の点線が継ぎ目です。" }),
     el("p", { textContent: "ショートカット: スペース = 再生 / 停止、Shift + スペース = 元の音、Ctrl + Z / Y = 元に戻す / やり直す、M = PC 鍵盤、Z / X = オクターブ、C / V = 強さ、Ctrl + ホイール = 拡大、Shift + ホイール = 横移動。" }),
   ]),
   editor.element,
   el("p", { className: "legend fine" }, [
     el("span", { className: "swatch original" }), "元のピッチ  ",
-    el("span", { className: "swatch edited" }), "整えたあと(選んだ音名で鳴らしたとき)",
+    el("span", { className: "swatch edited" }), "整えたあと(試聴の高さで鳴らしたとき)",
   ]),
   el("p", { className: "fine band-legend" }, [
     el("span", { className: "band-dot head" }), "頭部 = 1 回だけ鳴る出だし　",
@@ -659,14 +667,14 @@ const materialPanel = el("section", { className: "panel" }, [
 
 // ---------------------------------------------------------------- panel 2: tune (note, flatten, length)
 
-const noteSelect = el("select", { ariaLabel: "目標の音名", className: "note-select" }, [...Array(96 - 24 + 1).keys()].map((i) => el("option", { value: String(24 + i), textContent: pitchLabel(24 + i) })));
+const noteSelect = el("select", { ariaLabel: "試聴の高さ", className: "note-select" }, [...Array(96 - 24 + 1).keys()].map((i) => el("option", { value: String(24 + i), textContent: pitchLabel(24 + i) })));
 noteSelect.addEventListener("change", () => setNote(Number(noteSelect.value), "manual"));
 function noteStep(text: string, delta: number): HTMLButtonElement {
   const b = button(text, "small", () => setNote(Math.max(24, Math.min(96, note + delta)), "manual"));
   b.ariaLabel = delta > 0 ? "1半音上げる" : "1半音下げる";
   return b;
 }
-const noteAutoButton = button("音名を判定と同じに", "small", () => setNote(note, "auto"));
+const noteAutoButton = button("判定と同じ高さに", "small", () => setNote(note, "auto"));
 const noteShift = el("span", { className: "fine num" });
 
 function setNote(n: number, mode: "auto" | "manual"): void {
@@ -679,23 +687,20 @@ function setNote(n: number, mode: "auto" | "manual"): void {
 // keeping what is the user's (presetBase).
 const resetModeButton = button("この作り方の初期値に戻す", "small", () => {
   const start = PRESETS.find((p) => p.mode === makeModeOf(params))!;
-  presetId = start.id;
   params = start.apply(structuredClone(params));
   refreshControls();
   sendInstrument();
 });
 
 const beatsInput = el("input", { type: "number", min: "0.25", max: "64", step: "0.25", inputMode: "decimal", ariaLabel: "拍数" });
-const bpmInput = el("input", { type: "number", min: "20", max: "400", step: "1", inputMode: "numeric", ariaLabel: "BPM" });
 const secondsInput = el("input", { type: "number", min: "0.1", max: "60", step: "0.1", inputMode: "decimal", ariaLabel: "秒" });
 const lengthBeats = el("input", { type: "radio", name: "length", value: "beats" });
 const lengthSeconds = el("input", { type: "radio", name: "length", value: "seconds" });
 const lengthResult = el("span", { className: "fine num" });
-for (const input of [beatsInput, bpmInput, secondsInput]) {
+for (const input of [beatsInput, secondsInput]) {
   input.addEventListener("change", () =>
     updateExport((s) => {
       s.beats = clampNumber(beatsInput.value, 0.25, 64, s.beats);
-      s.bpm = clampNumber(bpmInput.value, 20, 400, s.bpm);
       s.seconds = clampNumber(secondsInput.value, 0.1, 60, s.seconds);
     }),
   );
@@ -708,20 +713,11 @@ function clampNumber(text: string, min: number, max: number, fallback: number): 
   return Number.isFinite(v) && text.trim() !== "" ? Math.max(min, Math.min(max, v)) : fallback;
 }
 
-// The song's tempo (曲 view) for the length in beats: one sound made to fit the song it is for.
-const songBpmButton = button("曲の BPM に合わせる", "small", () => {
-  const bpm = Math.max(20, Math.min(400, Math.round(rollPanel.bpm * 10) / 10));
-  updateExport((s) => {
-    s.bpm = bpm;
-    s.lengthMode = "beats";
-  });
-  songBpmButton.title = `長さの BPM を曲と同じ ${bpm} にしました(拍同期のエフェクトも変わります)`;
-});
-songBpmButton.title = "打ち込み(曲の画面)の BPM を、拍で数える長さの BPM にします";
-
+// (Beats are counted in the song's BPM: one sound made to fit the song it is for.)
+const lengthBpm = el("span", { className: "fine num" });
 const lengthBlock = el("div", { className: "length" }, [
-  el("span", { className: "control-label", textContent: "長さ" }),
-  el("div", { className: "length-row" }, [el("label", { className: "inline" }, [lengthBeats, beatsInput, el("span", { textContent: "拍" }), el("span", { className: "fine", textContent: "BPM" }), bpmInput]), songBpmButton]),
+  el("span", { className: "control-label", textContent: "長さ(単音の書き出しと、仕上がりの試聴)" }),
+  el("div", { className: "length-row" }, [el("label", { className: "inline" }, [lengthBeats, beatsInput, el("span", { textContent: "拍" }), lengthBpm])]),
   el("label", { className: "length-row" }, [lengthSeconds, secondsInput, el("span", { textContent: "秒" })]),
   lengthResult,
 ]);
@@ -773,14 +769,13 @@ const playRangeRow = select(
   ],
   () => (params.sustainEnabled ? "full" : "head"),
   (p, v) => (p.sustainEnabled = v === "full"),
-  true,
 );
 
 /** What the chosen 伸ばし方 does. */
 const sustainHelp = el("p", { className: "fine help" });
 // 離したら止める: only where letting go would otherwise do nothing (伸ばさない, or the sustain off).
 const stopOnReleaseRow = el("div", {}, [
-  check("鍵を離したらそこで止める(頭部や録音の途中でも)", () => params.stopOnRelease, (p, v) => (p.stopOnRelease = v), true),
+  check("鍵を離したらそこで止める(頭部や録音の途中でも)", () => params.stopOnRelease, (p, v) => (p.stopOnRelease = v)),
   el("p", { className: "fine help", textContent: "打ち込みでは音符の長さで切れます。書き出す単音の WAV は最後まで入ります。" }),
 ]);
 // Shown for 伸ばす only / for the one-shots only (marked where they are placed).
@@ -792,18 +787,44 @@ const oneShot = (e: HTMLElement) => (oneShotOnly.push(e), e);
 const shapingOnly: HTMLElement[] = [];
 const shaping = (e: HTMLElement) => (shapingOnly.push(e), e);
 let wavetableRow: HTMLElement;
-let releaseRow: HTMLElement;
-let decayRow: HTMLElement;
-// 減衰 (the former preset): held notes die away while held, like a struck string, and stop quickly when let go (a damper).
-// On: ディケイ 1.2 s to サステイン 0, リリース 0.25 s; off: the level holds (サステイン 100%). Both are in 細かい設定 too.
+// 減衰 (the former preset): the sound dies away after its attack, like a struck string, and stops quickly when let go
+// (a damper). On: ディケイ 1.2 s down to nothing, リリース 0.25 s; off: the level holds.
 const decayCheck = check(
-  "押している間に消えていく(ピアノ風の減衰)",
+  "だんだん消えていく(ピアノ風の減衰)",
   () => params.amp.sustain < 1,
-  (p, on) => (p.amp = on ? { ...p.amp, decay: 1.2, sustain: 0, release: 0.25 } : { ...p.amp, decay: DEFAULT_PARAMS.amp.decay, sustain: 1, release: DEFAULT_PARAMS.amp.release }),
-  true,
+  (p, on) => (p.amp = on ? { ...p.amp, decay: 1.2, sustain: 0, release: Math.max(p.amp.release, 0.25) } : { ...p.amp, decay: DEFAULT_PARAMS.amp.decay, sustain: 1 }),
 );
-// (The release and the decay length follow it.)
+// (The release and the decay's own rows follow it.)
 decayCheck.querySelector("input")!.addEventListener("change", () => refreshControls());
+const decayRow = range("消えるまでの長さ", 0.05, 10, 0.05, () => params.amp.decay, (p, v) => (p.amp.decay = v), ms);
+const sustainLevelRow = range("消えたあとに残る音量", 0, 0.95, 0.01, () => params.amp.sustain, (p, v) => (p.amp.sustain = v), pct);
+const releaseRow = range("離したあとの消え方(リリース)", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms);
+const volumeSummary = el("summary");
+const volumeShape = el("details", { className: "sub fx" }, [
+  volumeSummary,
+  el("p", { className: "fine help", textContent: "入り = 音の頭(アタック)。終わり = 素材が尽きる手前。開いている間は「仕上がり」レーンの塗りの端につまみが出て、引いても変えられます。" }),
+  range("入りのフェード", 0, 2, 0.005, () => params.amp.attack, (p, v) => (p.amp.attack = Math.max(0.001, v)), ms),
+  decayCheck,
+  decayRow,
+  sustainLevelRow,
+  releaseRow,
+  range("終わりのフェード", 0, 3, 0.01, () => params.amp.fadeOut, (p, v) => (p.amp.fadeOut = v), ms),
+  range("強弱の効き方(ベロシティ感度)", 0, 1, 0.01, () => params.amp.velocitySens, (p, v) => (p.amp.velocitySens = v), pct),
+  el("p", { className: "fine help", textContent: "0% で強弱(打ち込みの「強弱」、鍵盤の強さ)に関係なく同じ音量、100% で強弱どおり。ドラムキットと音声トラックでは、強弱はそのまま音量になります。" }),
+]);
+function refreshVolumeSummary(): void {
+  const a = params.amp;
+  const parts: string[] = [];
+  if (a.attack >= 0.02) parts.push(`入り ${ms(a.attack)}`);
+  if (a.sustain < 1) parts.push(`減衰 ${ms(a.decay)}`);
+  if (!releaseRow.hidden) parts.push(`リリース ${ms(a.release)}`);
+  if (a.fadeOut > 0) parts.push(`終わり ${ms(a.fadeOut)}`);
+  volumeSummary.textContent = `音量の形(${parts.length ? parts.join("・") : "入り・減衰・リリース・終わり・強弱"})`;
+}
+volumeShape.addEventListener("toggle", () => refreshFadeGrips());
+function refreshFadeGrips(): void {
+  editor.setFadeGrips(volumeShape.open || params.amp.attack >= 0.02 || params.amp.fadeOut > 0);
+}
 /** The 作り方 → which settings are shown, and what the chosen ones do. */
 function refreshMakeMode(): void {
   const mode = makeModeOf(params);
@@ -811,9 +832,10 @@ function refreshMakeMode(): void {
   for (const e of holdOnly) e.hidden = !hold;
   for (const e of oneShotOnly) e.hidden = hold;
   wavetableRow.hidden = !hold || params.sustainMode !== "wavetable";
-  decayRow.hidden = !hold || params.amp.sustain >= 1;
+  decayRow.hidden = sustainLevelRow.hidden = params.amp.sustain >= 1;
   // (A one-shot only fades where it is let go with 離したら止める.)
   releaseRow.hidden = !hold && !params.stopOnRelease;
+  refreshVolumeSummary();
   sustainStretchRow.hidden = hold || !params.sustainEnabled;
   const texts: Record<string, string> = {
     pool: "持続区間の安定した周期をつなぎ合わせて、押している間いくらでも伸ばします(自然)。",
@@ -826,7 +848,7 @@ function refreshMakeMode(): void {
   makeHelp.textContent = hold
     ? "押している間は持続区間で伸ばし、離すと「リリース」の長さで消えます。"
     : mode === "transpose"
-      ? "録音を 1 回、抑揚はそのままに全体を音名の高さへ上げ下げします。" + end
+      ? "録音を 1 回、抑揚はそのままに全体を弾いた鍵・音符の高さへ上げ下げします。" + end
       : "伸ばさずに録音を 1 回鳴らし、音程は平坦化などで整えます。" + end;
   // 移調: the pitch shaping is not applied, so it is not shown.
   for (const e of shapingOnly) e.hidden = mode === "transpose";
@@ -849,22 +871,24 @@ function pitchGroup(children: HTMLElement[]): HTMLElement {
   return group;
 }
 // 録音した高さで鳴らす: what it means for the keys and the files, while it is on.
-const fixedPitchNote = el("p", { className: "fine help", hidden: true, textContent: "どの鍵・どの音符でも録音したままの高さで鳴ります(書き出す単音も音名にかかわらず録音した高さ)。打ち込みでは、音符の高さは鳴らす位置の目印だけになります。" });
+const fixedPitchNote = el("p", { className: "fine help", hidden: true, textContent: "どの鍵・どの音符でも録音したままの高さで鳴ります(書き出す単音も録音した高さ)。打ち込みでは、音符の高さは鳴らす位置の目印だけになります。打楽器ならドラムキット、録音を置くだけなら音声トラックも使えます。" });
 controlsRefreshers.push(() => (fixedPitchNote.hidden = !params.fixedPitch));
-const fixedPitchCheck = check("鍵に関係なく、録音した高さで鳴らす(効果音向け)", () => params.fixedPitch, (p, v) => (p.fixedPitch = v), true);
+const fixedPitchCheck = check("鍵に関係なく、録音した高さで鳴らす(効果音向け)", () => params.fixedPitch, (p, v) => (p.fixedPitch = v));
 // (Its note and the editor's output line change with it.)
 fixedPitchCheck.querySelector("input")!.addEventListener("change", () => {
   refreshControls();
   refreshExport();
 });
+// 試聴の高さ: the note the 仕上がり preview (and a single-note file) plays at — under the editor, by the preview.
+const noteRow = el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "試聴の高さ" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]);
+materialPanel.querySelector(".editor-bar")!.after(noteRow);
 const tunePanel = el("section", { className: "panel tune" }, [
-  el("div", { className: "note-row" }, [el("span", { className: "control-label", textContent: "音名" }), noteStep("−", -1), noteSelect, noteStep("+", 1), noteAutoButton, noteShift]),
   fixedPitchCheck,
   fixedPitchNote,
   el("label", { className: "control preset" }, [el("span", { className: "control-label", textContent: "作り方" }), makeSelect]),
   makeHelp,
   el("div", { className: "row tight" }, [resetModeButton]),
-  el("p", { className: "fine help", textContent: "作り方を切り替えても、ほかの設定はそのまま残ります。「初期値に戻す」は音の設定をこの作り方の初期値にします(音名・入りと終わりのフェード・ベロシティ感度・フォルマント・「録音した高さで鳴らす」「鍵を離したらそこで止める」はそのまま)。" }),
+  el("p", { className: "fine help", textContent: "作り方を切り替えても、ほかの設定はそのまま残ります。「初期値に戻す」は音の設定をこの作り方の初期値にします(試聴の高さ・入りと終わりのフェード・強弱の効き方・フォルマント・「録音した高さで鳴らす」「鍵を離したらそこで止める」はそのまま)。" }),
   held(
     select(
       "持続区間の伸ばし方",
@@ -883,27 +907,23 @@ const tunePanel = el("section", { className: "panel tune" }, [
   oneShot(playRangeRow),
   sustainStretchRow,
   oneShot(stopOnReleaseRow),
-  // How a held note ends (語尾 was taken out: this is it).
-  held(decayCheck),
-  (decayRow = range("消えるまでの長さ(ディケイ)", 0.05, 10, 0.05, () => params.amp.decay, (p, v) => (p.amp.decay = v), ms)),
-  (releaseRow = range("離したあとの消え方(リリース)", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms)),
   pitchModeNote,
   shaping(pitchGroup([
     range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
     select("音程の整え方", [["flatten", "判定した 1 音に寄せる"], ["scale", "音階の最寄りの音に、場所ごとに寄せる(複数の音を残す)"]], () => params.tune.mode, (p, v) => (p.tune.mode = v)),
     tuneScaleRow,
     range("音程を寄せる速さ(リチューン)", 0, 0.3, 0.005, () => params.tune.retuneSec, (p, v) => (p.tune.retuneSec = v), (v) => (v === 0 ? "即座(ケロケロ向き)" : ms(v))),
-    el("p", { className: "fine help", textContent: "判定した高さから音名へ寄せるときの速さ(Auto-Tune の Retune Speed)。即座だと貼り付いたように、30 ms 前後だと自然に、長いとゆっくりした狂いだけが直ります。" }),
+    el("p", { className: "fine help", textContent: "判定した高さから鳴らす高さへ寄せるときの速さ(Auto-Tune の Retune Speed)。即座だと貼り付いたように、30 ms 前後だと自然に、長いとゆっくりした狂いだけが直ります。" }),
     el("p", { className: "fine help", textContent: "「音階」にすると、素材の中で高さが変わる所はそれぞれ最寄りの音に貼り付きます(VocalShifter のクオンタイズ / 自動補正)。平坦化 100%・揺らぎなし・リチューン即座でケロケロになります。" }),
   ])),
-  held(range("持続部の音量を揃える", 0, 1, 0.05, () => params.levelEven, (p, v) => (p.levelEven = v), pct, true)),
+  held(range("持続部の音量を揃える", 0, 1, 0.05, () => params.levelEven, (p, v) => (p.levelEven = v), pct)),
   held(el("p", { className: "fine help", textContent: "素材の持続区間が減衰していても、伸ばした音の音量が一定になります。0% で録音どおりの強弱(頭部は常にそのまま)。" })),
   pitchGroup([
-    range("子音・息(音程なし)の音量", -60, 12, 1, () => params.unvoicedGainDb, (p, v) => (p.unvoicedGainDb = v), (v) => (v <= -60 ? "消す" : `${v > 0 ? "+" : ""}${v} dB`), true),
-    check("子音や息(音程なし)も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v), true),
-    el("p", { className: "fine help", textContent: "子音・息・ノイズなど音程のない部分は、ふつうは移調しても元のまま鳴ります。オンにすると、その部分も音名に応じて細く / 太くなります(長さは変わりません)。音程そのものを付けたいときは、選択して「有声に」。" }),
+    range("子音・息(音程なし)の音量", -60, 12, 1, () => params.unvoicedGainDb, (p, v) => (p.unvoicedGainDb = v), (v) => (v <= -60 ? "消す" : `${v > 0 ? "+" : ""}${v} dB`)),
+    check("子音や息(音程なし)も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v)),
+    el("p", { className: "fine help", textContent: "子音・息・ノイズなど音程のない部分は、ふつうは移調しても元のまま鳴ります。オンにすると、その部分も鳴らす高さに応じて細く / 太くなります(長さは変わりません)。音程そのものを付けたいときは、選択して「有声に」。" }),
   ]),
-  lengthBlock,
+  volumeShape,
   vibratoPanel,
   timePanel,
 ]);
@@ -941,7 +961,7 @@ function showPinned(): void {
 }
 /** The keyboard's title and note: what the keys play in the view on screen. */
 const keysTitle = el("span", { className: "control-label", textContent: "試し弾き" });
-const keysNote = el("p", { className: "fine", textContent: "●の付いた鍵が、選んだ音名(書き出す高さ)です。" });
+const keysNote = el("p", { className: "fine", textContent: "●の付いた鍵が、試聴の高さです。" });
 // A MIDI keyboard: its keys go where the on-screen ones do.
 const midi = new MidiInput(sink);
 const midiState = el("span", { className: "fine" });
@@ -1002,7 +1022,7 @@ function updateFx(change: (f: FxSettings) => void): void {
   else rollPanel.updateTrackFx(change);
 }
 
-function fxRange(label: string, min: number, max: number, step: number, get: () => number, set: (f: FxSettings, v: number) => void, format: (v: number) => string, _keep?: boolean): HTMLElement {
+function fxRange(label: string, min: number, max: number, step: number, get: () => number, set: (f: FxSettings, v: number) => void, format: (v: number) => string): HTMLElement {
   const input = el("input", { type: "range", min: String(min), max: String(max), step: String(step) });
   const value = el("output", { className: "num" });
   const refresh = () => {
@@ -1017,7 +1037,7 @@ function fxRange(label: string, min: number, max: number, step: number, get: () 
   return el("label", { className: "control" }, [el("span", { className: "control-label", textContent: label }), input, value]);
 }
 
-function fxSelect<T extends string>(label: string, options: [T, string][], get: () => T, set: (f: FxSettings, v: T) => void, _keep?: boolean): HTMLElement {
+function fxSelect<T extends string>(label: string, options: [T, string][], get: () => T, set: (f: FxSettings, v: T) => void): HTMLElement {
   const input = el("select", {}, options.map(([value, text]) => el("option", { value, textContent: text })));
   controlsRefreshers.push(() => (input.value = get()));
   input.addEventListener("change", () => updateFx((f) => set(f, input.value as T)));
@@ -1044,7 +1064,6 @@ function fxFreq(label: string, lo: number, hi: number, get: () => number, set: (
     () => toPos(Math.max(lo, Math.min(hi, get() || lo))),
     (f, v) => set(f, isOff(v) ? off!.at : Math.round(toHz(v))),
     (v) => (isOff(v) ? off!.text : hz(toHz(v))),
-    true,
   );
 }
 
@@ -1094,107 +1113,84 @@ const fxPanel = el("details", { className: "panel fx-panel" }, [
   el("p", { className: "fine", textContent: "打ち込みで選んでいるトラック、またはマスター(曲全体)にかかります(上から順に)。曲の再生・書き出しと、曲の画面の鍵盤にかかります。素材・ドラムキットの画面の鍵盤と、書き出す単音の WAV には入りません。" }),
   fxHead("立ち上がり"),
   fxGroup("transient", "トランジェント(立ち上がり)", "音の頭(アタック)と、そのあとの伸び(サステイン)を別々に上げ下げします。", [
-    fxRange("アタック", -12, 12, 0.5, () => fxNow().transient.attackDb, (f, v) => (f.transient.attackDb = v), db, true),
-    fxRange("サステイン", -12, 12, 0.5, () => fxNow().transient.sustainDb, (f, v) => (f.transient.sustainDb = v), db, true),
+    fxRange("アタック", -12, 12, 0.5, () => fxNow().transient.attackDb, (f, v) => (f.transient.attackDb = v), db),
+    fxRange("サステイン", -12, 12, 0.5, () => fxNow().transient.sustainDb, (f, v) => (f.transient.sustainDb = v), db),
   ]),
   fxGroup("compressor", "コンプレッサー", "大きいところを抑えて音量をそろえ、そのぶん全体を持ち上げます。声ネタを曲になじませる基本の道具です。", [
-    fxRange("スレッショルド", -60, 0, 1, () => fxNow().compressor.thresholdDb, (f, v) => (f.compressor.thresholdDb = v), db, true),
-    fxRange("レシオ", 1, 20, 0.5, () => fxNow().compressor.ratio, (f, v) => (f.compressor.ratio = v), (v) => `${v.toFixed(1)} : 1`, true),
-    fxRange("アタック", 0.1, 100, 0.1, () => fxNow().compressor.attackMs, (f, v) => (f.compressor.attackMs = v), (v) => `${v.toFixed(1)} ms`, true),
-    fxRange("リリース", 10, 1000, 5, () => fxNow().compressor.releaseMs, (f, v) => (f.compressor.releaseMs = v), (v) => `${Math.round(v)} ms`, true),
-    fxRange("メイクアップ", 0, 24, 0.5, () => fxNow().compressor.makeupDb, (f, v) => (f.compressor.makeupDb = v), db, true),
+    fxRange("スレッショルド", -60, 0, 1, () => fxNow().compressor.thresholdDb, (f, v) => (f.compressor.thresholdDb = v), db),
+    fxRange("レシオ", 1, 20, 0.5, () => fxNow().compressor.ratio, (f, v) => (f.compressor.ratio = v), (v) => `${v.toFixed(1)} : 1`),
+    fxRange("アタック", 0.1, 100, 0.1, () => fxNow().compressor.attackMs, (f, v) => (f.compressor.attackMs = v), (v) => `${v.toFixed(1)} ms`),
+    fxRange("リリース", 10, 1000, 5, () => fxNow().compressor.releaseMs, (f, v) => (f.compressor.releaseMs = v), (v) => `${Math.round(v)} ms`),
+    fxRange("メイクアップ", 0, 24, 0.5, () => fxNow().compressor.makeupDb, (f, v) => (f.compressor.makeupDb = v), db),
   ]),
   fxHead("音色"),
   fxGroup("eq", "EQ", "低域カット・低域・中域(ベル)・高域・高域カット。", [
     fxFreq("低域カット", 20, 2000, () => fxNow().eq.lowCutHz, (f, v) => (f.eq.lowCutHz = v <= 20 ? 0 : v), { at: 20, text: "オフ" }),
-    fxRange("低域", -18, 18, 0.5, () => fxNow().eq.lowDb, (f, v) => (f.eq.lowDb = v), db, true),
+    fxRange("低域", -18, 18, 0.5, () => fxNow().eq.lowDb, (f, v) => (f.eq.lowDb = v), db),
     fxFreq("低域の周波数", 20, 1000, () => fxNow().eq.lowHz, (f, v) => (f.eq.lowHz = v)),
-    fxRange("中域", -18, 18, 0.5, () => fxNow().eq.midDb, (f, v) => (f.eq.midDb = v), db, true),
+    fxRange("中域", -18, 18, 0.5, () => fxNow().eq.midDb, (f, v) => (f.eq.midDb = v), db),
     fxFreq("中域の周波数", 100, 10000, () => fxNow().eq.midHz, (f, v) => (f.eq.midHz = v)),
-    fxRange("中域の幅(Q)", 0.3, 8, 0.1, () => fxNow().eq.midQ, (f, v) => (f.eq.midQ = v), (v) => v.toFixed(1), true),
-    fxRange("高域", -18, 18, 0.5, () => fxNow().eq.highDb, (f, v) => (f.eq.highDb = v), db, true),
+    fxRange("中域の幅(Q)", 0.3, 8, 0.1, () => fxNow().eq.midQ, (f, v) => (f.eq.midQ = v), (v) => v.toFixed(1)),
+    fxRange("高域", -18, 18, 0.5, () => fxNow().eq.highDb, (f, v) => (f.eq.highDb = v), db),
     fxFreq("高域の周波数", 1000, 18000, () => fxNow().eq.highHz, (f, v) => (f.eq.highHz = v)),
     fxFreq("高域カット", 500, 20000, () => fxNow().eq.highCutHz, (f, v) => (f.eq.highCutHz = v), { at: 20000, text: "オフ" }),
   ]),
   fxGroup("saturation", "サチュレーション(真空管風の歪み)", "音を太く前に出します。かけすぎると歪みが目立ちます。", [
-    fxRange("ドライブ", 0, 1, 0.01, () => fxNow().saturation.drive, (f, v) => (f.saturation.drive = v), pct, true),
-    fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().saturation.mix, (f, v) => (f.saturation.mix = v), pct, true),
+    fxRange("ドライブ", 0, 1, 0.01, () => fxNow().saturation.drive, (f, v) => (f.saturation.drive = v), pct),
+    fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().saturation.mix, (f, v) => (f.saturation.mix = v), pct),
   ]),
   fxGroup("air", "エア(高域の抜け)", "高い音を持ち上げ、少し倍音を足して抜けをよくします。上げすぎると耳に痛くなります。", [
-    fxRange("量", 0, 1, 0.01, () => fxNow().air.amount, (f, v) => (f.air.amount = v), pct, true),
+    fxRange("量", 0, 1, 0.01, () => fxNow().air.amount, (f, v) => (f.air.amount = v), pct),
   ]),
   fxHead("飛び道具"),
   fxGroup("filter", "フィルター(LFO)", "カットオフを拍に合わせて揺らします。揺れの幅を 0 にすれば、ふつうのフィルターです。", [
-    fxSelect("種類", [["lowpass", "ローパス"], ["highpass", "ハイパス"], ["bandpass", "バンドパス"]], () => fxNow().filter.type, (f, v) => (f.filter.type = v), true),
+    fxSelect("種類", [["lowpass", "ローパス"], ["highpass", "ハイパス"], ["bandpass", "バンドパス"]], () => fxNow().filter.type, (f, v) => (f.filter.type = v)),
     fxFreq("カットオフ", 40, 18000, () => fxNow().filter.cutoffHz, (f, v) => (f.filter.cutoffHz = v)),
-    fxRange("レゾナンス", 0, 1, 0.01, () => fxNow().filter.resonance, (f, v) => (f.filter.resonance = v), pct, true),
-    fxRange("揺れの幅", 0, 6, 0.1, () => fxNow().filter.lfoOctaves, (f, v) => (f.filter.lfoOctaves = v), (v) => `±${v.toFixed(1)} オクターブ`, true),
-    fxSelect("揺れの周期", BEATS, () => String(fxNow().filter.lfoBeats), (f, v) => (f.filter.lfoBeats = Number(v) as FxBeats), true),
+    fxRange("レゾナンス", 0, 1, 0.01, () => fxNow().filter.resonance, (f, v) => (f.filter.resonance = v), pct),
+    fxRange("揺れの幅", 0, 6, 0.1, () => fxNow().filter.lfoOctaves, (f, v) => (f.filter.lfoOctaves = v), (v) => `±${v.toFixed(1)} オクターブ`),
+    fxSelect("揺れの周期", BEATS, () => String(fxNow().filter.lfoBeats), (f, v) => (f.filter.lfoBeats = Number(v) as FxBeats)),
   ]),
   fxGroup("crush", "ビットクラッシャー", "ビット数とサンプリングレートを落として、ゲーム機のようなざらついた音にします。", [
-    fxRange("ビット数", 1, 16, 1, () => fxNow().crush.bits, (f, v) => (f.crush.bits = v), (v) => `${v} bit`, true),
-    fxRange("間引き", 1, 32, 1, () => fxNow().crush.downsample, (f, v) => (f.crush.downsample = v), (v) => (v === 1 ? "なし" : `1/${v}`), true),
-    fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().crush.mix, (f, v) => (f.crush.mix = v), pct, true),
+    fxRange("ビット数", 1, 16, 1, () => fxNow().crush.bits, (f, v) => (f.crush.bits = v), (v) => `${v} bit`),
+    fxRange("間引き", 1, 32, 1, () => fxNow().crush.downsample, (f, v) => (f.crush.downsample = v), (v) => (v === 1 ? "なし" : `1/${v}`)),
+    fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().crush.mix, (f, v) => (f.crush.mix = v), pct),
   ]),
   fxHead("広がり"),
   fxGroup("chorus", "コーラス", "少しずらした音を左右に重ねて、厚みと広がりを出します。モノラルの素材もステレオになります。", [
-    fxRange("速さ", 0.1, 5, 0.05, () => fxNow().chorus.rateHz, (f, v) => (f.chorus.rateHz = v), (v) => `${v.toFixed(2)} Hz`, true),
-    fxRange("深さ", 0, 12, 0.1, () => fxNow().chorus.depthMs, (f, v) => (f.chorus.depthMs = v), (v) => `${v.toFixed(1)} ms`, true),
-    fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().chorus.mix, (f, v) => (f.chorus.mix = v), pct, true),
+    fxRange("速さ", 0.1, 5, 0.05, () => fxNow().chorus.rateHz, (f, v) => (f.chorus.rateHz = v), (v) => `${v.toFixed(2)} Hz`),
+    fxRange("深さ", 0, 12, 0.1, () => fxNow().chorus.depthMs, (f, v) => (f.chorus.depthMs = v), (v) => `${v.toFixed(1)} ms`),
+    fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().chorus.mix, (f, v) => (f.chorus.mix = v), pct),
   ]),
   fxHead("やまびこと響き"),
   fxGroup("delay", "ディレイ(やまびこ)", "拍に合わせて音を繰り返します。ピンポンにすると左右に跳ね返ります。", [
-    fxSelect("間隔", [["0.25", "1/16 音符"], ["0.5", "1/8 音符"], ["0.75", "付点 1/8 音符"], ["1", "1 拍"], ["1.5", "付点 1/4 音符"], ["2", "2 拍"]], () => String(fxNow().delay.beats) as "0.5", (f, v) => (f.delay.beats = Number(v) as FxSettings["delay"]["beats"]), true),
-    fxRange("繰り返し(フィードバック)", 0, 0.9, 0.01, () => fxNow().delay.feedback, (f, v) => (f.delay.feedback = v), pct, true),
+    fxSelect("間隔", [["0.25", "1/16 音符"], ["0.5", "1/8 音符"], ["0.75", "付点 1/8 音符"], ["1", "1 拍"], ["1.5", "付点 1/4 音符"], ["2", "2 拍"]], () => String(fxNow().delay.beats) as "0.5", (f, v) => (f.delay.beats = Number(v) as FxSettings["delay"]["beats"])),
+    fxRange("繰り返し(フィードバック)", 0, 0.9, 0.01, () => fxNow().delay.feedback, (f, v) => (f.delay.feedback = v), pct),
     fxFreq("繰り返しの高域カット", 500, 20000, () => fxNow().delay.highCutHz, (f, v) => (f.delay.highCutHz = v)),
     fxCheck("ピンポン(左右に跳ね返る)", () => fxNow().delay.pingPong, (f, v) => (f.delay.pingPong = v)),
-    fxRange("混ぜる量", 0, 1, 0.01, () => fxNow().delay.mix, (f, v) => (f.delay.mix = v), pct, true),
+    fxRange("混ぜる量", 0, 1, 0.01, () => fxNow().delay.mix, (f, v) => (f.delay.mix = v), pct),
   ]),
   fxGroup("reverb", "リバーブ(響き)", "部屋やホールの響きを足して、音を奥に置いたり曲になじませたりします。モノラルの素材もステレオになります。", [
-    fxRange("広さ", 0, 1, 0.01, () => fxNow().reverb.size, (f, v) => (f.reverb.size = v), pct, true),
-    fxRange("こもり(高域の減衰)", 0, 1, 0.01, () => fxNow().reverb.damping, (f, v) => (f.reverb.damping = v), pct, true),
-    fxRange("プリディレイ", 0, 200, 1, () => fxNow().reverb.preDelayMs, (f, v) => (f.reverb.preDelayMs = v), (v) => `${Math.round(v)} ms`, true),
-    fxRange("混ぜる量", 0, 1, 0.01, () => fxNow().reverb.mix, (f, v) => (f.reverb.mix = v), pct, true),
+    fxRange("広さ", 0, 1, 0.01, () => fxNow().reverb.size, (f, v) => (f.reverb.size = v), pct),
+    fxRange("こもり(高域の減衰)", 0, 1, 0.01, () => fxNow().reverb.damping, (f, v) => (f.reverb.damping = v), pct),
+    fxRange("プリディレイ", 0, 200, 1, () => fxNow().reverb.preDelayMs, (f, v) => (f.reverb.preDelayMs = v), (v) => `${Math.round(v)} ms`),
+    fxRange("混ぜる量", 0, 1, 0.01, () => fxNow().reverb.mix, (f, v) => (f.reverb.mix = v), pct),
   ]),
   fxGroup("width", "ステレオ幅(ミッド/サイド)", "左右の広がり(サイド)と中央(ミッド)を別々に調整します。モノラルの素材は広がらないので、コーラスと組み合わせます。", [
-    fxRange("広がり(サイド)", 0, 3, 0.01, () => fxNow().width.side, (f, v) => (f.width.side = v), (v) => (v === 0 ? "モノラル" : pct(v)), true),
-    fxRange("中央(ミッド)", -12, 6, 0.5, () => fxNow().width.midDb, (f, v) => (f.width.midDb = v), db, true),
+    fxRange("広がり(サイド)", 0, 3, 0.01, () => fxNow().width.side, (f, v) => (f.width.side = v), (v) => (v === 0 ? "モノラル" : pct(v))),
+    fxRange("中央(ミッド)", -12, 6, 0.5, () => fxNow().width.midDb, (f, v) => (f.width.midDb = v), db),
   ]),
   fxGroup("pan", "オートパン", "音を拍に合わせて左右に振ります。アルペジオなどに。", [
-    fxRange("深さ", 0, 1, 0.01, () => fxNow().pan.depth, (f, v) => (f.pan.depth = v), pct, true),
-    fxSelect("周期", BEATS, () => String(fxNow().pan.beats), (f, v) => (f.pan.beats = Number(v) as FxBeats), true),
+    fxRange("深さ", 0, 1, 0.01, () => fxNow().pan.depth, (f, v) => (f.pan.depth = v), pct),
+    fxSelect("周期", BEATS, () => String(fxNow().pan.beats), (f, v) => (f.pan.beats = Number(v) as FxBeats)),
   ]),
   fxHead("仕上げ"),
   fxGroup("limiter", "リミッター", "最後に音量を上げつつ、天井を超えないように抑えます。", [
-    fxRange("入力ゲイン", 0, 18, 0.5, () => fxNow().limiter.gainDb, (f, v) => (f.limiter.gainDb = v), db, true),
-    fxRange("天井", -12, 0, 0.1, () => fxNow().limiter.ceilingDb, (f, v) => (f.limiter.ceilingDb = v), (v) => `${v.toFixed(1)} dBFS`, true),
-    fxRange("リリース", 5, 500, 1, () => fxNow().limiter.releaseMs, (f, v) => (f.limiter.releaseMs = v), (v) => `${Math.round(v)} ms`, true),
+    fxRange("入力ゲイン", 0, 18, 0.5, () => fxNow().limiter.gainDb, (f, v) => (f.limiter.gainDb = v), db),
+    fxRange("天井", -12, 0, 0.1, () => fxNow().limiter.ceilingDb, (f, v) => (f.limiter.ceilingDb = v), (v) => `${v.toFixed(1)} dBFS`),
+    fxRange("リリース", 5, 500, 1, () => fxNow().limiter.releaseMs, (f, v) => (f.limiter.releaseMs = v), (v) => `${Math.round(v)} ms`),
   ]),
 ]);
 
-// フェード: the voice's own attack and a fade before the material runs out — not in the rack, but where it reads best.
-const fadeSummary = el("summary");
-const fadeGroup = el("details", { className: "sub fx" }, [
-  fadeSummary,
-  el("p", { className: "fine help", textContent: "入り = 音の頭(アタック)。終わり = 素材が尽きる手前と、音を離したあと。0 でなし。このグループを開いている間は「書き出し後」レーンの塗りの端につまみが出て、引いても変えられます。" }),
-  range("入りのフェード", 0, 2, 0.005, () => params.amp.attack, (p, v) => (p.amp.attack = Math.max(0.001, v)), ms, true),
-  range("終わりのフェード", 0, 3, 0.01, () => params.amp.fadeOut, (p, v) => (p.amp.fadeOut = v), ms, true),
-]);
-function refreshFadeSummary(): void {
-  const fades: string[] = [];
-  if (params.amp.attack >= 0.02) fades.push(`入り ${ms(params.amp.attack)}`);
-  if (params.amp.fadeOut > 0) fades.push(`終わり ${ms(params.amp.fadeOut)}`);
-  fadeSummary.textContent = fades.length ? `フェード(${fades.join("・")})` : "フェード(入り・終わり)";
-  fadeSummary.classList.toggle("on", fades.length > 0);
-}
-fadeGroup.addEventListener("change", refreshFadeSummary);
-controlsRefreshers.push(refreshFadeSummary);
-fadeGroup.addEventListener("toggle", () => refreshFadeGrips());
-// (The fades shape the cut's own sound, so they sit with its settings, after the length.)
-lengthBlock.after(fadeGroup);
-function refreshFadeGrips(): void {
-  editor.setFadeGrips(fadeGroup.open || params.amp.attack >= 0.02 || params.amp.fadeOut > 0);
-}
 controlsRefreshers.push(refreshFxSummaries);
 
 // ---------------------------------------------------------------- panel 4: export
@@ -1255,13 +1251,6 @@ destinationSelect.addEventListener("change", () =>
 );
 const destinationHelp = el("p", { className: "fine help" });
 const fileNameLabel = el("code", { className: "file-name" });
-const listenButton = button("▶ 書き出し後を聴く", "big", () => {
-  if (playing?.kind === "result") client.stopPreview();
-  else {
-    if (playing) client.stopPreview();
-    void listen();
-  }
-});
 /**
  * Files go to the browser's downloads (the Downloads folder, unless the browser is set to ask) by default;
  * 共有 (the share sheet) is the second way where there is one. Only a home-screen app on an iPhone has no
@@ -1276,13 +1265,15 @@ shareButton.hidden = !canShareFiles();
 const batchButton = button("すべての区間をまとめて保存(zip)", "", () => void deliver(exportHow(), true));
 const exportStatus = el("p", { className: "fine", role: "status" });
 
-const exportPanel = el("section", { className: "panel export" }, [
-  el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "書き出し" })]),
+// Files of the cut for another DAW or sampler (the export-era tool): folded away, the song is made in the 曲 view.
+const exportPanel = el("details", { className: "panel export" }, [
+  el("summary", { textContent: "単音・音源として書き出す(ほかの DAW やサンプラー用のファイル)" }),
+  lengthBlock,
   el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "読み込む先(DAW / サンプラー)" }), destinationSelect]),
   destinationHelp,
   el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "ファイルの形式" }), formatSelect]),
   formatNote,
-  el("div", { className: "export-actions" }, [listenButton, saveButton, shareButton]),
+  el("div", { className: "export-actions" }, [saveButton, shareButton]),
   el("p", { className: "fine" }, ["ファイル名: ", fileNameLabel]),
   el("div", { className: "row" }, [batchButton]),
   exportStatus,
@@ -1304,15 +1295,6 @@ function setCreditInputs(): void {
   (["title", "url", "timecode", "memo"] as const).forEach((key, i) => (creditFields[i].querySelector("input")!.value = credit[key]));
 }
 
-const saveSettingsButton = button("設定を保存(JSON)", "small", () => {
-  if (!material) return;
-  const json = serializeSettings(settingsBody());
-  const blob = new Blob([json], { type: "application/json" });
-  const name = `${safeBaseName(stripExtension(material.name))}.easysampler.json`;
-  if (SHARE_ONLY && canShareFiles()) shareFile(blob, name, name).catch(() => downloadFile(blob, name));
-  else downloadFile(blob, name);
-});
-const loadSettingsButton = el("label", { className: "button small", htmlFor: "file", textContent: "設定を読み込む(JSON)" });
 const settingsStatus = el("span", { className: "fine fix-status", role: "status" });
 // The analysis's pitch search range (探索範囲): pYIN's default is about G1–B5.
 const RANGE_DEFAULT = { low: 31, high: 83 };
@@ -1374,17 +1356,10 @@ const resetSettingsButton = button("設定を捨てて最初から", "small", ()
 const benchButton = button("負荷を測る", "small", () => benchmark());
 const benchResult = el("span", { className: "fine" });
 
-exportPanel.append(
-  el("details", { className: "sub credit" }, [el("summary", { textContent: "出典メモ(WAV に書き込まれます。親作品登録・クレジット用)" }), ...creditFields]),
-  el("details", { className: "sub" }, [
-    el("summary", { textContent: "設定ファイル(保存・読み込み・最初から)" }),
-    el("p", { className: "fine", textContent: "区間・マーカー・つまみ・音名などの設定だけを保存します(音声は含みません)。同じ素材を開き直すと、この端末では自動で前回の設定に戻ります。" }),
-    el("div", { className: "row tight" }, [saveSettingsButton, loadSettingsButton, resetSettingsButton, settingsStatus]),
-  ]),
-);
+materialPanel.append(el("details", { className: "sub credit" }, [el("summary", { textContent: "出典メモ(この素材の。親作品登録・クレジット用。曲や単音の WAV に書き込まれます)" }), ...creditFields]));
 
 const detailsPanel = el("details", { className: "panel params" }, [
-  el("summary", { textContent: "細かい設定(基準ピッチ・鳴らし方・揺らぎ・エンベロープ)" }),
+  el("summary", { textContent: "細かい設定(基準ピッチ・鳴らし方・揺らぎ・最初から作り直す)" }),
   el("div", { className: "params-grid" }, [
     el("fieldset", {}, [
       el("legend", { textContent: "基準ピッチ(素材そのものの高さ)" }),
@@ -1412,10 +1387,9 @@ const detailsPanel = el("details", { className: "panel params" }, [
       shaping(pitchGroup([check("細かい揺れ(平坦でも機械的にしない)", () => params.wobble.micro, (p, v) => (p.wobble.micro = v))])),
     ]),
     el("fieldset", {}, [
-      el("legend", { textContent: "エンベロープ" }),
-      range("ディケイ", 0.01, 10, 0.01, () => params.amp.decay, (p, v) => (p.amp.decay = v), ms),
-      range("サステイン", 0, 1, 0.01, () => params.amp.sustain, (p, v) => (p.amp.sustain = v), pct),
-      range("ベロシティ感度", 0, 1, 0.01, () => params.amp.velocitySens, (p, v) => (p.amp.velocitySens = v), pct),
+      el("legend", { textContent: "最初から作り直す" }),
+      el("p", { className: "fine help", textContent: "この素材の区間・マーカー・手直し・書き出し設定を捨てて、解析結果から作り直します(探索範囲と出典メモは残ります)。" }),
+      el("div", { className: "row tight" }, [resetSettingsButton, settingsStatus]),
     ]),
     location.search.includes("bench") ? el("div", { className: "row" }, [benchButton, benchResult]) : el("span"),
   ]),
@@ -1546,161 +1520,7 @@ async function rePick(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------- several files at once: the queue (ワンショット一括)
-
-interface QueueItem {
-  file: File;
-  /** What is known about it so far (filled in when opened or analysed for a batch). */
-  info: string;
-}
-
-let queue: QueueItem[] = [];
-let queueIndex = -1;
-
-const queueList = el("ol", { className: "queue-list" });
-const queueOneShot = el("input", { type: "checkbox", checked: true });
-const queueFirstKey = el("select", { ariaLabel: "最初の鍵" }, [24, 36, 48, 60].map((n) => el("option", { value: String(n), textContent: pitchLabel(n), selected: n === 36 })));
-const queueWavsButton = button("すべて単音 WAV で保存(zip)", "", () => void deliverQueue("wavs"));
-const queueKitButton = button("鍵に並べたワンショット音源にする(zip: SFZ + Decent Sampler)", "primary", () => void deliverQueue("kit"));
-const queueStatus = el("p", { className: "fine", role: "status" });
-const queuePanel = el("section", { className: "panel queue-panel", hidden: true }, [
-  el("div", { className: "row" }, [el("strong", { textContent: "素材リスト" }), el("span", { className: "fine", textContent: "1 つずつ開いて調整できます(設定は素材ごとに残ります)。調整していないものは、そのまま一括で書き出せます。" })]),
-  queueList,
-  el("div", { className: "row" }, [
-    el("label", { className: "control check" }, [queueOneShot, el("span", { textContent: "調整していない素材はワンショット(録音のまま、伸ばさない)として扱う" })]),
-  ]),
-  el("div", { className: "row" }, [queueWavsButton, queueKitButton, el("label", { className: "row tight" }, [el("span", { className: "fine", textContent: "最初の鍵" }), queueFirstKey])]),
-  queueStatus,
-]);
-
-function renderQueue(): void {
-  queuePanel.hidden = queue.length < 2;
-  queueList.replaceChildren(
-    ...queue.map((item, i) => {
-      const open = button(i === queueIndex ? "開いています" : "開く", "small", () => void openQueueItem(i));
-      open.disabled = i === queueIndex;
-      const remove = button("リストから外す", "small", () => {
-        queue.splice(i, 1);
-        if (queueIndex === i) queueIndex = -1;
-        else if (queueIndex > i) queueIndex--;
-        renderQueue();
-      });
-      return el("li", { className: i === queueIndex ? "current" : "" }, [el("span", { className: "queue-name", textContent: item.file.name }), el("span", { className: "fine", textContent: item.info }), open, remove]);
-    }),
-  );
-}
-
-async function openQueueItem(i: number): Promise<void> {
-  if (!queue[i]) return;
-  queueIndex = i;
-  renderQueue();
-  await openFile(queue[i].file);
-  if (material) queue[i].info = `${material.analysis.durationSec.toFixed(2)} 秒 / ${cuts.map((c) => (c.params.sustainMode === "none" ? "ワンショット" : pitchLabel(c.note))).join("・")}`;
-  renderQueue();
-}
-
-/** Every item as build inputs: the open one from the editor, the others analysed now (with their stored settings when they have any). */
-async function queueInputs(): Promise<{ inputs: BuildInput[]; skipped: string[] }> {
-  const inputs: BuildInput[] = [];
-  const skipped: string[] = [];
-  for (let i = 0; i < queue.length; i++) {
-    const item = queue[i];
-    queueStatus.textContent = `${i + 1} / ${queue.length}: 「${item.file.name}」を解析しています…`;
-    await yieldToScreen();
-    if (i === queueIndex && material) {
-      syncCut();
-      const source = exportSource();
-      inputs.push(...cuts.map((cut) => inputFor(cut, source)));
-      continue;
-    }
-    try {
-      const { channels, sampleRate } = await decode(item.file);
-      if (channels[0].length / sampleRate > MAX_MATERIAL_SEC) {
-        skipped.push(`${item.file.name}(${MAX_MATERIAL_SEC} 秒を超えるので、開いて範囲を選んでから)`);
-        item.info = "長いので、開いて範囲を選んでください";
-        continue;
-      }
-      let { analysis, source } = await client.analyze(channels, sampleRate, sampleRate);
-      const stored = safeStorage(settingsKey(item.file.name, channels[0].length, sampleRate));
-      let file: SettingsFile | null = null;
-      if (stored) {
-        try {
-          file = parseSettings(stored);
-        } catch {
-          file = null;
-        }
-      }
-      if (file?.corrections.length) {
-        ({ analysis, source } = await client.analyze(channels, sampleRate, sampleRate, applyCorrections(analysis.track, file.corrections)));
-      }
-      const itemCuts: CutSettings[] = file
-        ? file.cuts.map((c) => ({ ...c, markers: clampMarkers({ ...c.markers, rangeEnd: Math.min(c.markers.rangeEnd, analysis.durationSec) }) }))
-        : [cutFor(analysis.track, analysis.markers, "区間 1", DEFAULT_PARAMS, "synth", queueOneShot.checked)];
-      const itemCredit = file?.credit ?? { title: "", url: "", timecode: "", memo: "" };
-      const base = safeBaseName(stripExtension(item.file.name));
-      for (const cut of itemCuts) {
-        inputs.push({ baseName: itemCuts.length > 1 ? `${base}_${cut.name}` : base, source, cut, settings: { ...exportSettings, format: "single" }, credit: itemCredit });
-      }
-      item.info = `${analysis.durationSec.toFixed(2)} 秒 / ${itemCuts.map((c) => (c.params.sustainMode === "none" ? "ワンショット" : pitchLabel(c.note))).join("・")}${file ? "(調整済み)" : ""}`;
-    } catch (error) {
-      skipped.push(`${item.file.name}(${error instanceof Error ? error.message : error})`);
-      item.info = "読み込めませんでした";
-    }
-    renderQueue();
-  }
-  return { inputs, skipped };
-}
-
-let builtQueue: { key: string; result: Built; skipped: string[] } | null = null;
-
-async function deliverQueue(kind: "wavs" | "kit"): Promise<void> {
-  if (building || queue.length === 0) return;
-  building = true;
-  try {
-    // The zip is kept once made: on an iPhone the share sheet only opens on a fresh tap, which a long build uses up.
-    const key = JSON.stringify([kind, queue.map((q) => [q.file.name, q.file.size, q.file.lastModified]), queueFirstKey.value, exportSettings, credit]);
-    let built: Built;
-    let skipped: string[];
-    if (builtQueue?.key === key) ({ result: built, skipped } = builtQueue);
-    else {
-      const inputs = await queueInputs();
-      skipped = inputs.skipped;
-      if (inputs.inputs.length === 0) {
-        queueStatus.textContent = `書き出せるものがありません。${skipped.join("、")}`;
-        return;
-      }
-      const progress = async (done: number, total: number) => {
-        queueStatus.textContent = `作成中… ${done} / ${total}`;
-        await yieldToScreen();
-      };
-      const first = safeBaseName(stripExtension(queue[0].file.name));
-      built = kind === "kit" ? await buildKit(inputs.inputs, `${first}_kit`, Number(queueFirstKey.value), progress) : await buildBatch(inputs.inputs, null, `${first}_など${queue.length}件`, progress);
-      if (kind === "kit") built = forDestination(built);
-      builtQueue = { key, result: built, skipped };
-    }
-    const note = skipped.length ? ` — 飛ばしたもの: ${skipped.join("、")}` : "";
-    if (SHARE_ONLY && canShareFiles()) {
-      try {
-        const outcome = await shareFile(built.blob, built.fileName, built.fileName);
-        queueStatus.textContent = outcome === "shared" ? `共有しました: ${built.summary}${note}` : "";
-        return;
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "NotAllowedError") {
-          queueStatus.textContent = "できました。もう一度押すと共有シートが開きます。";
-          return;
-        }
-      }
-    }
-    downloadFile(built.blob, built.fileName);
-    queueStatus.textContent = `保存しました: ${built.summary}${note}`;
-  } catch (error) {
-    queueStatus.textContent = `書き出せませんでした: ${error instanceof Error ? error.message : error}`;
-  } finally {
-    building = false;
-  }
-}
-
-/** Files dropped or chosen: one opens; several make a queue and open the first. Settings and MIDI files are read on their own. */
+/** Files dropped or chosen: each goes into the project (the last one stays open); a MIDI file goes to the song, a project file opens as one. */
 function openFiles(files: readonly File[]): void {
   const project = files.find((f) => f.name.toLowerCase().endsWith(PROJECT_FILE_EXTENSION));
   if (project) {
@@ -1722,15 +1542,10 @@ function openFiles(files: readonly File[]): void {
     void addKitFiles(audio);
     return;
   }
-  if (audio.length === 1 && queue.length === 0) {
-    void openFile(audio[0]);
-    return;
-  }
-  // Add to the list (a single file dropped while a list exists joins it).
-  const known = new Set(queue.map((q) => `${q.file.name}:${q.file.size}`));
-  for (const f of audio) if (!known.has(`${f.name}:${f.size}`)) queue.push({ file: f, info: "" });
-  renderQueue();
-  if (queueIndex < 0) void openQueueItem(queue.length - audio.length);
+  // One after another, each a material of the project.
+  void (async () => {
+    for (const f of audio) await openFile(f);
+  })();
 }
 
 // ---------------------------------------------------------------- page
@@ -2244,6 +2059,15 @@ rollPanel.onKitChange = () => {
 };
 rollPanel.onKitHit = (key) => client.kitHit(key);
 rollPanel.onOpenKit = () => setView("kit");
+// A track's 「区間を編集」: its material and cut, on the 素材 side.
+rollPanel.onEditCut = (instrument) => {
+  const [materialId, cutId] = instrument.split("/");
+  if (!library.has(materialId)) return;
+  switchMaterial(materialId);
+  const index = cuts.findIndex((c) => c.id === cutId);
+  if (index >= 0 && index !== current) selectCut(index);
+  setView("material");
+};
 rollPanel.onOpenFx = () => {
   fxTarget = "track";
   showFxTarget();
@@ -2313,7 +2137,11 @@ function setView(next: View): void {
     client.stopPreview();
     editor.draw();
   }
-  if (next === "material") editor.draw();
+  if (next === "material") {
+    // (The song's tempo may have changed: the length in beats follows it.)
+    if (material) refreshExport();
+    editor.draw();
+  }
   window.scrollTo({ top: 0 });
 }
 
@@ -2326,38 +2154,36 @@ document.getElementById("app")!.append(
   projectDialog,
   status,
   emptyState,
-  queuePanel,
   pickerPanel,
   workspace,
 );
 
 // ---------------------------------------------------------------- cuts
 
+/** Another cut of the material: its settings from `base` (the cut it was made from). */
 function cutFromAnalysis(m: Markers, name: string, base: InstrumentParams): Cut {
-  return cutFor(material?.analysis.track ?? null, m, name, base, presetId || "synth", false);
+  return cutFor(material?.analysis.track ?? null, m, name, base, "", false);
 }
 
-/** A cut set up from an analysis: pitched → the preset hint (or "synth"), unpitched or forced → a one-shot from C4 / its own pitch. */
+/**
+ * A cut set up from an analysis. Pitched: from `hint`'s starting point when given (the built-in piano: 減衰), a short
+ * material (hardly anything steady to hold) as 移調 with the voiceless following, otherwise `base` as it is.
+ * Unpitched or forced: 移調 at the speed of the key (速度連動), from its own pitch (C4 when there is none).
+ */
 function cutFor(track: PitchTrack | null, m: Markers, name: string, base: InstrumentParams, hint: PresetId | "", forceOneShot: boolean): Cut {
   const root = track ? rootForMarkers(track, m) : null;
   const p = structuredClone(base);
-  let preset: PresetId | "" = hint || "synth";
   if (root && !forceOneShot) {
     p.root = root.midi;
     p.rootMode = "auto";
-    // Short material with hardly anything steady to sustain: play it through as it is, at the note.
-    if (preset === "synth" && isShortMaterial(m)) {
-      Object.assign(p, PRESETS.find((x) => x.id === "short")!.apply(p));
-      preset = "short";
-    }
+    const start = hint ? hint : isShortMaterial(m) ? "short" : "";
+    if (start) Object.assign(p, PRESETS.find((x) => x.id === start)!.apply(p));
   } else {
-    // Nothing pitched (a hit, a noise), or a one-shot by request: plays as recorded, from its own pitch (C4 when there is none).
     p.root = root?.midi ?? 60;
     p.rootMode = root ? "auto" : "manual";
-    Object.assign(p, oneShotParams(p));
-    preset = "";
+    Object.assign(p, oneShotParams(p), { transposeOnly: true });
   }
-  return { id: newCutId(), name, markers: m, params: p, note: Math.max(24, Math.min(96, Math.round(p.root))), noteMode: "auto", presetId: preset, detectedRoot: root?.midi ?? null };
+  return { id: newCutId(), name, markers: m, params: p, note: Math.max(24, Math.min(96, Math.round(p.root))), noteMode: "auto", detectedRoot: root?.midi ?? null };
 }
 
 /** A clip with less than this much steady sustain is "short": a shout or a word, not a note to stretch. */
@@ -2366,15 +2192,15 @@ function isShortMaterial(m: Markers): boolean {
   return m.sustainEnd - m.sustainStart < SHORT_SUSTAIN_SEC || m.rangeEnd - m.rangeStart < 0.5;
 }
 
-/** One cut from the analysis, as on a fresh load. */
-/** The preset the next new material's first cut starts from (the built-in piano asks for "decay"). */
+/** The starting point the next new material's first cut takes (the built-in piano asks for "decay"). */
 let nextPresetHint: PresetId | "" = "";
 
+/** One cut from the analysis, as on a fresh load. */
 function freshCuts(): void {
   if (!material) return;
-  presetId = nextPresetHint || "synth";
+  const hint = nextPresetHint;
   nextPresetHint = "";
-  cuts = [cutFromAnalysis(material.analysis.markers, "区間 1", DEFAULT_PARAMS)];
+  cuts = [cutFor(material.analysis.track, material.analysis.markers, "区間 1", DEFAULT_PARAMS, hint, false)];
   current = 0;
 }
 
@@ -2384,7 +2210,6 @@ function syncCut(): void {
   if (!cut || !markers) return;
   cut.markers = markers;
   cut.params = params;
-  cut.presetId = presetId;
   cut.note = note;
   cut.noteMode = noteMode;
 }
@@ -2395,7 +2220,6 @@ function applyCurrentCut(): void {
   if (!cut) return;
   markers = cut.markers;
   params = cut.params;
-  presetId = cut.presetId;
   note = cut.note;
   noteMode = cut.noteMode;
   rebuildCutSelect();
@@ -2474,9 +2298,11 @@ function sendInstrument(): void {
 
 /** The note and export settings → the note row, the length row, the file name, the help, the editor's target line. */
 function refreshExport(): void {
-  // The tail limit counts in the export BPM (the song's own while one plays); a "stretch" sustain fills the export length.
+  // The length's beats are the song's (its starting BPM); the keyboard's "stretch" sustain fills that length.
+  exportSettings.bpm = Math.max(20, Math.min(400, rollPanel.bpm));
   client.setHold(exportLengthSec(exportSettings));
   refreshInstruments();
+  refreshCutUsage();
   tuneScaleRow.hidden = params.tune.mode !== "scale";
   refreshMakeMode();
   if (noteMode === "auto") note = Math.max(24, Math.min(96, Math.round(params.root)));
@@ -2493,7 +2319,7 @@ function refreshExport(): void {
   noteShift.classList.toggle("warn", Math.abs(shift) > 7);
 
   beatsInput.value = String(exportSettings.beats);
-  bpmInput.value = String(exportSettings.bpm);
+  lengthBpm.textContent = `(曲の ${exportSettings.bpm} BPM で)`;
   secondsInput.value = String(exportSettings.seconds);
   lengthBeats.checked = exportSettings.lengthMode === "beats";
   lengthSeconds.checked = exportSettings.lengthMode === "seconds";
@@ -2504,7 +2330,7 @@ function refreshExport(): void {
   lengthBlock.hidden = oneShot;
   lengthBlock.classList.toggle("disabled", wavetable);
   lengthResult.textContent = oneShot
-    ? "ワンショット: 素材の長さのまま"
+    ? "伸ばさない作り方: 素材の長さのまま"
     : wavetable
       ? "ウェーブテーブル: 長さは使いません(鍵盤では使われます)"
       : exportSettings.format === "single"
@@ -2679,8 +2505,6 @@ function trackPlayhead(): void {
 }
 
 function showPlaying(): void {
-  const result = playing?.kind === "result";
-  listenButton.textContent = result ? "■ 停止" : "▶ 書き出し後を聴く";
   playButton.textContent = playing ? "■" : "▶";
   playButton.classList.toggle("playing", playing !== null);
 }
@@ -2798,7 +2622,7 @@ client.onPreviewEnd = () => {
   else editor.setPlayhead(null);
 };
 
-// Space plays / stops the last preview (書き出し後 to begin with); Shift + Space the original. A song playing stops.
+// Space plays / stops the last preview (仕上がり to begin with); Shift + Space the original. A song playing stops.
 window.addEventListener("keydown", (event) => {
   if (event.code !== "Space" || isTypingTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
   // Picking a stretch of a long clip (whatever else is loaded): Space plays / stops the selection.
@@ -2863,7 +2687,7 @@ function settingsBody(): Omit<SettingsFile, "app" | "version" | "savedAt"> {
     material: { name: material!.name, durationSec: material!.analysis.durationSec, sampleRate: material!.sampleRate, channels: material!.channels.length },
     export: exportSettings,
     credit: { ...credit },
-    cuts: cuts.map(({ id, name, markers: m, params: p, note: n, noteMode: mode, presetId: preset }) => ({ id, name, markers: m, params: p, note: n, noteMode: mode, presetId: preset })),
+    cuts: cuts.map(({ id, name, markers: m, params: p, note: n, noteMode: mode }) => ({ id, name, markers: m, params: p, note: n, noteMode: mode })),
     currentCut: current,
     corrections: material!.corrections,
     pitchRange: material!.pitchRange ?? undefined,
@@ -3020,10 +2844,7 @@ function applySettings(file: SettingsFile, analysed = false): void {
   cuts = file.cuts.map((c) => {
     const m = clampMarkers({ ...c.markers, rangeEnd: Math.min(c.markers.rangeEnd, duration) });
     const detected = rootForMarkers(material!.analysis.track, m);
-    // The preset as saved; an older file without one gets the first preset its settings still match.
-    const saved = c.presetId === "" || PRESETS.some((p) => p.id === c.presetId) ? (c.presetId as PresetId | "") : undefined;
-    const preset = saved ?? PRESETS.find((p) => JSON.stringify(p.apply(structuredClone(c.params))) === JSON.stringify(c.params))?.id ?? "";
-    return { ...c, markers: m, params: { ...c.params, maxVoices: DEFAULT_PARAMS.maxVoices, transposeOnly: c.params.transposeOnly || ((preset === "transpose" || preset === "short") && c.params.sustainMode === "none") }, presetId: preset, detectedRoot: detected?.midi ?? null };
+    return { ...c, markers: m, params: { ...c.params, maxVoices: DEFAULT_PARAMS.maxVoices }, detectedRoot: detected?.midi ?? null };
   });
   current = file.currentCut;
   exportSettings = file.export;
@@ -3204,6 +3025,26 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
   return out;
 }
 
+/**
+ * The 出典メモ of every material the song plays (a cut on a track, or clips on an audio track), one line each
+ * ("素材名: 作品名 / URL / 時刻 / メモ"); materials without one are left out.
+ */
+function songCredits(project: ReturnType<typeof rollPanel.snapshot>): string[] {
+  const used = new Set<string>();
+  for (const t of project.tracks) {
+    if (t.kind === "melodic" && t.instrument?.includes("/")) used.add(t.instrument.split("/")[0]);
+    if (t.kind === "audio") for (const n of t.notes) if (n.clip) used.add(n.clip.material);
+  }
+  const lines: string[] = [];
+  for (const id of used) {
+    const entry = library.get(id);
+    if (!entry) continue;
+    const line = creditLine(entry.material === material ? credit : (entry.settings?.credit ?? { title: "", url: "", timecode: "", memo: "" }));
+    if (line) lines.push(`${entry.material.name}: ${line}`);
+  }
+  return lines;
+}
+
 /** A song file's name: the project's name and the time (e.g. 「新曲_20261028-1530」). */
 function songFileStamp(): string {
   const d = new Date();
@@ -3236,8 +3077,12 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
       })()
     : tempoMapSec(project);
   const stamp = songFileStamp() + (range ? "_loop" : "");
+  // The materials' 出典メモ go with the song: in the WAV's comment, and as a text file beside the stems.
+  const credits = kind === "mid" ? [] : songCredits(project);
+  const songInfo = { ISFT: "EasySampler", ...(credits.length ? { ICMT: `出典: ${credits.join(" ／ ")}` } : {}) };
+  const creditNote = credits.length ? `、出典 ${credits.length} 件入り` : "";
   const window = range ? { fromSec: range.lengthSec, lengthSec: range.lengthSec } : undefined;
-  const key = JSON.stringify([kind, range, project, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
+  const key = JSON.stringify([kind, range, project, credits, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
   let built = songBuilt?.key === key ? songBuilt : null;
   if (!built) {
     songBuilding = true;
@@ -3257,7 +3102,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
         const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, range), tempoMap, window }, progress);
         const fileName = `${stamp}.wav`;
         const lowered = song.gain < 1 ? `。音割れしないよう全体を ${(20 * Math.log10(song.gain)).toFixed(1)} dB 下げました` : "";
-        built = { key, blob: new Blob([encodeWavBytes(song.channels, song.sampleRate, { ISFT: "EasySampler" }, undefined, { bits: 24 })], { type: "audio/wav" }), fileName, summary: `${(song.channels[0].length / song.sampleRate).toFixed(1)} 秒、${song.sampleRate / 1000} kHz / 24bit${lowered}` };
+        built = { key, blob: new Blob([encodeWavBytes(song.channels, song.sampleRate, songInfo, undefined, { bits: 24 })], { type: "audio/wav" }), fileName, summary: `${(song.channels[0].length / song.sampleRate).toFixed(1)} 秒、${song.sampleRate / 1000} kHz / 24bit${creditNote}${lowered}` };
       } else {
         // Every stem from 0, at one gain and one length: laid side by side they add up to the mix (without the master).
         const rendered: { name: string; channels: [Float32Array, Float32Array] }[] = [];
@@ -3276,9 +3121,10 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
           rendered.push({ name, channels: song.channels });
         }
         const even = evenStems(rendered.map((r) => r.channels));
-        const entries: ZipEntry[] = rendered.map((r, i) => ({ name: `${stamp}/${r.name}`, data: new Uint8Array(encodeWavBytes(even.stems[i], rate, { ISFT: "EasySampler" }, undefined, { bits: 24 })) }));
+        const entries: ZipEntry[] = rendered.map((r, i) => ({ name: `${stamp}/${r.name}`, data: new Uint8Array(encodeWavBytes(even.stems[i], rate, songInfo, undefined, { bits: 24 })) }));
+        if (credits.length) entries.push({ name: `${stamp}/出典.txt`, data: new TextEncoder().encode(credits.join("\r\n") + "\r\n") });
         const lowered = even.gain < 1 ? `。音割れしないよう全部を同じだけ ${(20 * Math.log10(even.gain)).toFixed(1)} dB 下げました` : "";
-        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `${stamp}_トラック別.zip`, summary: `WAV ${entries.length} 本(24bit、同じ長さ、各トラックのエフェクト込み・マスターなし)${lowered}` };
+        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `${stamp}_トラック別.zip`, summary: `WAV ${rendered.length} 本(24bit、同じ長さ、各トラックのエフェクト込み・マスターなし${creditNote})${lowered}` };
       }
       songBuilt = built;
     } catch (error) {
@@ -3470,7 +3316,7 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
       freshCuts();
       applyCurrentCut();
     }
-    const shortNote = !restored && presetId === "short" ? " 伸ばせる部分が短いので、作り方を「移調」(子音・息も音程に合わせる)にしました。伸ばして使うなら作り方を「伸ばす」に。" : "";
+    const shortNote = !restored && makeModeOf(params) === "transpose" && params.pitchMode !== "resample" ? " 伸ばせる部分が短いので、作り方を「移調」(子音・息も音程に合わせる)にしました。伸ばして使うなら作り方を「伸ばす」に。" : "";
     status.replaceChildren(text + (restored ? " 前回の設定を復元しました。" : "") + shortNote);
     if (restored && !kept) status.append(" ", button("最初から", "small", () => resetSettingsButton.click()));
     defineMaterialCuts();
@@ -3585,7 +3431,7 @@ editor.onLevelChange = (level, final) => {
     p.amp.attack = level.attackSec;
     // Below the release the fade-out does nothing (the release is at least as long): that is "off".
     p.amp.fadeOut = level.fadeOutSec <= p.amp.release + 1e-6 ? 0 : level.fadeOutSec;
-  }, true);
+  });
   refreshControls();
 };
 
@@ -3668,13 +3514,6 @@ void (async () => {
   rollPanel.onSaved = touchProject;
   refreshProjectButton();
   const project = await rollPanel.restore();
-  // The old voice demo is gone from the app: a saved project drops it (its tracks then play nothing until another cut is chosen).
-  for (const m of [...project.materials]) {
-    if (m.name !== OLD_VOICE_DEMO_NAME) continue;
-    rollPanel.removeMaterial(m.id);
-    void forget(`audio:${m.id}`);
-    void forget(`settings:${m.id}`);
-  }
   const order = [...project.materials].sort((a, b) => Number(a.id === project.editing) - Number(b.id === project.editing));
   for (const m of order) {
     let audio = (await kept(`audio:${m.id}`)) as { name: string; sampleRate: number; channels: Float32Array[] } | undefined;
@@ -3688,18 +3527,6 @@ void (async () => {
       settings = typeof stored === "string" ? parseSettings(stored) : null;
     } catch {
       settings = null;
-    }
-    // The built-in piano as an earlier version made it (3 s, cut off while still ringing): made again, its cuts' ranges
-    // follow the new length (the cuts keep their ids, so the tracks keep playing them).
-    if (audio.name === PIANO_NAME && audio.channels[0].length !== Math.round(PIANO_SECONDS * audio.sampleRate)) {
-      audio = { ...audio, channels: [synthPiano({ sampleRate: audio.sampleRate })] };
-      void keep(`audio:${m.id}`, audio);
-      if (settings) {
-        const { analysis } = await client.analyze(audio.channels, audio.sampleRate);
-        const decay = PRESETS.find((p) => p.id === "decay")!;
-        settings = { ...settings, cuts: settings.cuts.map((c) => ({ ...c, markers: analysis.markers, params: c.presetId === "decay" ? decay.apply(c.params) : c.params })) };
-        void keep(`settings:${m.id}`, serializeSettings(settings));
-      }
     }
     if (m.id === project.editing || m === order.at(-1)) await load(audio.name, audio.channels, audio.sampleRate, { id: m.id, settings });
     else await loadInBackground(m.id, audio.name, audio.channels, audio.sampleRate, settings);

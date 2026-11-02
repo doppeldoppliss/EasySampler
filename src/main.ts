@@ -925,7 +925,7 @@ function showPinned(): void {
 }
 /** The keyboard's title and note: what the keys play in the view on screen. */
 const keysTitle = el("span", { className: "control-label", textContent: "試し弾き" });
-const keysNote = el("p", { className: "fine", textContent: "●の付いた鍵が、試聴の高さです。" });
+const keysNote = el("p", { className: "fine", textContent: "●の付いた鍵が、判定した高さ(素材がそのままの高さで鳴る鍵)です。" });
 // A MIDI keyboard: its keys go where the on-screen ones do.
 const midi = new MidiInput(sink);
 const midiState = el("span", { className: "fine" });
@@ -2402,7 +2402,8 @@ function refreshExport(): void {
     );
   }
   refreshFixBar();
-  piano.setRoot(note);
+  // The ● is the detected pitch: the key the material plays at as it is (the 試聴の高さ is the preview's own).
+  piano.setRoot(params.root);
   syncCut();
   scheduleSave();
 }
@@ -3188,7 +3189,7 @@ function refreshInstruments(): void {
   const multi = library.size > 1;
   for (const { material: m, settings } of library.values()) {
     const list = material && m.id === material.id ? cuts : (settings?.cuts ?? []);
-    for (const cut of list) options.push({ id: instrumentId(m.id, cut.id), label: multi || list.length > 1 ? `${m.name} / ${cut.name}` : m.name, note: cut.note });
+    for (const cut of list) options.push({ id: instrumentId(m.id, cut.id), label: multi || list.length > 1 ? `${m.name} / ${cut.name}` : m.name, note: Math.round(cut.params.root) });
   }
   rollPanel.setInstruments(options, material && cuts[current] ? instrumentId(material.id, cuts[current].id) : null);
 }
@@ -3452,6 +3453,7 @@ editor.onRootChange = (root, final) => {
   else {
     rootLabel.textContent = pitchLabel(root);
     rootSource.textContent = "(手動)";
+    piano.setRoot(root);
   }
 };
 

@@ -135,7 +135,7 @@ const GLIDES: [number, string][] = [
   [0.6, "とてもゆっくり(0.6 秒)"],
 ];
 
-/** A cut a track can play: its instrument id, how it reads in the list, and the note it is made for (marked on the keys). */
+/** A cut a track can play: its instrument id, how it reads in the list, and its detected pitch (the key it plays at as it is, marked on the keys). */
 export interface InstrumentOption {
   id: string;
   label: string;

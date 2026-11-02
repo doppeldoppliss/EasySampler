@@ -22,16 +22,14 @@ export interface TrackSpec extends MixSettings {
   drumKeys?: (number | null)[];
   /** Portamento (seconds; 0 or absent = off). */
   glide?: number;
-  /** 語尾を収める: the tail ends where the note does. */
-  tailFit?: boolean;
 }
 
 export type ToEngine =
   | { type: "source"; material: string; source: PreparedSource | null }
-  // hold: the note length a "stretch" sustain fills for this instrument (its material's export length).
+  // hold: the note length a "stretch" sustain fills for this instrument when a note has none (the keyboard).
   | { type: "instrument"; id: string; material: string; markers: Markers; params: InstrumentParams; hold?: number }
   | { type: "dropInstrument"; id: string }
-  // The note length the "stretch" sustain fills (the export length, in seconds).
+  // The note length the "stretch" sustain fills when a note has none (the keyboard; seconds).
   | { type: "hold"; sec: number }
   | { type: "tempo"; bpm: number }
   // The keyboard: which instrument it plays, through which effects.

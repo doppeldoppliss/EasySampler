@@ -70,6 +70,11 @@ class EngineProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.liveKit.chokes = true;
+    // A tempo change in the song reaches the master effects (and the keyboard's) too.
+    this.song.onTempo = (bpm) => {
+      this.master.setTempo(bpm);
+      this.liveFx.setTempo(bpm);
+    };
     this.port.onmessage = (event: MessageEvent<ToEngine>) => this.handle(event.data);
   }
 
@@ -85,7 +90,6 @@ class EngineProcessor extends AudioWorkletProcessor {
     if (inst && source) {
       sound.engine.setInstrument(inst.markers, inst.params);
       sound.engine.setHold(inst.hold ?? this.hold);
-      sound.engine.setTempo(this.bpm);
     }
   }
 
@@ -112,10 +116,7 @@ class EngineProcessor extends AudioWorkletProcessor {
                 : new BackingSound(sampleRate);
       if (sound instanceof ClipSound) sound.clips = t.clips ?? [];
       if (sound instanceof EngineSound && sound.instrument !== t.instrument) this.apply(sound, t.instrument);
-      if (sound instanceof EngineSound) {
-        sound.setGlide(t.glide ?? 0);
-        sound.fitTail = t.tailFit === true;
-      }
+      if (sound instanceof EngineSound) sound.setGlide(t.glide ?? 0);
       if (sound instanceof SampleSound) {
         sound.rows = (t.samples ?? []).map((id) => (id ? (this.samples.get(id) ?? null) : null));
         sound.keys = t.drumKeys ?? [];
@@ -205,7 +206,6 @@ class EngineProcessor extends AudioWorkletProcessor {
         break;
       case "tempo":
         this.bpm = message.bpm;
-        for (const sound of [this.live, this.preview, ...this.trackSounds.values()]) if (sound instanceof EngineSound) sound.engine.setTempo(message.bpm);
         this.liveFx.setTempo(message.bpm);
         this.master.setTempo(message.bpm);
         this.song.setTempo(message.bpm);

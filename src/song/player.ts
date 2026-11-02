@@ -200,12 +200,16 @@ export class SongPlayer {
     return Math.max(this.fromFrame, this.fromFrame + (contextFrame - this.startFrame)) / this.sampleRate;
   }
 
+  /** Told every tempo the player moves to (the master effects, which run outside it, follow it). */
+  onTempo: ((bpm: number) => void) | null = null;
+
   setTempo(bpm: number): void {
     this.bpm = bpm;
     for (const lane of this.lanes) {
       lane.fx.setTempo(bpm);
       lane.sound.setTempo?.(bpm);
     }
+    this.onTempo?.(bpm);
   }
 
   /** Loops [startSec, endSec) of the song, or stops looping (null). */

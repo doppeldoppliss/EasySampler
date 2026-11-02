@@ -111,13 +111,9 @@ export class EngineSound implements TrackSound {
   setGlide(sec: number): void {
     this.engine.setGlide(sec);
   }
-  setTempo(bpm: number): void {
-    this.engine.setTempo(bpm);
-  }
-  /** 語尾を収める: song notes hand their length on, so the tail ends with the note. */
-  fitTail = false;
+  /** A song's note hands its length on: a "stretch" sustain fills it. */
   noteOn(note: number, velocity: number, _drum = false, lengthSec?: number): void {
-    this.engine.noteOn(note, velocity, this.fitTail ? lengthSec : undefined);
+    this.engine.noteOn(note, velocity, lengthSec);
   }
   noteOff(note: number): void {
     this.engine.noteOff(note);

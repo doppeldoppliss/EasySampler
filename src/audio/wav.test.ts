@@ -36,3 +36,16 @@ describe("encodeWav", () => {
     expect((await blob.arrayBuffer()).byteLength).toBe(44 + 4);
   });
 });
+
+describe("encodeWav 24-bit", () => {
+  it("writes 3 bytes a sample, with the header to match", async () => {
+    const x = Float32Array.from([0, 0.5, -1, 1]);
+    const bytes = new Uint8Array(await encodeWav([x], 48000, undefined, undefined, { bits: 24 }).arrayBuffer());
+    const view = new DataView(bytes.buffer);
+    expect(view.getUint16(34, true)).toBe(24);
+    expect(view.getUint32(40, true)).toBe(12);
+    const at = 44 + 3; // the second sample, 0.5
+    const v = bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16);
+    expect(v).toBe(Math.round(0.5 * 0x7fffff));
+  });
+});

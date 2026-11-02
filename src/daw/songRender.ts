@@ -13,7 +13,7 @@ export interface RenderInstrument {
   source: PreparedSource;
   markers: Markers;
   params: InstrumentParams;
-  /** The note length a "stretch" sustain fills (the material's export length). */
+  /** The note length a "stretch" sustain fills when a note has none (a song's notes give their own). */
   hold: number;
 }
 
@@ -32,8 +32,6 @@ export interface RenderTrack {
   notes: SeqNote[];
   /** Portamento (seconds; 0 or absent = off). */
   glide?: number;
-  /** 語尾を収める: the tail ends where the note does. */
-  tailFit?: boolean;
   fx: FxSettings | null;
   gain: number;
   pan: number;
@@ -58,6 +56,8 @@ export interface SongRenderInput {
    * given twice and the second pass is kept, so what rings past the loop's end is heard at its start.
    */
   window?: { fromSec: number; lengthSec: number };
+  /** A stem: left at its level (no gain against clipping) and untrimmed, so the stems can be brought to one gain and one length. */
+  raw?: boolean;
 }
 
 export interface RenderedSong {
@@ -65,6 +65,30 @@ export interface RenderedSong {
   sampleRate: number;
   /** Gain applied to keep the mix under full scale (1 = none). */
   gain: number;
+}
+
+/**
+ * Stems brought to one gain (what keeps the loudest under full scale) and one length (the longest), so that
+ * laid side by side from 0 they add up to the mix. Returns that gain.
+ */
+export function evenStems(stems: [Float32Array, Float32Array][]): { stems: [Float32Array, Float32Array][]; gain: number } {
+  let peak = 0;
+  let length = 0;
+  for (const [l, r] of stems) {
+    length = Math.max(length, l.length);
+    for (let i = 0; i < l.length; i++) peak = Math.max(peak, Math.abs(l[i]), Math.abs(r[i]));
+  }
+  const gain = peak > 0.999 ? 0.98 / peak : 1;
+  const out = stems.map(([l, r]) => {
+    const a = new Float32Array(length);
+    const b = new Float32Array(length);
+    for (let i = 0; i < l.length; i++) {
+      a[i] = l[i] * gain;
+      b[i] = r[i] * gain;
+    }
+    return [a, b] as [Float32Array, Float32Array];
+  });
+  return { stems: out, gain };
 }
 
 const BLOCK = 128;
@@ -99,9 +123,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
       s.engine.setSource(t.instrument.source);
       s.engine.setInstrument(t.instrument.markers, t.instrument.params);
       s.engine.setHold(t.instrument.hold);
-      s.engine.setTempo(input.bpm);
       s.setGlide(t.glide ?? 0);
-      s.fitTail = t.tailFit === true;
       sound = s;
     }
     if (!sound) continue;
@@ -117,6 +139,8 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
   const master = new FxChain(sr);
   if (input.masterFx) master.set(input.masterFx);
   master.setTempo(input.bpm);
+  // (A tempo change in the song reaches the master effects too.)
+  player.onTempo = (bpm) => master.setTempo(bpm);
   const masterOn = input.masterFx !== null && master.active;
   const anyFx = masterOn || tracks.some((t) => t.fx !== null);
   // How long the effects may ring on after the sounds stop (a delay's repeats, a reverb's tail).
@@ -173,8 +197,8 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
     if (a > 1e-4) end = i + 1;
     if (a > peak) peak = a;
   }
-  end = win ? at : Math.min(at, end + Math.round(0.05 * sr));
-  const gain = peak > 0.999 ? 0.98 / peak : 1;
+  end = win || input.raw ? at : Math.min(at, end + Math.round(0.05 * sr));
+  const gain = !input.raw && peak > 0.999 ? 0.98 / peak : 1;
   const outL = left.slice(0, end);
   const outR = right.slice(0, end);
   if (gain !== 1)

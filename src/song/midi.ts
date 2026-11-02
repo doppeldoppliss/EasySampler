@@ -1,4 +1,4 @@
-// Reading a Standard MIDI File (.mid) for "曲で試す": every note with its
+// Reading a Standard MIDI File (.mid) for 打ち込み's 「MIDI を開く」: every note with its
 // start and end in seconds (the tempo map applied), per track, plus where
 // the bars fall. Controllers, pitch bends, sysex and the like are skipped —
 // the material plays the notes, nothing more.
@@ -131,6 +131,8 @@ export function parseMidi(data: ArrayBuffer | Uint8Array): Song {
       else if (running) status = running;
       else throw new MidiParseError("MIDI のイベントが壊れています。");
       if (status === 0xff) {
+        // (A meta event or sysex ends running status.)
+        running = 0;
         const type = u8();
         const len = vlq();
         need(len);
@@ -142,6 +144,7 @@ export function parseMidi(data: ArrayBuffer | Uint8Array): Song {
         continue;
       }
       if (status === 0xf0 || status === 0xf7) {
+        running = 0;
         p += vlq();
         continue;
       }

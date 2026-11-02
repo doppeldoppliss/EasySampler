@@ -42,26 +42,24 @@ describe("removals", () => {
 });
 
 describe("outputLayout", () => {
-  it("elastic sustain fills the hold after the head; the tail follows when enabled", () => {
-    const p: InstrumentParams = { ...DEFAULT_PARAMS, tail: { enabled: true, limit: "unlimited" } };
-    const layout = outputLayout(markers, p, 2);
+  it("elastic sustain fills the hold after the head; nothing after it", () => {
+    const layout = outputLayout(markers, DEFAULT_PARAMS, 2);
     expect(layout.headSec).toBeCloseTo(0.2);
     expect(layout.sustainSec).toBeCloseTo(1.8);
-    expect(layout.tailSec).toBeCloseTo(0.5);
+    expect(layout.tailSec).toBe(0);
     expect(layout.sustainRatio).toBeCloseTo(6);
     expect(layout.elastic).toBe(true);
-    expect(layout.totalSec).toBeCloseTo(2.5);
-    expect(outputLayout(markers, { ...DEFAULT_PARAMS, tail: { enabled: false, limit: "unlimited" } }, 2).tailSec).toBe(0);
+    expect(layout.totalSec).toBeCloseTo(2);
   });
 
-  it("head and tail stretch; a one-shot plays every part at its own speed and ignores the hold", () => {
-    const p: InstrumentParams = { ...DEFAULT_PARAMS, sustainMode: "none", stretch: { head: 2, sustain: 3, tail: 0.5 } };
+  it("a one-shot plays the head at its speed, and from the sustain to the end at the sustain's; the hold is ignored", () => {
+    const p: InstrumentParams = { ...DEFAULT_PARAMS, sustainMode: "none", stretch: { head: 2, sustain: 3 } };
     const layout = outputLayout(markers, p, 99);
     expect(layout.headSec).toBeCloseTo(0.4);
     expect(layout.sustainSec).toBeCloseTo(0.9);
-    expect(layout.tailSec).toBeCloseTo(0.25);
+    expect(layout.tailSec).toBeCloseTo(1.5);
     expect(layout.elastic).toBe(false);
-    expect(layout.totalSec).toBeCloseTo(1.55);
+    expect(layout.totalSec).toBeCloseTo(2.8);
   });
 
   it("removed stretches shorten the parts they fall in", () => {
@@ -93,7 +91,7 @@ describe("engine: removals and speeds", () => {
 
   it("stretches the head: at ×2 a one-shot grows by the head's length", () => {
     const one = setup({ sustainMode: "none" });
-    const two = setup({ sustainMode: "none", stretch: { head: 2, sustain: 1, tail: 1 } });
+    const two = setup({ sustainMode: "none", stretch: { head: 2, sustain: 1 } });
     const a = renderNote(one.source, one.markers, one.params, 62, 1).channels[0].length / SR;
     const b = renderNote(two.source, two.markers, two.params, 62, 1).channels[0].length / SR;
     const headSrc = one.markers.sustainStart - one.markers.rangeStart;
@@ -102,12 +100,12 @@ describe("engine: removals and speeds", () => {
     expect(b - a).toBeLessThan(headSrc * 1.2);
   });
 
-  it("a one-shot with the sustain at ×3 comes out longer by the stretched amount", () => {
+  it("a one-shot with 持続区間から後 at ×3 comes out longer by the stretched amount (to the end)", () => {
     const base = setup({ sustainMode: "none" });
-    const stretched = setup({ sustainMode: "none", stretch: { head: 1, sustain: 3, tail: 1 } });
+    const stretched = setup({ sustainMode: "none", stretch: { head: 1, sustain: 3 } });
     const a = renderNote(base.source, base.markers, base.params, 62, 1).channels[0].length / SR;
     const b = renderNote(stretched.source, stretched.markers, stretched.params, 62, 1).channels[0].length / SR;
-    const sustainSrc = base.markers.sustainEnd - base.markers.sustainStart;
+    const sustainSrc = base.markers.rangeEnd - base.markers.sustainStart;
     expect(b - a).toBeGreaterThan(sustainSrc * 2 * 0.8);
     expect(b - a).toBeLessThan(sustainSrc * 2 * 1.2);
   });
@@ -154,9 +152,9 @@ describe("collapsed / expanded time (the editor's view with removals closed up)"
 });
 
 describe("hiddenParts (鳴らす部分)", () => {
-  it("leaves out the sustain, the tail, or both — never the head", () => {
+  it("頭部だけ leaves out everything after the head; 伸ばす what follows the sustain", () => {
     expect(hiddenParts(markers, { sustain: true, tail: true })).toEqual([]);
-    expect(hiddenParts(markers, { sustain: false, tail: true })).toEqual([{ start: 0.3, end: 0.6 }]);
+    expect(hiddenParts(markers, { sustain: false, tail: true })).toEqual([{ start: 0.3, end: 1.1 }]);
     expect(hiddenParts(markers, { sustain: true, tail: false })).toEqual([{ start: 0.6, end: 1.1 }]);
     expect(hiddenParts(markers, { sustain: false, tail: false })).toEqual([{ start: 0.3, end: 1.1 }]);
   });

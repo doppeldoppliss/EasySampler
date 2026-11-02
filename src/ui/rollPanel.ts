@@ -196,7 +196,6 @@ export class RollPanel {
   /** The cut being edited on the sampling side: what a new track plays. */
   private editedInstrument: string | null = null;
   private readonly client: EngineClient;
-  private readonly restingBpm: () => number;
 
   private startedAt: number | null = null;
   /** Where playback starts (song seconds). */
@@ -228,7 +227,7 @@ export class RollPanel {
   private readonly arrangeUndoButton = button("小節の操作を取り消す", "small", () => this.undoArrange(), "直前の挿入・削除・複製の前に戻します(そのあと音符を編集すると戻せなくなります)");
   /** The song before the last stretch operation (until a note is edited again). */
   private arrangeUndo: string | null = null;
-  private readonly bpmInput = el("input", { type: "number", min: "20", max: "400", step: "1", inputMode: "decimal", ariaLabel: "BPM" });
+  private readonly bpmInput = el("input", { type: "number", min: "20", max: "400", step: "any", inputMode: "decimal", ariaLabel: "BPM" });
   private readonly gridSelect = el("select", { ariaLabel: "吸着" }, GRIDS.map(([v, label]) => el("option", { value: String(v), textContent: label })));
   private readonly selectToggle = button("", "small", () => {
     this.roll.selectMode = !this.roll.selectMode;
@@ -313,9 +312,8 @@ export class RollPanel {
   private seekTimer = 0;
   private readonly info = el("p", { className: "fine", role: "status" });
 
-  constructor(client: EngineClient, restingBpm: () => number) {
+  constructor(client: EngineClient) {
     this.client = client;
-    this.restingBpm = restingBpm;
     this.midiInput.addEventListener("change", () => {
       const file = this.midiInput.files?.[0];
       this.midiInput.value = "";
@@ -547,6 +545,8 @@ export class RollPanel {
   }
 
   private applyProject(): void {
+    // (The tempo the keyboard's and the master's synced effects follow while stopped.)
+    this.client.setTempo(this.project.bpm);
     this.selected = Math.min(this.selected, this.project.tracks.length - 1);
     this.bpmInput.value = String(this.project.bpm);
     this.renderTempos();
@@ -595,7 +595,10 @@ export class RollPanel {
       this.info.textContent = `MIDI を読めませんでした: ${error instanceof MidiParseError ? error.message : String(error)}`;
       return;
     }
-    const parts = songParts(song).filter((p) => p.drumPitch === null && (p.duplicateOf === null || p.shiftSec !== 0));
+    const all = songParts(song).filter((p) => p.drumPitch === null);
+    // A part that is another's exact copy (the same notes at the same time) is left out, and said so.
+    const parts = all.filter((p) => p.duplicateOf === null || p.shiftSec !== 0);
+    const copies = all.length - parts.length;
     if (!parts.length) {
       this.info.textContent = `${file.name}: 音符のある MIDI トラックがありません。`;
       return;
@@ -621,7 +624,9 @@ export class RollPanel {
       added.push(t);
     }
     this.project.tracks = [...this.project.tracks.filter((t) => t.notes.length > 0), ...added];
-    setTempoList(this.project, [{ beat: 0, bpm: Math.round(song.bpm * 10) / 10 }, ...song.tempos.map((c) => ({ beat: c.beat, bpm: Math.round(c.bpm * 10) / 10 }))]);
+    // (Kept to 0.001 BPM: a rounded tempo drifts from the file over a song — a video timed to the MIDI would too.)
+    const exact = (bpm: number) => Math.round(bpm * 1000) / 1000;
+    setTempoList(this.project, [{ beat: 0, bpm: exact(song.bpm) }, ...song.tempos.map((c) => ({ beat: c.beat, bpm: exact(c.bpm) }))]);
     this.bpmInput.value = String(this.project.bpm);
     this.renderTempos();
     this.from = 0;
@@ -635,7 +640,7 @@ export class RollPanel {
     this.onTrackChange();
     this.scheduleSave();
     const tempo = this.project.tempos.length ? `、途中のテンポ変更 ${this.project.tempos.length} か所` : "";
-    this.info.textContent = `「${file.name}」のパート ${added.length} 本をトラックにしました(${this.project.bpm} BPM${tempo})。${leadTrack && this.editedInstrument ? `いちばん音符の多い「${leadTrack.name}」は編集中の区間で、` : ""}ほかは簡易シンセで鳴ります。素材で鳴らすには、トラックの区間を選び直してください。`;
+    this.info.textContent = `「${file.name}」のパート ${added.length} 本をトラックにしました(${this.project.bpm} BPM${tempo})。${leadTrack && this.editedInstrument ? `いちばん音符の多い「${leadTrack.name}」は編集中の区間で、` : ""}ほかは簡易シンセで鳴ります。素材で鳴らすには、トラックの区間を選び直してください。${copies ? `(ほかのパートとまったく同じ中身のパート ${copies} 本は省きました。)` : ""}`;
   }
 
   // ------------------------------------------------------------- tracks
@@ -743,7 +748,7 @@ export class RollPanel {
       return inBar === 1 ? `${bar + 1} 小節` : `${bar + 1} 小節 ${inBar} 拍`;
     };
     const items = this.project.tempos.map((c, i) => {
-      const input = el("input", { type: "number", min: "20", max: "400", step: "1", inputMode: "decimal", value: String(c.bpm), ariaLabel: `${where(c.beat)}からの BPM`, className: "tempo-bpm" });
+      const input = el("input", { type: "number", min: "20", max: "400", step: "any", inputMode: "decimal", value: String(c.bpm), ariaLabel: `${where(c.beat)}からの BPM`, className: "tempo-bpm" });
       input.addEventListener("change", () => {
         const list = this.project.tempos.map((x) => ({ ...x }));
         list[i].bpm = Number(input.value) || c.bpm;
@@ -782,6 +787,7 @@ export class RollPanel {
     const position = this.currentBeat();
     setTempoList(this.project, list);
     this.bpmInput.value = String(this.project.bpm);
+    if (!this.playing) this.client.setTempo(this.project.bpm);
     this.from = beatsToSec(position, this.project);
     this.renderTempos();
     this.reload();
@@ -1595,7 +1601,7 @@ export class RollPanel {
     this.recording = null;
     this.startedAt = null;
     this.client.stopSong();
-    this.client.setTempo(this.restingBpm());
+    this.client.setTempo(this.project.bpm);
     this.playButton.textContent = "▶ 再生";
     this.summarize();
     this.roll.setPlayhead(secToBeats(this.from, this.project));

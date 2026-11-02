@@ -21,7 +21,7 @@ import { buildBatch, buildKit, buildOne, type Built, type BuildInput } from "./e
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
 import { exportFileName, safeBaseName, stripExtension } from "./export/render";
 import { newCutId, parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
-import { hiddenPartsOf, normalizeRemoved, outputLayout } from "./instrument/layout";
+import { hiddenPartsOf, normalizeRemoved, outputLayout, playedParts } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
 import {
   DEFAULT_EXPORT,
@@ -52,7 +52,7 @@ import { clock, RangePicker } from "./ui/rangePicker";
 import { KEY_NAMES, quantizeToScale, SCALE_LABELS, type ScaleId } from "./instrument/scale";
 import { isMidiFile } from "./song/midi";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
-import { renderSong, type RenderTrack } from "./daw/songRender";
+import { evenStems, renderSong, type RenderTrack } from "./daw/songRender";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, newSlot, renderSlot, slotFor, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
@@ -155,7 +155,7 @@ const sink = {
 const piano = new OnScreenKeyboard(sink, 48, SMALL_SCREEN ? 72 : 84);
 const pcKeys = new PcKeyboard(sink);
 // 打ち込み: the song (written on the piano roll, or opened from a MIDI file), played by the materials.
-const rollPanel = new RollPanel(client, () => exportSettings.bpm);
+const rollPanel = new RollPanel(client);
 // (Development only: a handle for checking playback where the page's animation frames do not run.)
 if (import.meta.env.DEV) Object.assign(window, { __easysampler: { client, rollPanel } });
 rollPanel.onTrackChange = () => {
@@ -2475,7 +2475,6 @@ function sendInstrument(): void {
 /** The note and export settings → the note row, the length row, the file name, the help, the editor's target line. */
 function refreshExport(): void {
   // The tail limit counts in the export BPM (the song's own while one plays); a "stretch" sustain fills the export length.
-  if (!rollPanel.playing) client.setTempo(exportSettings.bpm);
   client.setHold(exportLengthSec(exportSettings));
   refreshInstruments();
   tuneScaleRow.hidden = params.tune.mode !== "scale";
@@ -2522,7 +2521,7 @@ function refreshExport(): void {
 
   if (markers) {
     const flatten = params.transposeOnly ? 0 : params.flatten;
-    editor.setParts({ sustain: params.sustainEnabled, tail: params.tail.enabled && params.tail.limit !== "none" });
+    editor.setParts(playedParts(params));
     const shaper =
       params.tune.mode === "scale" && !params.transposeOnly
         ? (p: number) => {
@@ -2540,8 +2539,8 @@ function refreshExport(): void {
         attackSec: params.amp.attack,
         decaySec: params.amp.decay,
         sustain: params.amp.sustain,
-        // Without a tail the file ends on the release (never shorter than the fade); with one, the fade runs out with the material.
-        fadeOutSec: params.tail.enabled && params.tail.limit !== "none" ? params.amp.fadeOut : Math.max(params.amp.release, params.amp.fadeOut),
+        // A held note's file ends on the release (never shorter than the fade); a one-shot's fade runs out with the material.
+        fadeOutSec: makeModeOf(params) === "hold" ? Math.max(params.amp.release, params.amp.fadeOut) : params.amp.fadeOut,
       },
     );
   }
@@ -2808,13 +2807,15 @@ window.addEventListener("keydown", (event) => {
     pickerListen.click();
     return;
   }
-  if (!material) return;
-  event.preventDefault();
   if (view === "kit") return;
+  // (The song plays with no material open too.)
   if (view === "song" || rollPanel.playing) {
+    event.preventDefault();
     rollPanel.toggle();
     return;
   }
+  if (!material) return;
+  event.preventDefault();
   if (playing) {
     client.stopPreview();
     return;
@@ -3121,9 +3122,13 @@ function findCut(id: string): { material: Material; cut: CutSettings; exportOf: 
 // ---------------------------------------------------------------- the song as a file (design.md 13, phase 3)
 
 /** The song's tracks as the offline render takes them (only one track, for a stem). */
-/** The loop range's notes (seconds from its start), given twice in a row: the second pass is the seamless loop. */
+/**
+ * The loop range's notes (seconds from its start), given twice in a row: the second pass is the seamless loop.
+ * A note already sounding at the range's start (begun before it) starts there, for what is left of it.
+ */
 function loopNotes(notes: ReturnType<typeof toSeqNotes>, startSec: number, lengthSec: number): ReturnType<typeof toSeqNotes> {
   const inside = notes
+    .map((n) => (n.start < startSec - 1e-9 && n.end > startSec + 0.01 ? { ...n, start: startSec } : n))
     .filter((n) => n.start >= startSec - 1e-9 && n.start < startSec + lengthSec - 1e-9)
     .map((n) => ({ ...n, start: n.start - startSec, end: Math.min(n.end, startSec + lengthSec) - startSec }));
   return [...inside, ...inside.map((n) => ({ ...n, start: n.start + lengthSec, end: n.end + lengthSec }))];
@@ -3190,7 +3195,7 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
     if (!found) continue;
     out.push({
       id: t.id,
-      instrument: { source: found.material.source, markers: found.cut.markers, params: { ...found.cut.params, maxVoices: DEFAULT_PARAMS.maxVoices }, hold: exportLengthSec(found.exportOf) },
+      instrument: { source: found.material.source, markers: found.cut.markers, params: { ...found.cut.params, maxVoices: Math.min(DEFAULT_PARAMS.maxVoices, client.voiceCap) }, hold: exportLengthSec(found.exportOf) },
       notes,
       glide: t.glide,
       ...mix,
@@ -3252,9 +3257,10 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
         const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, range), tempoMap, window }, progress);
         const fileName = `${stamp}.wav`;
         const lowered = song.gain < 1 ? `。音割れしないよう全体を ${(20 * Math.log10(song.gain)).toFixed(1)} dB 下げました` : "";
-        built = { key, blob: new Blob([encodeWavBytes(song.channels, song.sampleRate, { ISFT: "EasySampler" })], { type: "audio/wav" }), fileName, summary: `${(song.channels[0].length / song.sampleRate).toFixed(1)} 秒、${song.sampleRate / 1000} kHz${lowered}` };
+        built = { key, blob: new Blob([encodeWavBytes(song.channels, song.sampleRate, { ISFT: "EasySampler" }, undefined, { bits: 24 })], { type: "audio/wav" }), fileName, summary: `${(song.channels[0].length / song.sampleRate).toFixed(1)} 秒、${song.sampleRate / 1000} kHz / 24bit${lowered}` };
       } else {
-        const entries: ZipEntry[] = [];
+        // Every stem from 0, at one gain and one length: laid side by side they add up to the mix (without the master).
+        const rendered: { name: string; channels: [Float32Array, Float32Array] }[] = [];
         const used = new Set<string>();
         const withNotes = project.tracks.filter((t) => t.notes.length);
         for (let i = 0; i < withNotes.length; i++) {
@@ -3263,13 +3269,16 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
           if (!tracks.length) continue;
           say(`作成中… ${i + 1} / ${withNotes.length}(${t.name})`);
           await yieldToScreen();
-          const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null, tempoMap, window });
+          const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null, tempoMap, window, raw: true });
           let name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}.wav`;
           for (let k = 2; used.has(name); k++) name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}_${k}.wav`;
           used.add(name);
-          entries.push({ name: `${stamp}/${name}`, data: new Uint8Array(encodeWavBytes(song.channels, song.sampleRate, { ISFT: "EasySampler" })) });
+          rendered.push({ name, channels: song.channels });
         }
-        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `${stamp}_トラック別.zip`, summary: `WAV ${entries.length} 本(各トラックのエフェクト込み、マスターなし)` };
+        const even = evenStems(rendered.map((r) => r.channels));
+        const entries: ZipEntry[] = rendered.map((r, i) => ({ name: `${stamp}/${r.name}`, data: new Uint8Array(encodeWavBytes(even.stems[i], rate, { ISFT: "EasySampler" }, undefined, { bits: 24 })) }));
+        const lowered = even.gain < 1 ? `。音割れしないよう全部を同じだけ ${(20 * Math.log10(even.gain)).toFixed(1)} dB 下げました` : "";
+        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `${stamp}_トラック別.zip`, summary: `WAV ${entries.length} 本(24bit、同じ長さ、各トラックのエフェクト込み・マスターなし)${lowered}` };
       }
       songBuilt = built;
     } catch (error) {

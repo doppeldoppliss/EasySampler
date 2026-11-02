@@ -151,7 +151,6 @@ const HELD_MODES = ["pool", "loop", "wavetable", "stretch"] as const;
 function readParams(raw: unknown): InstrumentParams {
   const d = DEFAULT_PARAMS;
   if (!isRecord(raw)) return structuredClone(d);
-  const tail = isRecord(raw.tail) ? raw.tail : {};
   const wobble = isRecord(raw.wobble) ? raw.wobble : {};
   const amp = isRecord(raw.amp) ? raw.amp : {};
   return {
@@ -176,12 +175,6 @@ function readParams(raw: unknown): InstrumentParams {
     stretch: {
       head: clamp(num(isRecord(raw.stretch) ? raw.stretch.head : undefined, d.stretch.head), 0.25, 4),
       sustain: clamp(num(isRecord(raw.stretch) ? raw.stretch.sustain : undefined, d.stretch.sustain), 0.25, 8),
-      tail: clamp(num(isRecord(raw.stretch) ? raw.stretch.tail : undefined, d.stretch.tail), 0.25, 4),
-    },
-    tail: {
-      // (語尾 was taken out: a cut saved with one comes back without it.)
-      enabled: false,
-      limit: tail.limit === "none" || tail.limit === "beat" || tail.limit === "bar" ? tail.limit : "unlimited",
     },
     wobble: {
       vibratoCents: clamp(num(wobble.vibratoCents, d.wobble.vibratoCents), 0, 200),

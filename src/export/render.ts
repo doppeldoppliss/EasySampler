@@ -32,24 +32,24 @@ const FX_TAIL_SEC = 0.15;
 
 /**
  * Plays `note` for `holdSec` (the hold ends `release` early so the file is
- * about `holdSec` long when the tail is off) and renders until the voice
- * has finished. A one-shot instrument (sustain "none") ignores `holdSec`
- * and plays the material out. `bpm` is what a tail limited to a beat or a
- * bar is measured in.
+ * about `holdSec` long) and renders until the voice has finished. A one-shot
+ * (nothing held) ignores `holdSec` and plays the material out.
  */
-/** One note as the file has it. Effects (a track's, design.md 13.1) are optional: the sample itself is rendered dry. */
+/**
+ * One note as the file has it, dry. (Effects — the listening harness's, tools/eval — are optional;
+ * `bpm` is what their tempo-synced parts follow.)
+ */
 export function renderNote(source: PreparedSource, markers: Markers, params: InstrumentParams, note: number, holdSec: number, bpm = 120, effects: FxSettings | null = null): Rendered {
   const rate = source.sampleRate;
   const engine = new Engine(rate);
-  engine.setTempo(bpm);
   engine.setSource(source);
   engine.setInstrument(markers, { ...params, maxVoices: 1 });
   engine.setHold(holdSec);
   // Nothing to hold: a one-shot, or the sustain switched off.
   const oneShot = params.sustainMode === "none" || !params.sustainEnabled;
-  // Without a tail the hold ends early by the release (or the longer 終わりのフェード), so the file is about `holdSec`.
+  // The hold ends early by the release (or the longer 終わりのフェード), so the file is about `holdSec`.
   const releaseSec = Math.max(params.amp.release, params.amp.fadeOut);
-  const releaseAt = oneShot ? Infinity : Math.max(0, holdSec - (params.tail.enabled ? 0 : releaseSec)) * rate;
+  const releaseAt = oneShot ? Infinity : Math.max(0, holdSec - releaseSec) * rate;
   const limit = Math.ceil((oneShot ? MAX_ONESHOT_SEC : holdSec + MAX_AFTER_SEC) * rate);
   const fx = new FxChain(rate);
   if (effects) fx.set(effects);

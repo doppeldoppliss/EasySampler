@@ -86,12 +86,10 @@ describe("Engine (PSOLA material synth)", () => {
     expect(voicedStart).toBeLessThan(0.14);
   });
 
-  it("fades out on release when the tail is off, and plays the tail when it is on", () => {
+  it("fades out on release (over the release)", () => {
     const syllable = demoSyllable(SR);
-    const off = play(setup(syllable, { tail: { enabled: false, limit: "unlimited" } }).engine, 62, 0.5, 0.5);
+    const off = play(setup(syllable).engine, 62, 0.5, 0.5);
     expect(rms(off, Math.round(0.56 * SR), Math.round(0.9 * SR))).toBeLessThan(1e-4);
-    const on = play(setup(syllable, { tail: { enabled: true, limit: "unlimited" } }).engine, 62, 0.5, 0.5);
-    expect(rms(on, Math.round(0.56 * SR), Math.round(0.65 * SR))).toBeGreaterThan(0.01);
   });
 
   it("resample mode raises the pitch and shortens the sound together", () => {
@@ -142,63 +140,64 @@ describe("resample", () => {
   });
 });
 
-describe("tail length limit", () => {
-  /** Renders a held note, releases it, and returns how many samples sound after the release. */
-  function afterRelease(limit: "unlimited" | "beat" | "bar", bpm: number): number {
-    const material = demoSyllable(SR);
-    const { engine } = setup(material, { tail: { enabled: true, limit } });
-    engine.setTempo(bpm);
-    const out = play(engine, 60, 0.6, 4);
-    const releaseAt = Math.round(0.6 * SR);
-    let last = releaseAt;
-    for (let i = releaseAt; i < out.length; i++) if (Math.abs(out[i]) > 1e-4) last = i;
-    return (last - releaseAt) / SR;
-  }
-
-  it("cuts the tail at one beat / one bar of the tempo, and leaves it alone when unlimited", () => {
-    const unlimited = afterRelease("unlimited", 600);
-    // At 600 BPM a beat is 0.1 s, a bar 0.4 s; the cut fades over 30 ms.
-    const beat = afterRelease("beat", 600);
-    expect(beat).toBeLessThan(0.1 + 0.05);
-    expect(beat).toBeGreaterThan(0.05);
-    expect(afterRelease("bar", 600)).toBeLessThanOrEqual(Math.min(unlimited, 0.4 + 0.05));
-    expect(unlimited).toBeGreaterThan(beat);
-  });
-});
-
 describe("sustain on / off", () => {
   /** Seconds until the last audible sample of a note held `holdSec`. */
-  function soundingSec(overrides: Partial<InstrumentParams>, holdSec: number): { sec: number; headSec: number; tailSec: number } {
+  function soundingSec(overrides: Partial<InstrumentParams>, holdSec: number): { sec: number; headSec: number } {
     const material = demoSyllable(SR);
     const { engine, analysis } = setup(material, overrides);
     const out = play(engine, 62, holdSec, 2);
     let last = 0;
     for (let i = 0; i < out.length; i++) if (Math.abs(out[i]) > 1e-4) last = i;
     const m = analysis.markers;
-    return { sec: last / SR, headSec: m.sustainStart - m.rangeStart, tailSec: m.rangeEnd - Math.max(m.tailStart, m.sustainStart) };
+    return { sec: last / SR, headSec: m.sustainStart - m.rangeStart };
   }
 
   it("on (the default): the note lasts as long as it is held", () => {
     expect(soundingSec({}, 1.5).sec).toBeGreaterThan(1.45);
   });
 
-  it("off, tail off: only the head plays, however long the key is held", () => {
-    const { sec, headSec } = soundingSec({ sustainEnabled: false, tail: { enabled: false, limit: "unlimited" } }, 1.5);
+  it("off (頭部だけ): only the head plays, however long the key is held", () => {
+    const { sec, headSec } = soundingSec({ sustainEnabled: false }, 1.5);
     expect(sec).toBeLessThan(headSec + 0.05);
     expect(sec).toBeGreaterThan(headSec * 0.8);
   });
 
-  it("off, tail on: the head goes straight on to the tail", () => {
-    const { sec, headSec, tailSec } = soundingSec({ sustainEnabled: false, tail: { enabled: true, limit: "unlimited" } }, 1.5);
-    expect(sec).toBeGreaterThan(headSec + tailSec * 0.5);
-    expect(sec).toBeLessThan(headSec + tailSec + 0.1);
+});
+
+describe("引き延ばし: the note's own length", () => {
+  it("a song's note paces the slowed pass to its own length, not the hold length", () => {
+    const material = demoSyllable(SR);
+    /** Seconds until the stretched pass reaches the sustain's end, from where the voice gets quieter-free pool: measured as the output length of a note let go at its own end. */
+    const lastSound = (lengthSec: number | undefined) => {
+      const { engine } = setup(material, { sustainMode: "stretch" });
+      engine.setHold(0.5);
+      const out = new Float32Array(Math.round(3 * SR));
+      const l = new Float32Array(128);
+      const r = new Float32Array(128);
+      engine.noteOn(62, 1, lengthSec);
+      const offAt = Math.round((lengthSec ?? 0.5) * SR);
+      let off = false;
+      for (let at = 0; at < out.length; at += 128) {
+        if (!off && at >= offAt) (engine.noteOff(62), (off = true));
+        engine.render(l, r, 128);
+        out.set(l.subarray(0, Math.min(128, out.length - at)), at);
+      }
+      return out;
+    };
+    // The speed differs: the same moment of output reads a different place in the material.
+    const short = lastSound(undefined);
+    const long = lastSound(2);
+    let diff = 0;
+    const from = Math.round(0.35 * SR);
+    for (let i = from; i < from + Math.round(0.1 * SR); i++) diff += Math.abs(short[i] - long[i]);
+    expect(diff).toBeGreaterThan(1);
   });
 });
 
 describe("sustain off: letting go early", () => {
   it("doesn't cut the head short (it plays out like a one-shot)", () => {
     const material = demoSyllable(SR);
-    const { engine, analysis } = setup(material, { sustainEnabled: false, tail: { enabled: false, limit: "unlimited" } });
+    const { engine, analysis } = setup(material, { sustainEnabled: false });
     const out = play(engine, 62, 0.05, 1);
     let last = 0;
     for (let i = 0; i < out.length; i++) if (Math.abs(out[i]) > 1e-4) last = i;
@@ -218,7 +217,7 @@ describe("フェード (fade in / fade out)", () => {
 
   it("fades out over the last stretch of a head-only playout", () => {
     const material = demoSyllable(SR);
-    const base = { sustainEnabled: false, tail: { enabled: false, limit: "unlimited" as const } };
+    const base = { sustainEnabled: false };
     const plain = play(setup(material, { ...base }).engine, 62, 1, 1);
     const faded = play(setup(material, { ...base, amp: { ...DEFAULT_PARAMS.amp, fadeOut: 0.15 } }).engine, 62, 1, 1);
     // The head is about 0.245 s; the fade covers its last 0.15 s.
@@ -229,9 +228,9 @@ describe("フェード (fade in / fade out)", () => {
     expect(f(0.23)).toBeLessThan(p(0.23) * 0.3); // nearly out
   });
 
-  it("makes the release at least as long as the fade when the note is let go without a tail", () => {
+  it("makes the release at least as long as the fade when the note is let go", () => {
     const material = demoSyllable(SR);
-    const base = { tail: { enabled: false, limit: "unlimited" as const } };
+    const base = {};
     const short = play(setup(material, { ...base }).engine, 62, 0.5, 1);
     const long = play(setup(material, { ...base, amp: { ...DEFAULT_PARAMS.amp, fadeOut: 0.3 } }).engine, 62, 0.5, 1);
     const s = envelope(short, 0.03);
@@ -295,7 +294,7 @@ describe("unvoicedFollow (音程なしの部分も移調に合わせる)", () =>
 
   it("leaves a consonant's colour alone by default, and moves it with the note when on", () => {
     const material = peakedMaterial();
-    const base = { sustainEnabled: false, tail: { enabled: false, limit: "unlimited" as const } };
+    const base = { sustainEnabled: false };
     const { analysis } = setup(material, base);
     const root = Math.round(analysis.root!.midi);
     const run = (follow: boolean, shift: number) => centroid(play(setup(material, { ...base, unvoicedFollow: follow }).engine, root + shift, 0.3, 0.1), 0.07);
@@ -445,7 +444,7 @@ describe("Melodyne-style controls", () => {
 
   it("unvoicedGainDb −60 silences the hiss; formantFollow is a continuous amount", () => {
     const material = demoSyllable(SR);
-    const base = { sustainEnabled: false, tail: { enabled: false, limit: "unlimited" as const } };
+    const base = { sustainEnabled: false };
     const loud = play(setup(material, base).engine, 62, 0.3, 0.1);
     const muted = play(setup(material, { ...base, unvoicedGainDb: -60 }).engine, 62, 0.3, 0.1);
     expect(rms(muted, 0, Math.round(0.06 * SR))).toBeLessThan(rms(loud, 0, Math.round(0.06 * SR)) * 0.05);

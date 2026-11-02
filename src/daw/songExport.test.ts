@@ -5,7 +5,8 @@ import { parseMidi } from "../song/midi";
 import { demoSyllable } from "../testsignals/synthVoice";
 import { writeMidi } from "./midiWrite";
 import { emptyProject, newDrumTrack, newTrack, type Note } from "./model";
-import { renderSong } from "./songRender";
+import { evenStems, renderSong } from "./songRender";
+import { FxChain } from "../fx/chain";
 
 const SR = 44100;
 const n = (start: number, length: number, pitch: number, velocity = 0.8): Note => ({ id: 0, start, length, pitch, velocity });
@@ -112,5 +113,37 @@ describe("renderSong: a window (the loop range, seamless)", () => {
     expect(song.channels[0].length).toBe(Math.round(0.2 * SR));
     // At the window's start the first hit (from 0.1 s, 0.3 s long) still rings.
     expect(Math.abs(song.channels[0][10])).toBeGreaterThan(0.3);
+  });
+});
+
+describe("stems", () => {
+  it("come out at one gain and one length, so they add up to the mix", async () => {
+    const loud = new Float32Array(SR / 10).fill(0.8);
+    const plain = { fx: null, gain: 1, pan: 0, mute: false, solo: false };
+    const a = await renderSong({ sampleRate: SR, bpm: 120, masterFx: null, raw: true, tracks: [{ id: "x", instrument: null, samples: [[loud]], notes: [{ start: 0, end: 0.1, note: 0, velocity: 1, drum: false }], ...plain }] });
+    const b = await renderSong({ sampleRate: SR, bpm: 120, masterFx: null, raw: true, tracks: [{ id: "y", instrument: null, samples: [[loud.map((v) => v * 2)]], notes: [{ start: 0.5, end: 0.6, note: 0, velocity: 1, drum: false }], ...plain }] });
+    const even = evenStems([a.channels, b.channels]);
+    expect(even.stems[0][0].length).toBe(even.stems[1][0].length);
+    // The louder one (1.6) sets the gain for both: their levels keep their ratio.
+    expect(even.gain).toBeCloseTo(0.98 / 1.6, 3);
+    expect(Math.max(...even.stems[0][0]) / Math.max(...even.stems[1][0])).toBeCloseTo(0.5, 3);
+  });
+});
+
+describe("tempo changes and the master effects", () => {
+  it("the player tells the master its new tempo", async () => {
+    const seen: number[] = [];
+    const original = FxChain.prototype.setTempo;
+    FxChain.prototype.setTempo = function (bpm: number) {
+      seen.push(bpm);
+      return original.call(this, bpm);
+    };
+    try {
+      const click = new Float32Array(100).fill(0.3);
+      await renderSong({ sampleRate: SR, bpm: 120, masterFx: DEFAULT_FX, tempoMap: [{ sec: 0, bpm: 120 }, { sec: 0.5, bpm: 90 }], tracks: [{ id: "d", instrument: null, samples: [[click]], notes: [{ start: 0, end: 0.1, note: 0, velocity: 1, drum: false }, { start: 1, end: 1.1, note: 0, velocity: 1, drum: false }], fx: null, gain: 1, pan: 0, mute: false, solo: false }] });
+    } finally {
+      FxChain.prototype.setTempo = original;
+    }
+    expect(seen.filter((b) => b === 90).length).toBeGreaterThanOrEqual(2); // the track's chain and the master's
   });
 });

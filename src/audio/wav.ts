@@ -1,4 +1,4 @@
-// 16-bit PCM WAV, mono or multichannel — what the app writes out. Optional
+// 16-bit (or 24-bit) PCM WAV, mono or multichannel — what the app writes out. Optional
 // chunks: LIST/INFO with the credit (作品名 etc.), which samplers and editors
 // that read INFO tags show, and `smpl` with the root note and a loop, which
 // samplers read to hold a note indefinitely.
@@ -14,6 +14,8 @@ export interface WavSampler {
 }
 
 export interface WavExtras {
+  /** Bits per sample: 16 (the default; samples and instruments) or 24 (the song and its stems). */
+  bits?: 16 | 24;
   /** A wavetable's frame size: written as the `clm ` chunk Serum and Vital read (Vital then steps through the frames as cut, instead of morphing between the first and the last). */
   wavetableFrame?: number;
 }
@@ -25,7 +27,8 @@ export function encodeWav(channels: readonly Float32Array[], sampleRate: number,
 export function encodeWavBytes(channels: readonly Float32Array[], sampleRate: number, info?: WavInfo, sampler?: WavSampler, extras?: WavExtras): ArrayBuffer {
   const count = channels.length;
   const frames = channels[0]?.length ?? 0;
-  const dataBytes = frames * count * 2;
+  const bytes = extras?.bits === 24 ? 3 : 2;
+  const dataBytes = frames * count * bytes;
   const list = encodeInfo(info);
   const smpl = encodeSampler(sampler, sampleRate);
   const clm = encodeClm(extras?.wavetableFrame);
@@ -42,9 +45,9 @@ export function encodeWavBytes(channels: readonly Float32Array[], sampleRate: nu
   view.setUint16(20, 1, true); // PCM
   view.setUint16(22, count, true);
   view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * count * 2, true);
-  view.setUint16(32, count * 2, true);
-  view.setUint16(34, 16, true);
+  view.setUint32(28, sampleRate * count * bytes, true);
+  view.setUint16(32, count * bytes, true);
+  view.setUint16(34, bytes * 8, true);
   // (the wavetable chunk sits before the data, where Serum puts it)
   new Uint8Array(buffer, 36).set(new Uint8Array(clm));
   const dataAt = 36 + clm.byteLength;
@@ -54,8 +57,14 @@ export function encodeWavBytes(channels: readonly Float32Array[], sampleRate: nu
   for (let n = 0; n < frames; n++) {
     for (let c = 0; c < count; c++) {
       const v = Math.max(-1, Math.min(1, channels[c][n]));
-      view.setInt16(at, v < 0 ? v * 0x8000 : v * 0x7fff, true);
-      at += 2;
+      if (bytes === 2) view.setInt16(at, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+      else {
+        const x = Math.round(v < 0 ? v * 0x800000 : v * 0x7fffff);
+        view.setUint8(at, x & 0xff);
+        view.setUint8(at + 1, (x >> 8) & 0xff);
+        view.setUint8(at + 2, (x >> 16) & 0xff);
+      }
+      at += bytes;
     }
   }
   at += dataBytes & 1; // chunks start on even bytes

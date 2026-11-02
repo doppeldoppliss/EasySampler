@@ -19,12 +19,14 @@
 //   head    – from the range start to the sustain, once, at its own speed
 //   sustain – held as long as the note is: by default a random walk over a
 //             pool of steady periods (no fixed loop to hear), or a loop, or
-//             ("stretch") the whole region slowed so it fills the note length
-//             the page says the note has — its natural change kept, as a
-//             VocalShifter time-stretch would — and the pool from its end on
-//   tail    – after the note is released, when enabled: the material's own end
-// With the sustain switched off, the head goes straight on to the tail (or
-// the note ends there), however long the key is held.
+//             ("stretch") the whole region slowed so it fills the note's
+//             length (a song's note; the keyboard's hold length otherwise) —
+//             its natural change kept, as a VocalShifter time-stretch would —
+//             and the pool from its end on
+//   after the sustain – played by a one-shot (no sustain held) on to the
+//             material's end, at the sustain's speed
+// With the sustain switched off, the note ends with the head, however long
+// the key is held.
 // "Resample" mode uses the same grains with their time and pitch scaled
 // together, which is exactly playback at a different speed.
 //
@@ -58,19 +60,6 @@ const SCALE_HYSTERESIS = 0.3;
 const SPARE_VOICES = 4;
 const STEAL_FADE_SEC = 0.006;
 const END_FADE_SEC = 0.01;
-/** A tail cut at its length limit fades out over this long. */
-const TAIL_CUT_FADE_SEC = 0.03;
-/** 語尾を収める: a tail too long for the time after the head is played up to this much faster (keeping its shape) before any of it is cut. */
-const FIT_MAX_TAIL_SPEED = 2;
-/** …and what still does not fit fades out over this share of the time it has (between the two bounds). */
-const FIT_FADE_SHARE = 0.4;
-const FIT_FADE_MIN_SEC = 0.04;
-const FIT_FADE_MAX_SEC = 0.25;
-/** The tail starts at the level the note had (within these bounds), then follows its own recorded decay. */
-const TAIL_MATCH_MIN = 0.25;
-const TAIL_MATCH_MAX = 4;
-/** How much of the tail's start is averaged for its level (seconds). */
-const TAIL_LEVEL_SEC = 0.04;
 /** Micro irregularity: period jitter (share) and level shimmer (share). */
 const JITTER = 0.004;
 const SHIMMER = 0.03;
@@ -81,7 +70,7 @@ const FORMANT_FOLLOW_POWER = 0.4;
 const Phase = {
   Head: 0,
   Sustain: 1,
-  Run: 2, // playing straight on to the end (tail, or no sustain)
+  Run: 2, // a one-shot playing straight on to the end
   Done: 3,
 } as const;
 type Phase = (typeof Phase)[keyof typeof Phase];
@@ -131,10 +120,10 @@ class Voice {
   /** Extra fade (stolen voice / end of material): per-sample decrement of fadeGain. */
   fadeGain = 1;
   fadeStep = 0;
-  /** Output samples the tail may still run (its length limit); Infinity when unlimited or not in the tail. */
-  tailRemaining = Infinity;
   /** "stretch": the slowed pass through the sustain reached its end; the pool carries on. */
   stretchDone = false;
+  /** "stretch": the read speed through the sustain for this note's length (1 / the stretch factor). */
+  stretchSpeed = 1;
   /** Voice seconds at which the note was let go (for the vibrato's release). */
   releasedAt = Infinity;
   /** The pitch correction as it has glided in so far (semitones), for tune.retuneSec. */
@@ -144,19 +133,6 @@ class Voice {
   /** Portamento: semitones still to slide (added to the note, moving to 0), and how much it moves per output sample. */
   bend = 0;
   bendPerSample = 0;
-  /** 語尾を収める: the voice clock (samples) at which the note lets go by itself so its tail ends with it, and where it must be over. */
-  fitReleaseAt = Infinity;
-  fitEndAt = Infinity;
-  /** 語尾を収める, a note the head alone fills: where it starts fading so it is silent at the note's end. */
-  fitFadeAt = Infinity;
-  /** 語尾を収める: how much faster this voice reads its tail (1 = as recorded), and the fade at a tail's cut (seconds). */
-  tailSpeed = 1;
-  cutFadeSec = TAIL_CUT_FADE_SEC;
-  /** The level the note has been playing at (a running average over its last periods, before the tail). */
-  levelEma = 0;
-  /** The tail's gain: what brings its start to that level (1 until the tail is entered). */
-  tailGain = 1;
-
   driftValue = 0;
   driftTarget = 0;
   driftCountdown = 0;
@@ -175,7 +151,6 @@ export class Engine {
   private rangeEnd = 0;
   private sustainStart = 0;
   private sustainEnd = 0;
-  private tailStart = 0;
   private removedStart = new Float64Array(0);
   private removedEnd = new Float64Array(0);
   private left = new Float32Array(0);
@@ -192,12 +167,8 @@ export class Engine {
   private voices: Voice[] = [];
   private order = 0;
   private seed = 0x2545f491;
-  /** For the tail's length limit (1 beat / 1 bar). */
-  private bpm = 120;
-  /** The note length (seconds) the "stretch" sustain fills; the export length. */
+  /** The note length (seconds) a "stretch" sustain fills when the note's own is not known (the keyboard). */
   private hold = 1;
-  /** Read speed through the sustain in "stretch" mode (1 / the stretch factor). */
-  private stretchSpeed = 1;
   /** Portamento (a song track's setting, seconds; 0 = off): a note that starts while another is held slides from it. */
   private glideSec = 0;
 
@@ -284,8 +255,6 @@ export class Engine {
     this.rangeEnd = markers.rangeEnd * sr;
     this.sustainStart = markers.sustainStart * sr;
     this.sustainEnd = markers.sustainEnd * sr;
-    // (語尾 is gone: the tail starts where the sustain ends, so a one-shot's remaining time — for 終わりのフェード — has no gap.)
-    this.tailStart = Math.min(markers.tailStart, markers.sustainEnd) * sr;
     const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
     this.removedStart = Float64Array.from(removed, (r) => r.start * sr);
     this.removedEnd = Float64Array.from(removed, (r) => r.end * sr);
@@ -293,26 +262,23 @@ export class Engine {
     this.params = params;
     this.ensureVoices(params.maxVoices);
     this.rebuildPool();
-    this.refreshStretch();
     if (smoothChanged) this.rebuildF0();
   }
 
-  /** The note length a "stretch" sustain fills (seconds of output). */
+  /** The note length a "stretch" sustain fills when a note comes without one (the keyboard; seconds of output). */
   setHold(sec: number): void {
     if (Number.isFinite(sec) && sec > 0) this.hold = sec;
-    this.refreshStretch();
   }
 
-  /** The stretch mode's read speed: the sustain's material over what the note leaves after the head. */
-  private refreshStretch(): void {
-    const params = this.params;
-    if (!params) return;
+  /** The stretch mode's read speed for a note this long: the sustain's material over what the note leaves after the head. */
+  private stretchSpeedFor(lengthSec: number): number {
+    const params = this.params!;
     const sr = this.sampleRate;
     const sustainSrc = this.playedBetween(this.sustainStart, this.sustainEnd) / sr;
     const headSec = (this.playedBetween(this.rangeStart, this.sustainStart) / sr) * Math.max(0.05, params.stretch.head);
-    const fill = Math.max(0.05, this.hold - headSec);
+    const fill = Math.max(0.05, lengthSec - headSec);
     const factor = sustainSrc > 0 ? Math.max(0.25, Math.min(64, fill / sustainSrc)) : 1;
-    this.stretchSpeed = 1 / factor;
+    return 1 / factor;
   }
 
   /**
@@ -324,24 +290,6 @@ export class Engine {
    */
   setGlide(sec: number): void {
     this.glideSec = Number.isFinite(sec) && sec > 0 ? Math.min(2, sec) : 0;
-  }
-
-  /** The tempo the tail's length limit is counted in. */
-  setTempo(bpm: number): void {
-    if (Number.isFinite(bpm) && bpm > 0) this.bpm = bpm;
-  }
-
-  /** Whether released notes play the tail ("none" is an old way of saying off). */
-  private tailOn(): boolean {
-    const tail = this.params!.tail;
-    return tail.enabled && tail.limit !== "none";
-  }
-
-  /** How long the tail may run, in output samples. */
-  private tailLimitSamples(): number {
-    const limit = this.params!.tail.limit;
-    const beats = limit === "beat" ? 1 : limit === "bar" ? 4 : Infinity;
-    return (beats * 60 * this.sampleRate) / this.bpm;
   }
 
   /** The read position moved past any removed stretch it has landed in. */
@@ -365,20 +313,18 @@ export class Engine {
     return params.fixedPitch ? 0 : note + bend - params.root;
   }
 
-  /** How fast the read position moves through the material here: 1 ÷ the part's stretch factor. */
-  private speedAt(position: number): number {
+  /** How fast the read position moves through the material here: 1 ÷ the part's stretch factor (from the sustain on, the sustain's). */
+  private speedAt(v: Voice, position: number): number {
     const params = this.params!;
-    if (params.sustainMode === "stretch" && position >= this.sustainStart && position < this.sustainEnd) return this.stretchSpeed;
+    if (params.sustainMode === "stretch" && position >= this.sustainStart && position < this.sustainEnd) return v.stretchSpeed;
     const s = params.stretch;
-    const factor = position < this.sustainStart ? s.head : position < this.sustainEnd ? s.sustain : s.tail;
-    return 1 / Math.max(0.05, factor);
+    return 1 / Math.max(0.05, position < this.sustainStart ? s.head : s.sustain);
   }
 
   /**
-   * A note on. `lengthSec` (a song's note, when its track fits the tail in)
-   * is how long the note is written: the voice then lets go early by the
-   * tail's length, so the tail ends where the note does. Without it (the
-   * keyboard, a preview) the tail starts when the key is let go.
+   * A note on. `lengthSec` (a song's note) is how long the note is written:
+   * a "stretch" sustain is paced to fill it. Without it (the keyboard, a
+   * preview) the hold length stands in.
    */
   noteOn(note: number, velocity = 0.8, lengthSec?: number): void {
     if (!this.source || !this.params) return;
@@ -393,14 +339,13 @@ export class Engine {
         if (holds) {
           held.note = note;
           this.glide(held, from - note);
-          this.fitTail(held, lengthSec);
           return;
         }
         this.fadeOut(held, STEAL_FADE_SEC);
         const voice = this.voices.find((v) => !v.active) ?? this.voices.reduce((a, b) => (b.startOrder < a.startOrder ? b : a));
         this.start(voice, note, velocity);
         this.glide(voice, from - note);
-        this.fitTail(voice, lengthSec);
+        voice.stretchSpeed = this.stretchSpeedFor(lengthSec ?? this.hold);
         return;
       }
     }
@@ -412,65 +357,7 @@ export class Engine {
     }
     const voice = this.voices.find((v) => !v.active) ?? this.voices.reduce((a, b) => (b.startOrder < a.startOrder ? b : a));
     this.start(voice, note, velocity);
-    this.fitTail(voice, lengthSec);
-  }
-
-  /**
-   * 語尾を収める: when the note's length is known, the tail is brought
-   * forward so it ends with the note. The head is never cut short to make
-   * room (a jump from the middle of the head into the tail is what sounds
-   * forced): the tail starts once the head is over, its own length before the
-   * note's end. If the time left after the head is too short, the tail is
-   * read faster (up to FIT_MAX_TAIL_SPEED, keeping the shape of its decay) and
-   * whatever still does not fit fades out gently. A note the head alone fills
-   * plays no tail: the head fades out to silence at the note's end.
-   */
-  private fitTail(v: Voice, lengthSec: number | undefined): void {
-    v.fitReleaseAt = Infinity;
-    v.fitEndAt = Infinity;
-    v.fitFadeAt = Infinity;
-    v.tailSpeed = 1;
-    v.cutFadeSec = TAIL_CUT_FADE_SEC;
-    const params = this.params!;
-    if (lengthSec === undefined || !(lengthSec > 0) || !params.sustainEnabled || params.sustainMode === "none" || !this.tailOn()) return;
-    const sr = this.sampleRate;
-    const length = lengthSec * sr;
-    const tail = this.tailOutputSamples(v.note);
-    const headLeft = v.phase === Phase.Head ? this.headOutputSamples(v) : 0;
-    const gentle = (room: number) => Math.max(FIT_FADE_MIN_SEC, Math.min(FIT_FADE_MAX_SEC, (FIT_FADE_SHARE * room) / sr));
-    v.fitEndAt = v.clock + length;
-    const room = length - headLeft;
-    if (room >= tail) {
-      // It fits as recorded: the tail starts its own length before the note's end.
-      v.fitReleaseAt = v.clock + length - tail;
-      return;
-    }
-    if (room < FIT_FADE_MIN_SEC * sr * 2) {
-      // The head fills the note: no tail, the head fades out by the note's end.
-      v.cutFadeSec = gentle(length);
-      v.fitFadeAt = v.clock + Math.max(0, length - v.cutFadeSec * sr);
-      return;
-    }
-    // Right after the head, read faster; only what still does not fit fades out.
-    v.fitReleaseAt = v.clock + headLeft;
-    v.tailSpeed = Math.min(FIT_MAX_TAIL_SPEED, tail / room);
-    if (tail / v.tailSpeed > room + 1) v.cutFadeSec = gentle(room);
-  }
-
-  /** Output samples the head still plays from where the voice is. */
-  private headOutputSamples(v: Voice): number {
-    const params = this.params!;
-    let out = this.playedBetween(v.srcTime, this.sustainStart) * Math.max(0.05, params.stretch.head);
-    if (params.pitchMode === "resample") out /= 2 ** (this.shiftOf(v.note) / 12);
-    return out;
-  }
-
-  /** How long the tail plays (output samples) for a note: its material at the tail's speed, within its length limit. */
-  private tailOutputSamples(note: number): number {
-    const params = this.params!;
-    let out = this.playedBetween(Math.max(this.tailStart, this.sustainStart), this.rangeEnd) * Math.max(0.05, params.stretch.tail);
-    if (params.pitchMode === "resample") out /= 2 ** (this.shiftOf(note) / 12);
-    return Math.min(out, this.tailLimitSamples());
+    voice.stretchSpeed = this.stretchSpeedFor(lengthSec !== undefined && lengthSec > 0 ? lengthSec : this.hold);
   }
 
   private glide(v: Voice, semitones: number): void {
@@ -505,18 +392,7 @@ export class Engine {
     if (!this.source || !this.params) return;
     for (const v of this.voices) {
       if (!v.active) continue;
-      // 語尾を収める: the note lets go by itself, straight into the tail, which must be over by the note's end.
-      if (!v.released && v.clock + frames > v.fitReleaseAt) {
-        this.release(v);
-        if (v.phase === Phase.Head || v.phase === Phase.Sustain) this.jumpToTail(v);
-        v.tailRemaining = Math.min(v.tailRemaining, Math.max(1, v.fitEndAt - v.clock - v.cutFadeSec * this.sampleRate));
-      }
-      if (v.fadeStep === 0 && v.clock + frames > v.fitFadeAt) this.fadeOut(v, v.cutFadeSec);
       this.renderVoice(v, frames);
-      if (v.tailRemaining !== Infinity) {
-        v.tailRemaining -= frames;
-        if (v.tailRemaining <= 0 && v.fadeStep === 0) this.fadeOut(v, v.cutFadeSec);
-      }
       for (let i = 0; i < frames; i++) {
         outL[i] += v.bufL[i];
         outR[i] += v.bufR[i];
@@ -570,14 +446,7 @@ export class Engine {
     v.lastStep = 0;
     v.bend = 0;
     v.bendPerSample = 0;
-    v.fitReleaseAt = Infinity;
-    v.fitEndAt = Infinity;
-    v.fitFadeAt = Infinity;
-    v.tailSpeed = 1;
-    v.cutFadeSec = TAIL_CUT_FADE_SEC;
     v.startOrder = this.order++;
-    v.levelEma = 0;
-    v.tailGain = 1;
     v.phase = Phase.Head;
     v.cycleIndex = 0;
     v.srcTime = this.skipRemoved(this.rangeStart);
@@ -590,8 +459,8 @@ export class Engine {
     v.level = 0;
     v.fadeGain = 1;
     v.fadeStep = 0;
-    v.tailRemaining = Infinity;
     v.stretchDone = false;
+    v.stretchSpeed = 1;
     v.driftValue = 0;
     v.driftTarget = 0;
     v.driftCountdown = 0;
@@ -614,12 +483,7 @@ export class Engine {
       if (params.stopOnRelease) v.env = Env.Release;
       return;
     }
-    if (this.tailOn()) {
-      // (The tail — 語尾 — was taken out of the app on 2026-10-28; the engine still plays one when asked.)
-      if (v.phase === Phase.Sustain) this.jumpToTail(v);
-    } else {
-      v.env = Env.Release;
-    }
+    v.env = Env.Release;
   }
 
   private fadeOut(v: Voice, seconds: number): void {
@@ -627,41 +491,14 @@ export class Engine {
     v.fadeStep = Math.max(v.fadeStep, step);
   }
 
-  private jumpToTail(v: Voice): void {
-    v.phase = Phase.Run;
-    v.srcTime = this.skipRemoved(Math.max(this.tailStart, this.sustainStart));
-    v.tailRemaining = this.tailLimitSamples();
-    // The tail goes on from the level the note was at (a held, evened-out sustain is often louder or quieter
-    // than where the recording's tail begins): no step at the join, and the recorded decay from there.
-    const at = this.tailLevelAt(v.srcTime);
-    v.tailGain = v.levelEma > 1e-5 && at > 1e-5 ? Math.max(TAIL_MATCH_MIN, Math.min(TAIL_MATCH_MAX, v.levelEma / at)) : 1;
-  }
-
-  /** The material's level over the first moments from a position (the mean RMS of its marks there). */
-  private tailLevelAt(position: number): number {
-    const source = this.source!;
-    const end = position + TAIL_LEVEL_SEC * source.sampleRate;
-    let sum = 0;
-    let n = 0;
-    for (let k = this.nearestMark(position); k < source.marks.length && source.marks[k] < end; k++) {
-      if (source.marks[k] < position) continue;
-      sum += this.markRms[k];
-      n++;
-    }
-    return n ? sum / n : 0;
-  }
-
   /** Moves the voice from head to sustain / run once its read position gets there. */
   private enterPhaseIfDue(v: Voice): void {
     if (v.phase !== Phase.Head || v.srcTime < this.sustainStart) return;
     const params = this.params!;
     if (!params.sustainEnabled) {
-      if (this.tailOn()) this.jumpToTail(v);
-      else v.phase = Phase.Done;
+      v.phase = Phase.Done;
     } else if (params.sustainMode === "none") {
       v.phase = Phase.Run;
-    } else if (v.released && this.tailOn()) {
-      this.jumpToTail(v);
     } else {
       v.phase = Phase.Sustain;
       if (params.sustainMode === "loop" || params.sustainMode === "stretch" || this.pool.length < MIN_POOL) v.srcTime = Math.max(v.srcTime, this.sustainStart);
@@ -748,7 +585,7 @@ export class Engine {
     const params = this.params!;
     const resample = params.pitchMode === "resample";
     this.enterPhaseIfDue(v);
-    // The head ended with nothing after it (sustain off, tail off).
+    // The head ended with nothing after it (the sustain off: 頭部だけ).
     if (v.phase === Phase.Done) return false;
 
     // "stretch": the slowed pass reached the end of the region with the note still held — the pool takes over from there.
@@ -832,7 +669,7 @@ export class Engine {
       gain = params.unvoicedGainDb <= -60 ? 0 : 10 ** (params.unvoicedGainDb / 20);
       // Repeated noise grains sound metallic (and read as a pitch); alternating their direction hides it.
       // That happens in the sustain, and wherever a slowed-down part reuses its grains.
-      if (v.phase === Phase.Sustain || this.speedAt(v.srcTime) < 1) {
+      if (v.phase === Phase.Sustain || this.speedAt(v, v.srcTime) < 1) {
         reverse = v.reverseNext;
         v.reverseNext = !v.reverseNext;
       }
@@ -845,11 +682,6 @@ export class Engine {
       if (local > 1e-5) even = Math.min(4, this.sustainLevel / local) ** params.levelEven;
     }
     gain *= even;
-    // The level the note is at, for the tail to go on from; in the tail, its matching gain.
-    if (v.phase === Phase.Head || v.phase === Phase.Sustain) {
-      const level = this.markRms[k] * even;
-      v.levelEma = v.levelEma > 0 ? 0.8 * v.levelEma + 0.2 * level : level;
-    } else if (v.released && v.srcTime >= this.tailStart) gain *= v.tailGain;
 
     const grain = freeGrain(v.grains);
     grain.active = true;
@@ -872,9 +704,7 @@ export class Engine {
     v.driftCountdown -= step / this.sampleRate;
     // The read position moves with real time (or faster/slower when resampling), at the part's own speed, past anything cut out.
     if (!(v.phase === Phase.Sustain && this.fromPool(v))) {
-      // (語尾を収める: a voice that lets go early may read its tail faster.)
-      const tailSpeed = v.phase === Phase.Run && v.released && v.srcTime >= this.tailStart ? v.tailSpeed : 1;
-      v.srcTime = this.skipRemoved(v.srcTime + step * (resample ? alpha : 1) * this.speedAt(v.srcTime) * tailSpeed);
+      v.srcTime = this.skipRemoved(v.srcTime + step * (resample ? alpha : 1) * this.speedAt(v, v.srcTime));
     }
     return true;
   }
@@ -900,25 +730,23 @@ export class Engine {
   private playoutRemaining(v: Voice): number {
     const params = this.params!;
     const s = params.stretch;
-    const tailFrom = Math.max(this.tailStart, this.sustainStart);
-    const tail = () => this.playedBetween(Math.max(v.srcTime, tailFrom), this.rangeEnd) * Math.max(0.05, s.tail);
+    // From the sustain on, a one-shot plays to the end at the sustain's speed.
+    const after = (from: number) => this.playedBetween(Math.max(from, this.sustainStart), this.rangeEnd) * Math.max(0.05, s.sustain);
     let out: number;
     if (v.phase === Phase.Head) {
       const head = this.playedBetween(v.srcTime, this.sustainStart) * Math.max(0.05, s.head);
-      if (!params.sustainEnabled) out = head + (this.tailOn() ? tail() : 0);
-      else if (params.sustainMode === "none") out = head + this.playedBetween(this.sustainStart, this.sustainEnd) * Math.max(0.05, s.sustain) + tail();
-      else if (v.released && this.tailOn()) out = head + tail();
+      if (!params.sustainEnabled) out = head;
+      else if (params.sustainMode === "none") out = head + after(this.sustainStart);
       else return Infinity;
     } else if (v.phase === Phase.Run) {
-      out = this.playedBetween(v.srcTime, this.sustainEnd) * Math.max(0.05, s.sustain) + tail();
+      out = after(v.srcTime);
     } else if (v.phase === Phase.Done) {
       out = 0;
     } else {
       return Infinity;
     }
     if (params.pitchMode === "resample") out /= 2 ** (this.shiftOf(v.note, v.bend) / 12);
-    // The tail's length limit ends it sooner.
-    return Math.min(out, v.tailRemaining);
+    return out;
   }
 
   private formantAlpha(shift: number): number {
@@ -972,7 +800,7 @@ export class Engine {
     const amp = params.amp;
     const attackStep = 1 / Math.max(1, amp.attack * sr);
     const decayCoef = Math.exp(-1 / Math.max(1, amp.decay * sr));
-    // Letting go without a tail fades over the release, or the 終わりのフェード when that is longer.
+    // Letting go fades over the release, or the 終わりのフェード when that is longer.
     const releaseStep = 1 / Math.max(1, Math.max(amp.release, amp.fadeOut) * sr);
     // 終わりのフェード: over the last `fadeOut` seconds before the material runs out (when that is known).
     const fadeOutSamples = amp.fadeOut * sr;

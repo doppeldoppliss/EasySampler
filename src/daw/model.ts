@@ -328,7 +328,7 @@ export function sanitizeProject(raw: unknown): Project {
           instrument: typeof tr.instrument === "string" && (tr.instrument.includes("/") || tr.instrument === BACKING || tr.kind === "audio") ? tr.instrument : null,
           notes: sortNotes(notes),
           fx: sanitizeFx(tr.fx),
-          gain: num(tr.gain, 1, 0, 4),
+          gain: num(tr.gain, 1, 0, 1.5),
           pan: num(tr.pan, 0, -1, 1),
           mute: tr.mute === true,
           solo: tr.solo === true,

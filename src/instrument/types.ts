@@ -9,7 +9,6 @@
 import type { ScaleId } from "./scale";
 
 export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
-export type TailLimit = "none" | "beat" | "bar" | "unlimited";
 export type PitchMode = "preserve-length" | "resample";
 export type PresetId = "synth" | "short" | "transpose" | "decay" | "once";
 /**
@@ -113,8 +112,7 @@ export interface InstrumentParams {
    * Speed of each part, as a stretch factor (1 = as recorded, 2 = twice as long; VocalShifter's TIME).
    * The sustain's factor only matters when it isn't elastic (sustain mode "none"); otherwise the note's length decides.
    */
-  stretch: { head: number; sustain: number; tail: number };
-  tail: { enabled: boolean; limit: TailLimit };
+  stretch: { head: number; sustain: number };
   wobble: {
     vibratoCents: number;
     vibratoHz: number;
@@ -228,9 +226,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   heldSustainMode: "pool",
   transposeOnly: false,
   wavetableCycles: 1,
-  stretch: { head: 1, sustain: 1, tail: 1 },
-  // 語尾 is no more (2026-10-28): a held note ends with the release; a one-shot plays its recording out.
-  tail: { enabled: false, limit: "unlimited" },
+  stretch: { head: 1, sustain: 1 },
   wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, vibratoAttackSec: 0.15, vibratoReleaseSec: 0, vibratoPhase: 0, tremoloDepth: 0, driftCents: 0, micro: true, smoothSec: 0, keepDrift: 1, keepModulation: 1 },
   amp: { attack: 0.005, decay: 0.1, sustain: 1, release: 0.02, velocitySens: 0.5, fadeOut: 0 },
   maxVoices: 24,

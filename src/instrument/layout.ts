@@ -42,23 +42,25 @@ export function normalizeRemoved(ranges: readonly TimeRange[] | undefined, range
  * removed stretch lands on the seam.
  */
 /**
- * The stretches the part switches leave out (鳴らす部分): with the sustain
- * off, from the sustain's start to where the tail starts (or to the end when
- * the tail is off too); with only the tail off, from the sustain's end to the
- * end. The head always plays.
+ * The stretches that do not play: with the sustain off (頭部だけ), everything
+ * after the head; with the sustain held (伸ばす), everything after it ("tail"
+ * = the part after the sustain, which only a one-shot plays). The head always plays.
  */
 export function hiddenParts(markers: Markers, parts: { sustain: boolean; tail: boolean }): TimeRange[] {
-  const tailFrom = Math.max(markers.tailStart, markers.sustainStart);
   let range: TimeRange | null = null;
-  if (!parts.sustain) range = { start: markers.sustainStart, end: parts.tail ? tailFrom : markers.rangeEnd };
+  if (!parts.sustain) range = { start: markers.sustainStart, end: markers.rangeEnd };
   else if (!parts.tail) range = { start: markers.sustainEnd, end: markers.rangeEnd };
   return range && range.end > range.start ? [range] : [];
 }
 
-/** What the switches in `params` hide. */
+/** Which parts `params` plays: the sustain unless switched off (頭部だけ); what follows it only in a one-shot. */
+export function playedParts(params: InstrumentParams): { sustain: boolean; tail: boolean } {
+  return { sustain: params.sustainEnabled, tail: params.sustainEnabled && params.sustainMode === "none" };
+}
+
+/** What `params` leaves out. */
 export function hiddenPartsOf(markers: Markers, params: InstrumentParams): TimeRange[] {
-  // A one-shot (伸ばさない) plays on past the sustain to the recording's end: that part is not hidden.
-  return hiddenParts(markers, { sustain: params.sustainEnabled, tail: (params.tail.enabled && params.tail.limit !== "none") || (params.sustainEnabled && params.sustainMode === "none") });
+  return hiddenParts(markers, playedParts(params));
 }
 
 export function collapsedTime(t: number, removed: readonly TimeRange[]): number {
@@ -111,18 +113,19 @@ export function outputLayout(markers: Markers, params: InstrumentParams, holdSec
   let tailSrcSec: number;
   let tailSec: number;
   if (skipped) {
-    // Head, then the tail when it's on; the hold doesn't matter.
+    // The head only; the hold doesn't matter.
     sustainSec = 0;
-    tailSrcSec = params.tail.enabled && params.tail.limit !== "none" ? usedBetween(markers, Math.max(markers.tailStart, markers.sustainStart), markers.rangeEnd) : 0;
-    tailSec = tailSrcSec * params.stretch.tail;
+    tailSrcSec = 0;
+    tailSec = 0;
   } else if (elastic) {
     sustainSec = Math.max(0, holdSec - headSec);
-    tailSrcSec = params.tail.enabled ? usedBetween(markers, Math.max(markers.tailStart, markers.sustainStart), markers.rangeEnd) : 0;
-    tailSec = tailSrcSec * params.stretch.tail;
+    tailSrcSec = 0;
+    tailSec = 0;
   } else {
+    // A one-shot: from the sustain to the end, at the sustain's speed (持続区間から後の長さ).
     sustainSec = sustainSrcSec * params.stretch.sustain;
     tailSrcSec = usedBetween(markers, markers.sustainEnd, markers.rangeEnd);
-    tailSec = tailSrcSec * params.stretch.tail;
+    tailSec = tailSrcSec * params.stretch.sustain;
   }
   void resample;
   return {

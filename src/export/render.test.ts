@@ -24,7 +24,7 @@ function rms(x: Float32Array, from: number, to: number): number {
 
 describe("renderNote (the exported file)", () => {
   it("comes out at the target note, flat, and about as long as asked (no tail)", () => {
-    const { analysis, source, params } = setup({ tail: { enabled: false, limit: "unlimited" } });
+    const { analysis, source, params } = setup();
     const out = renderNote(source, analysis.markers, params, 64, 1.5);
     expect(out.sampleRate).toBe(SR);
     expect(out.channels).toHaveLength(1);

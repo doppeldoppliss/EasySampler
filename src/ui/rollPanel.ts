@@ -55,7 +55,7 @@ import { drumRows, keyLabel, soundKey, type Kit } from "../daw/kit";
 import { arrange, type ArrangeKind } from "../daw/arrange";
 import { armOnce, el } from "./dom";
 import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, ROLE_NAMES, spreadPans, trackRoles, type Role } from "../daw/roles";
-import { kickDuck, medianLength, octaveFit, roomFor } from "../daw/autoMix";
+import { kickDuck, madeByAuto, medianLength, octaveFit, roomFor } from "../daw/autoMix";
 import { KICK_KEYS } from "../song/player";
 import { PianoRoll } from "./pianoRoll";
 import { isSynthPreset, SYNTH_PRESETS } from "../song/backing";
@@ -1595,7 +1595,39 @@ export class RollPanel {
     this.info.textContent = message;
   }
 
-  /** キックに合わせて沈める: the bass and the accompaniment duck to the drum tracks' kick. */
+  /**
+   * One kind of automatic effect over the tracks: where `want` gives one, it goes in (over an earlier automatic one,
+   * or where there was none); where it gives none, an earlier automatic one comes out; one set by hand is kept.
+   * The new effects (null: left), and the counts.
+   */
+  private autoEffect<K extends "duck" | "reverb">(kind: K, want: (t: Track, i: number) => FxSettings[K] | null, label: (t: Track, fx: FxSettings[K]) => string) {
+    const bpm = this.project.bpm;
+    let kept = 0;
+    let removed = 0;
+    const done: string[] = [];
+    const fxs = this.project.tracks.map((t, i) => {
+      const next = t.notes.length ? want(t, i) : null;
+      const mine = madeByAuto(t.fx, kind, bpm);
+      if (!mine) {
+        if (next) kept++;
+        return null;
+      }
+      const fx = structuredClone(t.fx);
+      if (next) {
+        fx[kind] = next;
+        done.push(label(t, next));
+        return fx;
+      }
+      if (!t.fx[kind].on) return null;
+      fx[kind] = { ...fx[kind], on: false };
+      delete fx[kind].auto;
+      removed++;
+      return fx;
+    });
+    return { fxs, done, kept, removed };
+  }
+
+  /** キックに合わせて沈める: the bass and the held accompaniment duck to the drum tracks' kick. */
   private autoDuck(): void {
     const hasKick = this.project.tracks.some((t) => t.kind === "drum" && t.notes.some((n) => KICK_KEYS.includes(n.pitch)));
     if (!hasKick) {
@@ -1603,50 +1635,38 @@ export class RollPanel {
       return;
     }
     const roles = this.roles();
-    let kept = 0;
     let releaseMs = 0;
-    const done: string[] = [];
-    const fxs = this.project.tracks.map((t, i) => {
-      const duck = kickDuck(roles[i], this.project.bpm, t.fx.duck, medianLength(t.notes));
-      if (!duck || !t.notes.length) return null;
-      if (t.fx.duck.on && t.fx.duck.source !== "kick") {
-        kept++;
-        return null;
-      }
-      releaseMs = duck.releaseMs;
-      done.push(`「${t.name}」${duck.depthDb} dB`);
-      return { ...structuredClone(t.fx), duck };
-    });
-    const keptNote = kept ? `サイドチェーンを自分で入れていた ${kept} 本はそのままです。` : "";
+    const { fxs, done, kept, removed } = this.autoEffect(
+      "duck",
+      (t, i) => kickDuck(roles[i], this.project.bpm, t.fx.duck, medianLength(t.notes)),
+      (t, d) => {
+        releaseMs = d.releaseMs;
+        return `「${t.name}」${d.depthDb} dB`;
+      },
+    );
+    const notes = `${removed ? `前に自動で入れたサイドチェーンを ${removed} 本から外しました。` : ""}${kept ? `サイドチェーンを自分で入れていた ${kept} 本はそのままです。` : ""}`;
     this.applyTrackFx(
       fxs,
       done.length
-        ? `キックで沈むサイドチェーンを入れました: ${done.join("、")}(戻るまで ${releaseMs} ms)。${keptNote}「元に戻す」で戻せます。`
-        : `沈めるトラック(ベースと、音を伸ばす和音・伴奏・ハモリ)がありませんでした。${keptNote}`,
+        ? `キックで沈むサイドチェーンを入れました: ${done.join("、")}(戻るまで ${releaseMs} ms)。${notes}「元に戻す」で戻せます。`
+        : `沈めるトラック(ベースと、音を伸ばす和音・伴奏・ハモリ)がありませんでした。${notes}`,
     );
   }
 
   /** 残響を付ける: a room on each track by its part and the tempo. */
   private autoRooms(): void {
     const roles = this.roles();
-    let kept = 0;
-    const done: string[] = [];
-    const fxs = this.project.tracks.map((t, i) => {
-      const reverb = roomFor(roles[i], this.project.bpm, t.fx.reverb, medianLength(t.notes));
-      if (!reverb || !t.notes.length) return null;
-      if (t.fx.reverb.on) {
-        kept++;
-        return null;
-      }
-      done.push(`「${t.name}」${Math.round(reverb.mix * 100)}%`);
-      return { ...structuredClone(t.fx), reverb };
-    });
-    const keptNote = kept ? `リバーブを自分で入れていた ${kept} 本はそのままです。` : "";
+    const { fxs, done, kept, removed } = this.autoEffect(
+      "reverb",
+      (t, i) => roomFor(roles[i], this.project.bpm, t.fx.reverb, medianLength(t.notes)),
+      (t, r) => `「${t.name}」${Math.round(r.mix * 100)}%`,
+    );
+    const notes = `${removed ? `前に自動で入れたリバーブを ${removed} 本から外しました。` : ""}${kept ? `リバーブを自分で入れていた ${kept} 本はそのままです。` : ""}`;
     this.applyTrackFx(
       fxs,
       done.length
-        ? `リバーブを入れました(かかる量): ${done.join("、")}。長さはテンポに合わせました。${keptNote}「元に戻す」で戻せます。`
-        : `残響を付けるトラック(メロディ・和音・伴奏・ハモリのうち、16 分音符より長い音が中心のもの)がありませんでした。${keptNote}`,
+        ? `リバーブを入れました(かかる量): ${done.join("、")}。長さはテンポに合わせました。${notes}「元に戻す」で戻せます。`
+        : `残響を付けるトラック(メロディ・和音・伴奏・ハモリのうち、16 分音符より長い音が中心のもの)がありませんでした。${notes}`,
     );
   }
 
@@ -2334,6 +2354,12 @@ export class RollPanel {
     const t = this.track;
     const fx = structuredClone(t.fx);
     change(fx);
+    // (An effect the automatic mixing put in, once changed by hand, is the user's: it leaves it be from then on.)
+    for (const k of ["eq", "duck", "reverb"] as const) {
+      const { auto: _was, ...before } = t.fx[k];
+      const { auto: _now, ...after } = fx[k];
+      if (fx[k].auto && JSON.stringify(before) !== JSON.stringify(after)) delete fx[k].auto;
+    }
     t.fx = fx;
     this.client.setTrackMix(t.id, this.mixOf(t, fx));
     this.scheduleSave();

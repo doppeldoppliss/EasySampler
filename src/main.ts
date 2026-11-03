@@ -59,7 +59,7 @@ import { isMidiFile } from "./song/midi";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 import { evenStems, renderSong, type RenderTrack } from "./daw/songRender";
 import { bandSpectrum, fitBalance, type BalanceStyle } from "./fx/balance";
-import { balanceGains, cleanEq, lowCutFor, maskingDip } from "./daw/autoMix";
+import { balanceGains, cleanEq, lowCutFor, madeByAuto, maskingDip } from "./daw/autoMix";
 import { integratedLoudness } from "./audio/loudness";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, KEY_FAMILIES, newSlot, renderSlot, slotFor, soundKey, type KitSlot } from "./daw/kit";
@@ -3489,7 +3489,7 @@ async function autoLevels(): Promise<void> {
       lufs[i] = Number.isFinite(l) && l > -70 ? l : null;
     }
     const { gains, reference, loweredDb } = balanceGains(
-      project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain })),
+      project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain, notes: t.notes })),
       MAX_TRACK_GAIN,
     );
     rollPanel.applyGains(gains, reference, loweredDb);
@@ -3500,9 +3500,10 @@ async function autoLevels(): Promise<void> {
 rollPanel.onAutoLevels = () => void autoLevels();
 
 /**
- * トラックの EQ (design.md 36): on the lead, the chords, the accompaniment and the harmonies (their EQ not set by
- * hand), a low cut a little under their notes; on all but the lead, a dip where the lead is strong and so are they
- * (both measured alone, third-octave bands).
+ * トラックの EQ (design.md 36): on the leads, the chords, the accompaniment and the harmonies, a low cut a little
+ * under their notes; on all but the leads, a dip where the leads (measured together: a melody passed between tracks
+ * by section) are strong and so are they. An EQ set by hand is kept; one the automatic mixing put in before is
+ * replaced, or taken out where the track's part no longer wants one.
  */
 async function autoEq(): Promise<void> {
   if (songBuilding) return;
@@ -3510,10 +3511,13 @@ async function autoEq(): Promise<void> {
   const roles = rollPanel.roles();
   const heard = new Set(heardTracks(project));
   const wanted = new Set(["lead", "chords", "backing", "harmony"]);
+  const mine = (i: number) => madeByAuto(project.tracks[i].fx, "eq", project.bpm);
   const targets = project.tracks.flatMap((t, i) => (heard.has(i) && t.kind === "melodic" && wanted.has(roles[i]) ? [i] : []));
-  const kept = targets.filter((i) => project.tracks[i].fx.eq.on);
-  const work = targets.filter((i) => !project.tracks[i].fx.eq.on);
-  if (!work.length) {
+  const kept = targets.filter((i) => !mine(i));
+  const work = targets.filter(mine);
+  // (An automatic EQ on a track whose part wants none now — the bass, say: taken out.)
+  const off = project.tracks.flatMap((t, i) => (!targets.includes(i) && t.fx.eq.on && t.fx.eq.auto ? [i] : []));
+  if (!work.length && !off.length) {
     rollPanel.info.textContent = targets.length
       ? `EQ を入れるトラックはありませんでした(対象の ${targets.length} 本はどれも EQ を自分で入れてあります)。`
       : "EQ を入れるトラック(メロディ・和音・伴奏・ハモリ)がありませんでした。";
@@ -3521,32 +3525,45 @@ async function autoEq(): Promise<void> {
   }
   songBuilding = true;
   try {
-    const lead = roles.findIndex((r, i) => r === "lead" && heard.has(i));
+    const leads = roles.flatMap((r, i) => (r === "lead" && heard.has(i) ? [i] : []));
+    const dipped = work.filter((i) => roles[i] !== "lead");
     const measure = async (i: number, k: number, n: number) => {
       const t = project.tracks[i];
       const song = await renderTrackAlone(project, t.id, (share) => (rollPanel.info.textContent = `周波数の分布を測っています… ${k} / ${n}「${t.name}」${Math.round(share * 100)}%`));
       return bandSpectrum(song.channels, song.sampleRate);
     };
-    const dipped = work.filter((i) => i !== lead);
-    const total = dipped.length + (lead >= 0 && dipped.length ? 1 : 0);
+    const total = dipped.length ? dipped.length + leads.length : 0;
     let step = 0;
-    const leadSpectrum = lead >= 0 && dipped.length ? await measure(lead, ++step, total) : null;
+    // The leads together: their band powers added.
+    let leadSpectrum: number[] | null = null;
+    if (dipped.length) {
+      for (const i of leads) {
+        const s = await measure(i, ++step, total);
+        if (!s) continue;
+        leadSpectrum = leadSpectrum ? leadSpectrum.map((x, j) => 10 * Math.log10(10 ** (x / 10) + 10 ** (s[j] / 10))) : s;
+      }
+    }
     const fxs: (FxSettings | null)[] = project.tracks.map(() => null);
     const said: string[] = [];
     const hz = (v: number) => (v >= 1000 ? `${+(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz`);
     for (const i of work) {
       const t = project.tracks[i];
       const notes = withHarmony(t.notes, t.harmony, t.glide);
-      const spectrum = i !== lead && leadSpectrum ? await measure(i, ++step, total) : null;
+      const spectrum = roles[i] !== "lead" && leadSpectrum ? await measure(i, ++step, total) : null;
       const dip = leadSpectrum && spectrum ? maskingDip(leadSpectrum, spectrum) : null;
       const fx = structuredClone(t.fx);
       fx.eq = cleanEq(lowCutFor(notes), dip);
       fxs[i] = fx;
       said.push(`「${t.name}」ローカット ${hz(fx.eq.lowCutHz)}${dip ? `・${hz(dip.hz)} ${dip.db} dB` : ""}`);
     }
+    for (const i of off) {
+      const fx = structuredClone(project.tracks[i].fx);
+      fx.eq = { ...DEFAULT_FX.eq };
+      fxs[i] = fx;
+    }
     rollPanel.applyTrackFx(
       fxs,
-      `トラックの EQ を入れました: ${said.join("、")}。${lead < 0 ? "メロディのトラックがないので、ぶつかりを削る EQ は入れていません。" : ""}${kept.length ? `EQ を自分で入れていた ${kept.length} 本はそのままです。` : ""}「元に戻す」で戻せます。`,
+      `${said.length ? `トラックの EQ を入れました: ${said.join("、")}。` : ""}${off.length ? `前に自動で入れた EQ を ${off.length} 本から外しました。` : ""}${!leads.length && dipped.length ? "メロディのトラックがないので、ぶつかりを削る EQ は入れていません。" : ""}${kept.length ? `EQ を自分で入れていた ${kept.length} 本はそのままです。` : ""}「元に戻す」で戻せます。`,
     );
   } finally {
     songBuilding = false;

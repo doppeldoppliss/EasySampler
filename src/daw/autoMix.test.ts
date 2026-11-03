@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { balanceGains, cleanEq, kickDuck, lowCutFor, maskingDip, octaveFit, roomFor } from "./autoMix";
+import { balanceGains, cleanEq, kickDuck, madeByAuto, together, lowCutFor, maskingDip, octaveFit, roomFor } from "./autoMix";
 import { BAND_HZ } from "../fx/balance";
 import { DEFAULT_FX } from "../instrument/types";
 import type { Note } from "./model";
@@ -127,5 +127,43 @@ describe("自動ミックス", () => {
       { kind: "melodic", notes: melody },
     ]);
     expect(roles.map((r) => r.role)).toEqual(["bass", "bass", "lead"]);
+  });
+
+  it("a melody passed between tracks by section keeps its full level on each; tracks playing at once share it", () => {
+    const bars = (from: number, to: number) => Array.from({ length: (to - from) * 4 }, (_, k) => note(72, from * 4 + k));
+    // Three melody tracks, one after another (bars 0–4, 4–8, 8–12).
+    expect(together([bars(0, 4), bars(4, 8), bars(8, 12)])).toBeCloseTo(1, 5);
+    expect(together([bars(0, 4), bars(0, 4)])).toBeCloseTo(2, 5);
+    const { gains, reference } = balanceGains(
+      [
+        { role: "lead", lufs: -14, gain: 1, notes: bars(0, 4) },
+        { role: "lead", lufs: -20, gain: 1, notes: bars(4, 12) },
+      ],
+      4,
+    );
+    // The lead with the most notes is the reference; the other comes up to it, not 3 dB under.
+    expect(reference).toBe(1);
+    expect(20 * Math.log10(gains[0]!)).toBeCloseTo(-6, 1);
+  });
+
+  it("tells what the automatic mixing put in from what was set by hand (marked, or exactly its own, or nothing at all)", () => {
+    const fx = structuredClone(DEFAULT_FX);
+    expect(madeByAuto(fx, "reverb", 150)).toBe(true); // off: free
+    fx.reverb = roomFor("chords", 150, fx.reverb, 1)!;
+    expect(madeByAuto(fx, "reverb", 150)).toBe(true);
+    delete fx.reverb.auto; // made before the mark: still its own formula
+    expect(madeByAuto(fx, "reverb", 150)).toBe(true);
+    fx.reverb.size = 0.15; // changed by hand
+    expect(madeByAuto(fx, "reverb", 150)).toBe(false);
+    fx.eq = { ...fx.eq, on: true, lowDb: -7 };
+    expect(madeByAuto(fx, "eq", 150)).toBe(false);
+    fx.eq = { ...DEFAULT_FX.eq, on: true, lowCutHz: 0 }; // on, doing nothing
+    expect(madeByAuto(fx, "eq", 150)).toBe(true);
+    fx.eq = { ...DEFAULT_FX.eq, on: true, lowCutHz: 163, midHz: 1000, midDb: -3, midQ: 1.4, lowDb: 5.5 }; // an old clean-up EQ
+    expect(madeByAuto(fx, "eq", 150)).toBe(true);
+    fx.duck = { ...fx.duck, on: true, source: "trackA" };
+    expect(madeByAuto(fx, "duck", 150)).toBe(false);
+    fx.duck.source = "kick";
+    expect(madeByAuto(fx, "duck", 150)).toBe(true);
   });
 });

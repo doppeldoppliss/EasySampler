@@ -226,6 +226,7 @@ export function sanitizeFx(raw: unknown): FxSettings {
     stutter: { on: on(st), steps: steps(st.steps, d.stutter.steps), stepBeats: stepBeats(st.stepBeats, d.stutter.stepBeats), sliceBeats: sliceBeats(st.sliceBeats), fade: clamp(num(st.fade, d.stutter.fade), 0, 0.9) },
     duck: {
       on: on(du),
+      ...(du.auto === true ? { auto: true } : {}),
       source: typeof du.source === "string" && du.source ? du.source : "beat",
       beats: du.beats === 0.5 || du.beats === 2 ? du.beats : 1,
       depthDb: clamp(num(du.depthDb, d.duck.depthDb), -40, 0),
@@ -252,6 +253,7 @@ export function sanitizeFx(raw: unknown): FxSettings {
     },
     reverb: {
       on: on(rv),
+      ...(rv.auto === true ? { auto: true } : {}),
       size: clamp(num(rv.size, d.reverb.size), 0, 1),
       damping: clamp(num(rv.damping, d.reverb.damping), 0, 1),
       preDelayMs: clamp(num(rv.preDelayMs, d.reverb.preDelayMs), 0, 200),
@@ -259,6 +261,7 @@ export function sanitizeFx(raw: unknown): FxSettings {
     },
     eq: {
       on: on(e),
+      ...(e.auto === true ? { auto: true } : {}),
       lowCutHz: clamp(num(e.lowCutHz, d.eq.lowCutHz), 0, 2000),
       lowDb: clamp(num(e.lowDb, d.eq.lowDb), -24, 24),
       lowHz: clamp(num(e.lowHz, d.eq.lowHz), 20, 1000),

@@ -175,7 +175,8 @@ export interface FxSettings {
   /** Compressor: above the threshold the level rises by 1/ratio; attack / release (ms); make-up gain. */
   compressor: { on: boolean; thresholdDb: number; ratio: number; attackMs: number; releaseMs: number; makeupDb: number };
   /** EQ: low cut, low shelf, one bell, high shelf, high cut (a cut at 0 / ≥ 20 kHz is off). */
-  eq: { on: boolean; lowCutHz: number; lowDb: number; lowHz: number; midDb: number; midHz: number; midQ: number; highDb: number; highHz: number; highCutHz: number };
+  /** (`auto` on the EQ, the reverb and the sidechain: put in by the automatic mixing, to be replaced or taken out by it; editing it by hand clears it.) */
+  eq: { on: boolean; auto?: boolean; lowCutHz: number; lowDb: number; lowHz: number; midDb: number; midHz: number; midQ: number; highDb: number; highHz: number; highCutHz: number };
   /** Saturation (tube-like, asymmetric): drive 0–1, dry/wet. */
   saturation: { on: boolean; drive: number; mix: number };
   /** Air: high-shelf lift plus a little generated top end, 0–1. */
@@ -198,13 +199,13 @@ export interface FxSettings {
   /** Delay: time in beats, feedback 0–0.9, the repeats darkened above highCutHz, ping-pong between the sides, dry/wet. */
   delay: { on: boolean; beats: DelayBeats; feedback: number; highCutHz: number; pingPong: boolean; mix: number };
   /** Reverb (a room): size 0–1, damping 0–1 (darker tail), pre-delay (ms), dry/wet. */
-  reverb: { on: boolean; size: number; damping: number; preDelayMs: number; mix: number };
+  reverb: { on: boolean; auto?: boolean; size: number; damping: number; preDelayMs: number; mix: number };
   /**
    * Sidechain (ダッキング): the sound pushed down by `depthDb` and let back up over `releaseMs` — on every
    * `beats` of the song (source "beat", a pumping), or whenever another track (source = its id; a kick) is loud
    * (fully past `thresholdDb`).
    */
-  duck: { on: boolean; source: string; beats: DuckBeats; depthDb: number; releaseMs: number; thresholdDb: number };
+  duck: { on: boolean; auto?: boolean; source: string; beats: DuckBeats; depthDb: number; releaseMs: number; thresholdDb: number };
   /** Limiter: input gain, ceiling (dBFS), release. */
   limiter: { on: boolean; gainDb: number; ceilingDb: number; releaseMs: number };
 }

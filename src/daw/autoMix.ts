@@ -17,6 +17,8 @@ export const LEVEL_FROM_LEAD: Record<Role, number> = { audio: 0, lead: 0, bass: 
 
 export interface LevelIn {
   role: Role;
+  /** Its notes: tracks of one part share its level only where they play together (a melody passed from track to track by section does not). */
+  notes?: readonly Note[];
   /** Its loudness as it plays now (integrated LUFS, with its gain), null when it was not measured (silent, muted). */
   lufs: number | null;
   gain: number;
@@ -30,11 +32,15 @@ export interface LevelIn {
 export function balanceGains(tracks: readonly LevelIn[], maxGain: number): { gains: (number | null)[]; reference: number; loweredDb: number } {
   const measured = tracks.map((t, i) => ({ ...t, i })).filter((t): t is LevelIn & { i: number; lufs: number } => t.lufs !== null && Number.isFinite(t.lufs));
   if (!measured.length) return { gains: tracks.map(() => null), reference: -1, loweredDb: 0 };
+  const leads = measured.filter((t) => t.role === "lead");
   const ref =
-    measured.find((t) => t.role === "audio") ?? measured.find((t) => t.role === "lead") ?? measured.reduce((a, b) => (b.lufs > a.lufs ? b : a));
-  const count = new Map<Role, number>();
-  for (const t of measured) count.set(t.role, (count.get(t.role) ?? 0) + 1);
-  const share = (role: Role) => 10 * Math.log10(count.get(role) ?? 1);
+    measured.find((t) => t.role === "audio") ??
+    (leads.length ? leads.reduce((a, b) => ((b.notes?.length ?? 0) > (a.notes?.length ?? 0) ? b : a)) : undefined) ??
+    measured.reduce((a, b) => (b.lufs > a.lufs ? b : a));
+  const groups = new Map<Role, (LevelIn & { i: number; lufs: number })[]>();
+  for (const t of measured) groups.set(t.role, [...(groups.get(t.role) ?? []), t]);
+  const at = new Map([...groups].map(([role, g]) => [role, g.every((t) => t.notes) ? together(g.map((t) => t.notes!)) : g.length]));
+  const share = (role: Role) => 10 * Math.log10(at.get(role) ?? 1);
   // The lead's level, from the reference's (which is where its part says it is).
   const lead = ref.lufs - LEVEL_FROM_LEAD[ref.role] + share(ref.role);
   const wanted = tracks.map(() => null as number | null);
@@ -50,6 +56,40 @@ export function balanceGains(tracks: readonly LevelIn[], maxGain: number): { gai
   const gains = wanted.map((g) => (g === null ? null : Math.max(0.01, g * lower)));
   if (lower < 1) gains[ref.i] = Math.max(0.01, ref.gain * lower);
   return { gains, reference: ref.i, loweredDb: -20 * Math.log10(lower) };
+}
+
+/** How many of these tracks sound at once, on average, wherever any of them does (in quarter-beat steps). */
+export function together(tracks: readonly (readonly Note[])[]): number {
+  const count = new Map<number, number>();
+  for (const notes of tracks) {
+    const steps = new Set<number>();
+    for (const n of notes) for (let k = Math.floor(n.start * 4); k < Math.ceil((n.start + n.length) * 4); k++) steps.add(k);
+    for (const k of steps) count.set(k, (count.get(k) ?? 0) + 1);
+  }
+  if (!count.size) return 1;
+  let sum = 0;
+  for (const c of count.values()) sum += c;
+  return Math.max(1, sum / count.size);
+}
+
+// ------------------------------------------------------------ what the automatic mixing put in
+
+/**
+ * Whether a track's EQ / sidechain / reverb is the automatic mixing's (so it may replace or take it out) rather than
+ * set by hand: marked so; or, made before the mark was kept, exactly what it makes (a sidechain to the kick; a room
+ * by its formula; a clean-up EQ); an EQ switched on but doing nothing counts as unset.
+ */
+export function madeByAuto(fx: FxSettings, kind: "eq" | "duck" | "reverb", bpm: number): boolean {
+  if (!fx[kind].on || fx[kind].auto) return true;
+  if (kind === "duck") return fx.duck.source === "kick";
+  if (kind === "reverb") {
+    const r = fx.reverb;
+    return (r.damping === 0.45 || r.damping === 0.6) && r.preDelayMs === preDelayFor(bpm) && r.size === roomSize(bpm);
+  }
+  const e = fx.eq;
+  const flat = e.lowDb === 0 && e.highDb === 0 && e.highCutHz >= 20000;
+  if (flat && e.lowCutHz === 0 && e.midDb === 0) return true;
+  return e.midQ === 1.4 && (e.midDb === -2 || e.midDb === -3) ? true : flat && e.lowCutHz >= 40 && e.midDb === 0 && e.midHz === 1500 && e.midQ === 1;
 }
 
 // ------------------------------------------------------------ the clean-up EQ
@@ -103,7 +143,7 @@ export function maskingDip(lead: readonly number[], track: readonly number[]): {
  * switched-off EQ was left at (its shelves would come back on with it).
  */
 export function cleanEq(lowCutHz: number, dip: { hz: number; db: number } | null): FxSettings["eq"] {
-  return { ...DEFAULT_FX.eq, on: true, lowCutHz, ...(dip ? { midHz: dip.hz, midDb: dip.db, midQ: 1.4 } : {}) };
+  return { ...DEFAULT_FX.eq, on: true, auto: true, lowCutHz, ...(dip ? { midHz: dip.hz, midDb: dip.db, midQ: 1.4 } : {}) };
 }
 
 // ------------------------------------------------------------ ducking to the kick
@@ -129,7 +169,7 @@ export function medianLength(notes: readonly Note[]): number {
 export function kickDuck(role: Role, bpm: number, duck: FxSettings["duck"], lengthBeats: number): FxSettings["duck"] | null {
   const depthDb = DUCK_DB[role];
   if (depthDb === undefined || (role !== "bass" && lengthBeats < HELD_BEATS)) return null;
-  return { ...duck, on: true, source: "kick", depthDb, releaseMs: Math.round(Math.min(300, Math.max(80, 30000 / bpm))) };
+  return { ...duck, on: true, auto: true, source: "kick", depthDb, releaseMs: Math.round(Math.min(300, Math.max(80, 30000 / bpm))) };
 }
 
 // ------------------------------------------------------------ octaves
@@ -164,13 +204,10 @@ const SHORT_BEATS = 0.25;
 export function roomFor(role: Role, bpm: number, reverb: FxSettings["reverb"], lengthBeats: number): FxSettings["reverb"] | null {
   const mix = ROOM_MIX[role];
   if (mix === undefined || lengthBeats < SHORT_BEATS) return null;
-  const twoBeats = 120 / bpm;
-  return {
-    ...reverb,
-    on: true,
-    mix,
-    size: Math.round(Math.min(0.85, Math.max(0.35, 0.35 + (twoBeats - 0.6) * 0.35)) * 100) / 100,
-    damping: role === "lead" ? 0.45 : 0.6,
-    preDelayMs: Math.round(Math.min(60, Math.max(10, 3750 / bpm))),
-  };
+  return { ...reverb, on: true, auto: true, mix, size: roomSize(bpm), damping: role === "lead" ? 0.45 : 0.6, preDelayMs: preDelayFor(bpm) };
 }
+
+/** The room's size for a tail about two beats long. */
+const roomSize = (bpm: number) => Math.round(Math.min(0.85, Math.max(0.35, 0.35 + (120 / bpm - 0.6) * 0.35)) * 100) / 100;
+/** The pre-delay: a 64th note (10–60 ms). */
+const preDelayFor = (bpm: number) => Math.round(Math.min(60, Math.max(10, 3750 / bpm)));

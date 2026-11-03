@@ -3695,6 +3695,11 @@ async function diagnoseMix(): Promise<void> {
     const wet = project.tracks.filter((t, i) => heard.has(i) && t.fx.reverb.on);
     if (wet.length >= 3 && wet.length > (heard.size * 2) / 3) points.push(`${heard.size} 本中 ${wet.length} 本にリバーブがかかっています。全体がぼやけやすいので、速いパートや低いパートからは外すのが目安です。`);
     if (project.masterFx.eq.on && project.masterFx.eq.lowDb >= 6) points.push("マスター EQ の低音が上限(+6 dB)です。低音が足りない曲は、EQ よりシンセベースを重ねるほうが効果的です(「マスター EQ を目安に寄せる」のあと、足りなければ下にボタンが出ます)。");
+    // The bass's lows worked against (a low cut over them, a swaying pan), and names given twice: said up top too.
+    for (const r of rows) for (const n of r.notes) if (/ローカット|左右に揺れる|低音が削れて/.test(n)) points.push(`「${r.name}」: ${n}。ベースは低い音が仕事なので、エフェクトの EQ のローカット・オートパン・フィルターを外すのが目安です。`);
+    const names = rows.map((r) => r.name);
+    const twice = [...new Set(names.filter((n, k) => names.indexOf(n) !== k))];
+    if (twice.length) points.push(`同じ名前のトラックがあります(${twice.map((n) => `「${n}」`).join("、")})。見分けやすいように名前を変えてください。`);
     for (const r of rows) if (r.peakDb !== null && r.peakDb > 0) points.push(`「${r.name}」だけで 0 dB を超えています(+${r.peakDb.toFixed(1)} dB)。トラックの音量かエフェクト(コンプのメイクアップなど)を下げてください。`);
     rollPanel.showDiagnosis(rows, song, points);
     rollPanel.info.textContent = `診断しました: 曲全体 ${song.lufs.toFixed(1)} LUFS・ピーク ${song.peakDb.toFixed(1)} dBTP、気になる点 ${points.length} 件(下の「診断の結果」)。`;

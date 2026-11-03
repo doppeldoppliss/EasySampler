@@ -49,7 +49,7 @@ import {
   type BeatPoint,
 } from "../daw/model";
 import type { MixSettings } from "../song/player";
-import type { FxSettings } from "../instrument/types";
+import { DEFAULT_FX, type FxSettings } from "../instrument/types";
 import { MidiParseError, parseMidi } from "../song/midi";
 import { songParts } from "../song/parts";
 import { drumRows, keyLabel, soundKey, type Kit } from "../daw/kit";
@@ -1752,11 +1752,28 @@ export class RollPanel {
     const t = this.project.tracks[i];
     if (!t) return [];
     const out: string[] = [];
+    if (this.roles()[i] === "bass" && t.notes.length) {
+      // The lows are the bass's job: a low cut over its lowest notes, or a swaying pan, works against it.
+      const lowest = 440 * 2 ** ((Math.min(...t.notes.map((n) => n.pitch)) - 69) / 12);
+      if (t.fx.eq.on && t.fx.eq.lowCutHz > lowest * 0.8) out.push(`ローカット(${Math.round(t.fx.eq.lowCutHz)} Hz)が低い音(${Math.round(lowest)} Hz)を削っている`);
+      if (t.fx.pan.on) out.push("オートパンで低音が左右に揺れる");
+      if (t.fx.filter.on && t.fx.filter.type !== "lowpass") out.push("フィルターで低音が削れている");
+    }
+    if (this.project.tracks.some((x, j) => j !== i && x.name === t.name)) out.push("同じ名前のトラックがある");
     if (this.farWarning(t)) out.push("音源の高さから離れすぎ");
     if (t.gain >= MAX_TRACK_GAIN - 1e-6) out.push("音量が上限");
     if (t.fx.reverb.on && t.fx.reverb.mix >= 0.35) out.push(`残響が多め(${Math.round(t.fx.reverb.mix * 100)}%)`);
     if (t.fx.compressor.on && t.fx.compressor.makeupDb >= 6) out.push(`コンプのメイクアップが大きめ(+${t.fx.compressor.makeupDb} dB)`);
     return out;
+  }
+
+  /** A track name not taken yet ("シンセベース", else "シンセベース 2"…). */
+  private freeName(base: string): string {
+    const taken = new Set(this.project.tracks.map((t) => t.name));
+    if (!taken.has(base)) return base;
+    let k = 2;
+    while (taken.has(`${base} ${k}`)) k++;
+    return `${base} ${k}`;
   }
 
   /** The style chosen for the master EQ (まとめて自動ミックス uses it too). */
@@ -1784,7 +1801,11 @@ export class RollPanel {
     const pitches = t.notes.map((n) => n.pitch).sort((x, y) => x - y);
     let down = 0;
     while (pitches[pitches.length >> 1] - 12 * down > 45 && pitches[0] - 12 * (down + 1) >= 24) down++;
-    const copy: Track = { ...structuredClone(t), id: newTrackId(), name: "シンセベース", instrument: BACKING, synth: "bass", role: "bass", solo: false, notes: t.notes.map((n) => ({ ...structuredClone(n), id: newId(), pitch: n.pitch - 12 * down })) };
+    // (Its effects start clean — the bass's low cut, a swept filter or an auto-pan would take away the very lows it is
+    // there for — but it ducks to the kick as the bass does. In the middle.)
+    const fx = structuredClone(DEFAULT_FX);
+    if (t.fx.duck.on) fx.duck = structuredClone(t.fx.duck);
+    const copy: Track = { ...structuredClone(t), id: newTrackId(), name: this.freeName("シンセベース"), instrument: BACKING, synth: "bass", role: "bass", solo: false, pan: 0, panAuto: [], fx, notes: t.notes.map((n) => ({ ...structuredClone(n), id: newId(), pitch: n.pitch - 12 * down })) };
     this.project.tracks.splice(i + 1, 0, copy);
     if (this.selected > i) this.selected++;
     this.reload();

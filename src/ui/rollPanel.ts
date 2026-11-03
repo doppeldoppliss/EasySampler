@@ -1547,10 +1547,13 @@ export class RollPanel {
     const select = el("select", { className: "mix-role", ariaLabel: "トラックの役割", title: "自動の音量・EQ・サイドチェーン・残響が使う役割。「自動」は音符から判定します" }, [
       el("option", { value: "", textContent: `自動(${ROLE_NAMES[worked]})` }),
       ...parts.map((r) => el("option", { value: r, textContent: ROLE_NAMES[r] })),
+      el("option", { value: "bass-main", textContent: "ベース(メイン)" }),
     ]);
-    select.value = t.role ?? "";
+    select.value = t.main && t.role === "bass" ? "bass-main" : (t.role ?? "");
     select.addEventListener("change", () => {
-      t.role = (select.value || null) as Role | null;
+      // ベース(メイン): the bass, and the one that takes the largest share of the bass's level.
+      t.main = select.value === "bass-main";
+      t.role = (t.main ? "bass" : select.value || null) as Role | null;
       this.scheduleSave();
       this.commit();
       // (Another track's worked-out role may change with it: a lead set by hand.)

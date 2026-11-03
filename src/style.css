@@ -1706,3 +1706,39 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
   background: var(--bg);
   color: var(--text-dim, var(--fine, #888));
 }
+
+/* (Audit, 2026-11-03.) A 16-step pattern takes the whole row: steps over the quick fills, not squeezed beside them. */
+.control.step-pattern {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 600px) {
+  /* Two rows of eight steps on a phone, tall enough to tap. */
+  .step-pattern .steps-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .step-toggle {
+    flex: 0 0 calc((100% - 7 * 3px - 6px) / 8);
+    height: 36px;
+  }
+  .step-toggle.beat:nth-child(9) {
+    margin-left: 0;
+  }
+  /* The play bar's buttons stay big enough for a finger. */
+  .sticky-transport .button {
+    min-height: 36px;
+  }
+}
+/* The master strip stays in view at the right while the track strips scroll. */
+.mix-strip.master {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  box-shadow: -6px 0 8px -6px rgba(0, 0, 0, 0.25);
+}
+@media (max-width: 360px) {
+  /* A narrow phone: the floating volume shorter, clear of the title. */
+  .volume-slider {
+    width: 64px;
+  }
+}

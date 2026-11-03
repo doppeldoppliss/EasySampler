@@ -416,6 +416,7 @@ export class FxChain {
     const compRel = Math.exp(-1 / Math.max(1, (fx.compressor.releaseMs / 1000) * sr));
     const compSlope = 1 - 1 / Math.max(1, fx.compressor.ratio);
     const compMakeup = dbToGain(fx.compressor.makeupDb);
+    const compThreshold = dbToGain(fx.compressor.thresholdDb);
     const delayBuf = fx.delay.on ? this.ensureDelay() : null;
     const delayLen = delayBuf ? delayBuf[0].length : 1;
     const delaySamples = Math.min(delayLen - 2, Math.max(1, ((fx.delay.beats * 60) / this.bpm) * sr));
@@ -448,6 +449,8 @@ export class FxChain {
     const duckRel = Math.exp(-1 / Math.max(1, (duck.releaseMs / 1000) * sr));
     const duckThr = dbToGain(duck.thresholdDb);
     const duckReleaseSec = duck.releaseMs / 1000;
+    // (The gain at full depth as a natural log: exp(ln × amount) is the dB scaled by the amount.)
+    const duckLn = (duck.depthDb / 20) * Math.LN10;
     const secPerBeat = 60 / this.bpm;
 
     for (let i = 0; i < frames; i++) {
@@ -497,11 +500,11 @@ export class FxChain {
 
       if (fx.compressor.on) {
         // Linked stereo: the louder side sets the gain; the reduction (dB) follows with its attack / release.
-        const level = Math.max(Math.abs(l), Math.abs(r), 1e-9);
-        const over = 20 * Math.log10(level) - fx.compressor.thresholdDb;
-        const want = over > 0 ? over * compSlope : 0;
+        const level = Math.max(Math.abs(l), Math.abs(r));
+        // (Under the threshold nothing is wanted: no logarithm for it; and no power once the reduction has let go.)
+        const want = level > compThreshold ? (20 * Math.log10(level) - fx.compressor.thresholdDb) * compSlope : 0;
         this.compGr = want > this.compGr ? compAtk * this.compGr + (1 - compAtk) * want : compRel * this.compGr + (1 - compRel) * want;
-        const g = dbToGain(-this.compGr) * compMakeup;
+        const g = (this.compGr > 1e-4 ? dbToGain(-this.compGr) : 1) * compMakeup;
         l *= g;
         r *= g;
       }
@@ -595,10 +598,13 @@ export class FxChain {
         // Two voices per side, LFOs a quarter cycle apart; the right side runs opposite to the left.
         let wetL = 0;
         let wetR = 0;
+        // (sin(φ + ½) = −sin φ and a quarter on is the cosine: one sine and one cosine serve all four.)
+        const sn = Math.sin(TAU * this.chorusPhase);
+        const cs = Math.cos(TAU * this.chorusPhase);
         for (let v = 0; v < 2; v++) {
-          const phase = this.chorusPhase + v * 0.25;
-          const dl = chorusBase * (1 + 0.3 * v) + chorusDepth * (0.5 + 0.5 * Math.sin(TAU * phase));
-          const dr = chorusBase * (1 + 0.3 * v) + chorusDepth * (0.5 + 0.5 * Math.sin(TAU * (phase + 0.5)));
+          const s = v === 0 ? sn : cs;
+          const dl = chorusBase * (1 + 0.3 * v) + chorusDepth * (0.5 + 0.5 * s);
+          const dr = chorusBase * (1 + 0.3 * v) + chorusDepth * (0.5 - 0.5 * s);
           wetL += readDelay(this.chorusBuf[0], w, dl, chorusLen);
           wetR += readDelay(this.chorusBuf[1], w, dr, chorusLen);
         }
@@ -711,7 +717,7 @@ export class FxChain {
           amount = this.duckEnv;
         }
         if (amount > 0) {
-          const g = 10 ** ((duck.depthDb * amount) / 20);
+          const g = Math.exp(duckLn * amount);
           l *= g;
           r *= g;
         }

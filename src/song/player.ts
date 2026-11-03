@@ -102,6 +102,11 @@ class Lane {
   r = new Float32Array(128);
   /** The loudest sample it put into the mix since the meters last read it (after its gain and pan). */
   peak = 0;
+  /** The lane it ducks to (its sidechain's key), when that is another track; and whether another lane ducks to it. */
+  keySource: Lane | null = null;
+  isKey = false;
+  /** How long its effects ring on, for the tempo it was last asked at (FxChain.tailSec, kept out of the block loop). */
+  tail = { bpm: Number.NaN, sec: 0 };
   /** Its level per sample this block (after its effects, before its volume), when another track ducks to it. */
   key = new Float32Array(128);
   keyLive = false;
@@ -151,6 +156,7 @@ export class SongPlayer {
   /** The tracks, as a whole (stops what plays). A track whose id stays keeps its effects' state. */
   setTracks(tracks: readonly PlayerTrack[]): void {
     this.allOff();
+    this.routing = null;
     const old = new Map(this.lanes.map((l) => [l.id, l]));
     const sr = this.sampleRate;
     this.lanes = tracks.map((t) => {
@@ -176,7 +182,35 @@ export class SongPlayer {
 
   /** Volume, pan, mute, solo and effects of tracks by id (the notes stay; playback goes on). */
   setMix(id: string, mix: MixSettings): void {
-    this.lanes.find((l) => l.id === id)?.setMix(mix);
+    const lane = this.lanes.find((l) => l.id === id);
+    if (!lane) return;
+    lane.setMix(mix);
+    lane.tail.bpm = Number.NaN;
+    this.routing = null;
+  }
+
+  /**
+   * The order the lanes are worked out in, and who ducks to whom — made when the tracks or a mix change, not per
+   * block (the audio thread allocates nothing then): the keys before the lanes that listen to them, a chain (A ducks
+   * to B, B to C) by how deep it goes, a loop of keys cut.
+   */
+  private routing: Lane[] | null = null;
+
+  private route(): Lane[] {
+    const byId = new Map(this.lanes.map((l) => [l.id, l]));
+    for (const lane of this.lanes) lane.isKey = false;
+    for (const lane of this.lanes) {
+      const duck = lane.mix.fx?.duck;
+      const source = lane.fxOn && duck?.on && duck.source !== "beat" ? (byId.get(duck.source) ?? null) : null;
+      lane.keySource = source;
+      if (source) source.isKey = true;
+    }
+    const depthOf = (lane: Lane, seen: Set<Lane>): number => {
+      if (!lane.keySource || seen.has(lane)) return 0;
+      seen.add(lane);
+      return 1 + depthOf(lane.keySource, seen);
+    };
+    return this.lanes.map((lane) => ({ lane, depth: depthOf(lane, new Set()) })).sort((a, b) => a.depth - b.depth).map((x) => x.lane);
   }
 
   /** The song's tempo map (seconds): tempo-synced effects follow it as the song plays. */
@@ -369,22 +403,8 @@ export class SongPlayer {
     // (A lane whose id starts with "__", the metronome, is never muted by another's solo.)
     const anySolo = this.lanes.some((l) => l.mix.solo && !l.id.startsWith("__"));
     // Sidechains: the tracks others duck to are worked out first, so their level is there for the ones that follow.
-    const keyOf = (lane: Lane) => (lane.fxOn && lane.mix.fx!.duck.on && lane.mix.fx!.duck.source !== "beat" ? lane.mix.fx!.duck.source : null);
-    const keys = new Set<string>();
-    for (const lane of this.lanes) {
-      const key = keyOf(lane);
-      if (key) keys.add(key);
-      lane.keyLive = false;
-    }
-    // (A chain — A ducks to B, B to C — in order: by how many keys deep each lane is; a loop of keys is cut.)
-    const depthOf = (lane: Lane, seen = new Set<Lane>()): number => {
-      const key = keyOf(lane);
-      if (!key || seen.has(lane)) return 0;
-      seen.add(lane);
-      const source = this.lanes.find((x) => x.id === key);
-      return source ? 1 + depthOf(source, seen) : 1;
-    };
-    const order = keys.size ? [...this.lanes].map((lane) => ({ lane, depth: depthOf(lane) })).sort((a, b) => a.depth - b.depth).map((x) => x.lane) : this.lanes;
+    const order = this.routing ?? (this.routing = this.route());
+    for (const lane of order) lane.keyLive = false;
     for (const lane of order) {
       const { gain, mute, solo } = lane.mix;
       // (Muted, or another track soloed: down to 0, ramped like any change.)
@@ -400,19 +420,16 @@ export class SongPlayer {
       const quiet = lane.sound.idle();
       lane.idleFrames = quiet && !fired ? lane.idleFrames + frames : 0;
       // Silent, its effects died away (a delay or a reverb may ring on longer): nothing to do.
-      const idleLimit = Math.max(IDLE_SKIP_SEC, FxChain.tailSec(lane.fxOn ? lane.mix.fx : null, this.bpm) + 0.5) * this.sampleRate;
+      if (lane.tail.bpm !== this.bpm) lane.tail = { bpm: this.bpm, sec: FxChain.tailSec(lane.fxOn ? lane.mix.fx : null, this.bpm) };
+      const idleLimit = Math.max(IDLE_SKIP_SEC, lane.tail.sec + 0.5) * this.sampleRate;
       if (lane.idleFrames > idleLimit && lane.done === 0) continue;
       SongPlayer.fill(lane, frames);
       if (lane.fxOn) {
         if (startBeat !== null) lane.fx.setBeat(startBeat);
-        const key = keyOf(lane);
-        if (key) {
-          const source = this.lanes.find((x) => x.id === key);
-          lane.fx.setKey(source?.keyLive ? source.key : null);
-        }
+        if (lane.keySource) lane.fx.setKey(lane.keySource.keyLive ? lane.keySource.key : null);
         lane.fx.process(lane.l, lane.r, frames);
       }
-      if (keys.has(lane.id)) {
+      if (lane.isKey) {
         if (lane.key.length < frames) lane.key = new Float32Array(frames);
         for (let i = 0; i < frames; i++) lane.key[i] = Math.max(Math.abs(lane.l[i]), Math.abs(lane.r[i]));
         lane.keyLive = true;

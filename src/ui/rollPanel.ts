@@ -288,7 +288,7 @@ export class RollPanel {
     this.roll.selectMode = !this.roll.selectMode;
     this.refreshButtons();
   });
-  private readonly undoButton = button("元に戻す", "small", () => this.undo(), "Ctrl+Z — 音符・トラック・ミキサー・エフェクト・テンポなど、曲の変更を 1 つ戻します");
+  private readonly undoButton = button("元に戻す", "small", () => this.undo(), "Ctrl+Z(曲・ミックスの画面) — 音符・トラック・ミキサー・エフェクト・テンポなど、曲の変更を 1 つ戻します");
   private readonly redoButton = button("やり直す", "small", () => this.redo(), "Ctrl+Y");
   private readonly deleteButton = button("削除", "small", () => this.roll.deleteSelected());
   private readonly duplicateButton = button("複製", "small", () => this.roll.duplicateSelected(), "選んだ音符の直後にコピーを置きます(Ctrl+D)");
@@ -409,6 +409,8 @@ export class RollPanel {
   /** The ミックス view: a strip per track and the master's (placed by the page), with the song's export under them. */
   readonly mixElement: HTMLElement;
   private readonly mixStrips = el("div", { className: "mix-strips" });
+  /** The 曲 view's messages, shown in the ミックス view too (spreading the pans, undo, effects reset…). */
+  private readonly mixInfo = el("p", { className: "fine", role: "status" });
   // The spectrum of what plays (the ミックス view), drawn while that view is on screen.
   private readonly spectrumCanvas = el("canvas", { className: "spectrum", ariaLabel: "周波数の分布" });
   private spectrumFrame = 0;
@@ -577,6 +579,7 @@ export class RollPanel {
         button("パンを自動で広げる", "small", () => this.spreadPans(), "ドラム・ベース・メロディは中央のまま、和音と伴奏を高さの順に左右へ振り分けます(元に戻すで戻せます)"),
         button("トラック名を自動で付ける", "small", () => this.nameTracks(), "「MIDI Out #3」のような名前のトラックに、音符から「ベース」「メロディ」「和音」などの名前を付けます(名前のあるトラックはそのまま)"),
       ]),
+      this.mixInfo,
       this.mixStrips,
       el("div", { className: "spectrum-box" }, [
         el("div", { className: "row tight" }, [
@@ -633,6 +636,8 @@ export class RollPanel {
       }
     });
     this.grabLoopEnd(this.loopEndGrip, "end");
+    // (One message line for the song, seen in whichever of its two views is on screen.)
+    new MutationObserver(() => (this.mixInfo.textContent = this.info.textContent)).observe(this.info, { childList: true, characterData: true, subtree: true });
     this.applyProject();
   }
 
@@ -1444,8 +1449,8 @@ export class RollPanel {
     const root = this.options.find((o) => o.id === t.instrument)?.note;
     if (root === undefined) return null;
     const { below, above } = rangeFromRoot(t.notes, root);
-    if (below >= FAR_BELOW) return `音符が音源の録音した高さより最大 ${below} 半音(約 ${(below / 12).toFixed(1)} オクターブ)下まであります。声などをここまで下げると、こもったり崩れたりします。低い声・音の素材にするか、音源を「簡易シンセ」にするか、「選んだトラックを」の「1 オクターブ上へ」を試してください。`;
-    if (above >= FAR_ABOVE) return `音符が音源の録音した高さより最大 ${above} 半音(約 ${(above / 12).toFixed(1)} オクターブ)上まであります。ここまで上げると細く、キンキンしやすくなります。高い声・音の素材にするか、「1 オクターブ下へ」を試してください。`;
+    if (below >= FAR_BELOW) return `音符が音源の録音した高さより最大 ${below} 半音(約 ${(below / 12).toFixed(1)} オクターブ)下まであります。声などをここまで下げると、こもったり崩れたりします。低い声・音の素材にするか、音源を「簡易シンセ」にするか、曲(打ち込み)の画面の「選んだトラックを: 1 オクターブ上げる」を試してください。`;
+    if (above >= FAR_ABOVE) return `音符が音源の録音した高さより最大 ${above} 半音(約 ${(above / 12).toFixed(1)} オクターブ)上まであります。ここまで上げると細く、キンキンしやすくなります。高い声・音の素材にするか、曲(打ち込み)の画面の「選んだトラックを: 1 オクターブ下げる」を試してください。`;
     return null;
   }
 

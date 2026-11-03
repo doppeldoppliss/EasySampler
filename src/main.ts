@@ -364,7 +364,7 @@ const volumeControl = el("label", { className: "inline volume", title: "モニ�
 // (Shown only once every material has been taken out: a new project starts on the built-in piano.)
 const emptyState = el("section", { className: "empty", hidden: true }, [
   el("p", { className: "empty-title", textContent: "声や効果音から楽器を作り、曲まで仕上げる。" }),
-  el("p", { textContent: "声や効果音のファイルを開くと、音程を判定して、伸ばす・移調する・1 回鳴らす楽器にします。曲の画面で MIDI を開くか打ち込めば、その楽器で曲になります。単音の WAV やマルチサンプル音源(SFZ / Decent Sampler)として、ほかの DAW に渡すこともできます。" }),
+  el("p", { textContent: "声や効果音のファイルを開くと、音程を判定して、伸ばす・移調する・1 回鳴らす楽器にします。曲の画面で MIDI を開くか打ち込めば、その楽器で曲になり、「ミックス」で音量を整えて WAV に書き出せます。単音の WAV やマルチサンプル(SFZ / Decent Sampler)として、ほかの DAW に渡すこともできます。" }),
   el("div", { className: "row" }, [el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" }), button("ピアノで始める", "", () => void loadPiano())]),
   el("p", { className: "fine", textContent: "生成AIは使っていません。素材は端末の中だけで処理され、外部には送られません。BGM の入った素材は、先に除去してから開いてください。" }),
 ]);
@@ -374,8 +374,8 @@ const emptyState = el("section", { className: "empty", hidden: true }, [
 const guide = el("aside", { className: "steps", hidden: safeStorage(GUIDE_KEY) === "seen" }, [
   el("ol", {}, [
     el("li", {}, [el("strong", { textContent: "聴いて確かめる" }), " — ▶ で鳴らし、判定した高さと帯(頭部・持続区間)がずれていれば直します"]),
-    el("li", {}, [el("strong", { textContent: "作り方を選ぶ" }), " — 伸ばす(シンセ化)・移調・1 回鳴らす。鍵盤で弾いて確かめます"]),
-    el("li", {}, [el("strong", { textContent: "曲にする" }), " — 「曲(打ち込み)」のトラックでこのサンプリング済音源を選び、MIDI を開くか打ち込みます"]),
+    el("li", {}, [el("strong", { textContent: "作り方を選ぶ" }), " — 伸ばす(シンセ化)・伸ばす(移調)・移調・1 回鳴らす。鍵盤で弾いて確かめます"]),
+    el("li", {}, [el("strong", { textContent: "曲にする" }), " — 「曲(打ち込み)」のトラックでこのサンプリング済音源を選び、MIDI を開くか打ち込みます。「ミックス」で音量を整えて書き出します"]),
   ]),
   button("閉じる", "small", () => {
     guide.hidden = true;
@@ -606,6 +606,7 @@ playButton.ariaLabel = "再生 / 停止(スペース)";
 const seekClock = el("span", { className: "fine num seek-clock" });
 // Undo / redo (the history itself lives further down, with the settings).
 const undoButton = button("元に戻す", "small", () => undo());
+undoButton.title = "Ctrl+Z — この素材の画面の変更(範囲・手直し・設定)を 1 つ戻します。曲の変更は曲・ミックスの画面の「元に戻す」で";
 const redoButton = button("やり直す", "small", () => redo());
 undoButton.title = "Ctrl + Z — つまみ・マーカー・削除・手直し・音源など、すべての変更を 1 つ戻します";
 redoButton.title = "Ctrl + Y";
@@ -669,7 +670,7 @@ const materialPanel = el("section", { className: "panel" }, [
       rootLabel,
       rootSource,
       el("span", { className: "fine root-help", textContent: "素材はこの高さで鳴っているとみなし、弾いた鍵・音符の高さとの差だけ移調します(自動のときは範囲と持続区間に追従。録音の終わりまででは範囲全体を均等に見ます)。" }),
-      el("span", { className: "row tight root-nudge" }, [rootButton("基準 −1半音", -1), rootButton("基準 −5¢", -0.05), rootButton("基準 +5¢", 0.05), rootButton("基準 +1半音", 1), detectedButton]),
+      el("span", { className: "row tight root-nudge" }, [rootButton("判定 −1半音", -1), rootButton("判定 −5¢", -0.05), rootButton("判定 +5¢", 0.05), rootButton("判定 +1半音", 1), detectedButton]),
     ]),
     el("div", { className: "row tight transport" }, [undoButton, redoButton, zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
   ]),
@@ -739,7 +740,7 @@ function clampNumber(text: string, min: number, max: number, fallback: number): 
 // (Beats are counted in the song's BPM: one sound made to fit the song it is for.)
 const lengthBpm = el("span", { className: "fine num" });
 const lengthBlock = el("div", { className: "length" }, [
-  el("span", { className: "control-label", textContent: "長さ(単音の書き出しと、仕上がりの試聴)" }),
+  el("span", { className: "control-label", textContent: "長さ(単音の書き出し・仕上がりの試聴・鍵盤で鳴らす引き延ばし)" }),
   el("div", { className: "length-row" }, [el("label", { className: "inline" }, [lengthBeats, beatsInput, el("span", { textContent: "拍" }), lengthBpm])]),
   el("label", { className: "length-row" }, [lengthSeconds, secondsInput, el("span", { textContent: "秒" })]),
   lengthResult,
@@ -1216,7 +1217,7 @@ const fxResetButton = button("エフェクトをすべてオフに", "small", ()
 const fxPanel = el("details", { className: "panel fx-panel" }, [
   el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxTrackLabel, fxActiveLine]),
   el("div", { className: "row" }, [el("span", { className: "fine", textContent: "かける先:" }), fxTrackButton, fxMasterButton, fxResetButton]),
-  el("p", { className: "fine", textContent: "打ち込みで選んでいるトラック、またはマスター(曲全体)にかかります(上から順に)。曲の再生・書き出しと、曲の画面の鍵盤にかかります。素材・ドラムキットの画面の鍵盤と、書き出す単音の WAV には入りません。" }),
+  el("p", { className: "fine", textContent: "選んでいるトラック(ミックスの列の FX か、曲の画面で選んだトラック)、またはマスター(曲全体)にかかります(上から順に)。曲の再生・書き出しと、曲の画面の鍵盤にかかります。素材・ドラムキットの画面の鍵盤と、書き出す単音の WAV には入りません。" }),
   fxHead("刻む・連打する(曲の拍に合わせる)"),
   fxGroup("stutter", "スタッター(連打)", "パターンで光らせた所で、その頭の短い切れ端を何度も繰り返します(「ぼぼぼぼ」「ドゥルルル」)。曲の拍に合わせて刻まれます。続けて光らせた所は 1 つの連打になります。", [
     fxSteps(() => fxNow().stutter.steps, (f, v) => (f.stutter.steps = v), [
@@ -1480,10 +1481,10 @@ const benchResult = el("span", { className: "fine" });
 
 
 const detailsPanel = el("details", { className: "panel params" }, [
-  el("summary", { textContent: "細かい設定(基準ピッチ・鳴らし方・揺らぎ・最初から作り直す)" }),
+  el("summary", { textContent: "細かい設定(判定の探索範囲・鳴らし方・揺らぎ・最初から作り直す)" }),
   el("div", { className: "params-grid" }, [
     el("fieldset", {}, [
-      el("legend", { textContent: "基準ピッチ(素材そのものの高さ)" }),
+      el("legend", { textContent: "判定した高さ(素材そのものの高さ)" }),
       el("div", { className: "row tight" }, [el("span", { className: "control-label", textContent: "判定の探索範囲" }), rangeLowSelect, el("span", { className: "fine", textContent: "〜" }), rangeHighSelect, rangeStatus]),
       el("p", { className: "fine help", textContent: "判定がオクターブや 5 度で外れるときは、素材の実際の高さだけに絞って判定し直すと直ることがあります(初期値 G1〜B5)。" }),
       el("p", { className: "fine", textContent: "判定が外れているときは、編集画面の「判定した高さ」の横のボタンか、点線の「判定 …」の札のドラッグで直します。" }),

@@ -544,21 +544,21 @@ describe("Engine: 減衰 (synthesized, dying away while held)", () => {
       return engine;
     };
     const dbAt = (x: Float32Array, t: number) => 20 * Math.log10(rms(x, Math.round(t * SR), Math.round((t + 0.1) * SR)) + 1e-12);
-    // Held: about 1.2 s per e-fold, so 0.5 s → 2 s is about 11 dB down (and past the 0.8 s material: drawn out).
+    // Held: ピアノ風 is gone (-60 dB) in 3 s, so 0.5 s → 2 s is about 30 dB down (and past the 0.8 s material: drawn out).
     const held = play(make(), 60, 6, 0.2);
     const drop = dbAt(held, 0.5) - dbAt(held, 2.0);
-    expect(drop).toBeGreaterThan(8);
-    expect(drop).toBeLessThan(14);
-    expect(dbAt(held, 3)).toBeGreaterThan(-80);
-    // Held on and on: over by itself (below -80 dB, about 11 s), not a silent voice kept.
+    expect(drop).toBeGreaterThan(25);
+    expect(drop).toBeLessThan(35);
+    expect(dbAt(held, 2.5)).toBeGreaterThan(-80);
+    // Held on and on: over by itself (below -80 dB, about 4 s), not a silent voice kept.
     const engine = make();
     engine.noteOn(60, 1);
     const l = new Float32Array(128);
     const r = new Float32Array(128);
     let at = 0;
     for (; at < 16 * SR && engine.activeVoices() > 0; at += 128) engine.render(l, r);
-    expect(at / SR).toBeGreaterThan(9);
-    expect(at / SR).toBeLessThan(13);
+    expect(at / SR).toBeGreaterThan(3.5);
+    expect(at / SR).toBeLessThan(5);
     // Let go after 0.5 s: gone a quarter second later.
     const short = play(make(), 60, 0.5, 1);
     expect(dbAt(short, 0.85)).toBeLessThan(-90);

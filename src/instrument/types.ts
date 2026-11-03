@@ -264,6 +264,37 @@ export function withMakeMode(p: InstrumentParams, mode: MakeMode): InstrumentPar
   };
 }
 
+/**
+ * 音の消え方: amp.decay is the decay's time constant (the level falls to 37% over it); what the ear goes by is the
+ * time until it is gone, taken as -60 dB: that many time constants (ln 1000 ≈ 6.9).
+ */
+export const DECAY_TO_SILENCE = Math.log(1000);
+
+/** 音の消え方's ready choices: seconds until it is gone (-60 dB). */
+export const DECAY_CHOICES = { short: 0.5, piano: 3, long: 8 } as const;
+export type DecayChoice = "none" | keyof typeof DECAY_CHOICES | "custom";
+
+/** Which 音の消え方 the amp settings amount to (a ready choice only with nothing left after it). */
+export function decayChoiceOf(amp: InstrumentParams["amp"]): DecayChoice {
+  if (amp.sustain >= 1) return "none";
+  if (amp.sustain > 0) return "custom";
+  const heard = amp.decay * DECAY_TO_SILENCE;
+  for (const [k, sec] of Object.entries(DECAY_CHOICES)) if (Math.abs(heard - sec) < sec * 0.01) return k as keyof typeof DECAY_CHOICES;
+  return "custom";
+}
+
+/**
+ * The amp settings for a 音の消え方: a ready choice dies away to nothing in its time (and stops quickly when let
+ * go, as a damper does: release at least 0.25 s); 自分で決める keeps a decay that is already set (the piano's from
+ * none); 消えない holds the level.
+ */
+export function withDecayChoice(amp: InstrumentParams["amp"], choice: DecayChoice): InstrumentParams["amp"] {
+  if (choice === "none") return { ...amp, decay: DEFAULT_PARAMS.amp.decay, sustain: 1 };
+  const release = Math.max(amp.release, 0.25);
+  if (choice === "custom") return amp.sustain < 1 ? amp : { ...amp, decay: DECAY_CHOICES.piano / DECAY_TO_SILENCE, sustain: 0, release };
+  return { ...amp, decay: DECAY_CHOICES[choice] / DECAY_TO_SILENCE, sustain: 0, release };
+}
+
 export interface Preset {
   id: PresetId;
   /** The 作り方 it belongs to (the first of each is that 作り方's 初期値). */
@@ -320,7 +351,7 @@ export const PRESETS: Preset[] = [
   { id: "once", mode: "oneshot", label: "平坦にして 1 回(伸ばさない)", apply: (p) => ({ ...presetBase(p), sustainMode: "none" }) },
   // A struck, piano-like sound from any material: synthesized (flat, the vowel drawn out) and dying away while held —
   // the level falls toward nothing (decay ~1.2 s, sustain 0) — and stopped quickly when let go, as a damper does.
-  { id: "decay", mode: "hold", label: "減衰(伸ばしながら消える・ピアノ風)", apply: (p) => { const b = presetBase(p); return { ...b, amp: { ...b.amp, decay: 1.2, sustain: 0, release: 0.25 } }; } },
+  { id: "decay", mode: "hold", label: "減衰(伸ばしながら消える・ピアノ風)", apply: (p) => { const b = presetBase(p); return { ...b, amp: withDecayChoice(b.amp, "piano") }; } },
 ];
 
 // ---------------------------------------------------------------- export

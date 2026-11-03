@@ -30,7 +30,11 @@ import {
   DEFAULT_PARAMS,
   PRESETS,
   oneShotParams,
+  decayChoiceOf,
+  DECAY_TO_SILENCE,
   isHeld,
+  withDecayChoice,
+  type DecayChoice,
   makeModeOf,
   withMakeMode,
   type MakeMode,
@@ -783,27 +787,37 @@ const driftFixRow = el("div", {}, [
   check("伸ばす部分のゆっくりした音程のずれだけ直す(ビブラートや細かい抑揚は残す)", () => params.driftFix, (p, v) => (p.driftFix = v)),
   el("p", { className: "fine help", textContent: "長く伸ばしても音がずれていかないように、頭部より後ろのゆっくりした上がり下がり(0.2 秒より長い動き)だけを判定した高さにそろえます。オフにすると録音の音程のまま伸ばします(持続区間の中で音程が動く素材では、伸ばし方によってふらつきます)。" }),
 ]);
-// 減衰 (the former preset): the sound dies away after its attack, like a struck string, and stops quickly when let go
-// (a damper). On: ディケイ 1.2 s down to nothing, リリース 0.25 s; off: the level holds.
-const decayCheck = check(
-  "だんだん消えていく(ピアノ風の減衰)",
-  () => params.amp.sustain < 1,
-  (p, on) => (p.amp = on ? { ...p.amp, decay: 1.2, sustain: 0, release: Math.max(p.amp.release, 0.25) } : { ...p.amp, decay: DEFAULT_PARAMS.amp.decay, sustain: 1 }),
+// 音の消え方: the sound dies away after its attack, like a struck string — chosen by how long until it is gone
+// (-60 dB), not by the time constant the engine keeps. 自分で決める stays chosen (the slider out) even while the
+// values still match a ready choice, until another choice or another cut.
+let decayCustomOpen = false;
+const decayChoiceNow = (): DecayChoice => (decayCustomOpen && params.amp.sustain < 1 ? "custom" : decayChoiceOf(params.amp));
+const decaySelect = select<DecayChoice>(
+  "音の消え方",
+  [
+    ["none", "消えない(押している間鳴り続ける)"],
+    ["short", "短く(打楽器・ピチカート風。約 0.5 秒)"],
+    ["piano", "ピアノ風(約 3 秒)"],
+    ["long", "長く(ベル・ギター風。約 8 秒)"],
+    ["custom", "自分で決める"],
+  ],
+  decayChoiceNow,
+  (p, v) => {
+    decayCustomOpen = v === "custom";
+    p.amp = withDecayChoice(p.amp, v);
+  },
 );
-// (The release and the decay's own rows follow it.)
-decayCheck.querySelector("input")!.addEventListener("change", () => refreshControls());
-const decayRow = range("消えるまでの長さ", 0.05, 10, 0.05, () => params.amp.decay, (p, v) => (p.amp.decay = v), ms);
+// (Its own rows follow it.)
+decaySelect.querySelector("select")!.addEventListener("change", () => refreshControls());
+const decayRow = range("聞こえなくなるまで", 0.1, 30, 0.1, () => params.amp.decay * DECAY_TO_SILENCE, (p, v) => (p.amp.decay = v / DECAY_TO_SILENCE), (v) => `${v.toFixed(1)} 秒`);
 const sustainLevelRow = range("消えたあとに残る音量", 0, 0.95, 0.01, () => params.amp.sustain, (p, v) => (p.amp.sustain = v), pct);
+const decayHelp = el("p", { className: "fine help", textContent: "鳴り始めから、音量がだんだん下がっていきます。秒数は聞こえなくなる(-60 dB)までの目安です。「消えたあとに残る音量」を上げると、そこで下げ止まって鳴り続けます。" });
 const releaseRow = range("離したあとの消え方(リリース)", 0.005, 2, 0.005, () => params.amp.release, (p, v) => (p.amp.release = v), ms);
 const volumeSummary = el("summary");
 const volumeShape = el("details", { className: "sub fx" }, [
   volumeSummary,
   el("p", { className: "fine help", textContent: "入り = 音の頭(アタック)。終わり = 素材が尽きる手前。開いている間は「仕上がり」レーンの塗りの端につまみが出て、引いても変えられます。" }),
   range("入りのフェード", 0, 2, 0.005, () => params.amp.attack, (p, v) => (p.amp.attack = Math.max(0.001, v)), ms),
-  decayCheck,
-  decayRow,
-  sustainLevelRow,
-  releaseRow,
   range("終わりのフェード", 0, 3, 0.01, () => params.amp.fadeOut, (p, v) => (p.amp.fadeOut = v), ms),
   range("強弱の効き方(ベロシティ感度)", 0, 1, 0.01, () => params.amp.velocitySens, (p, v) => (p.amp.velocitySens = v), pct),
   el("p", { className: "fine help", textContent: "0% で強弱(打ち込みの「強弱」、鍵盤の強さ)に関係なく同じ音量、100% で強弱どおり。ドラムキットと音声トラックでは、強弱はそのまま音量になります。" }),
@@ -812,10 +826,8 @@ function refreshVolumeSummary(): void {
   const a = params.amp;
   const parts: string[] = [];
   if (a.attack >= 0.02) parts.push(`入り ${ms(a.attack)}`);
-  if (a.sustain < 1) parts.push(`減衰 ${ms(a.decay)}`);
-  if (!releaseRow.hidden) parts.push(`リリース ${ms(a.release)}`);
   if (a.fadeOut > 0) parts.push(`終わり ${ms(a.fadeOut)}`);
-  volumeSummary.textContent = `音量の形(${parts.length ? parts.join("・") : "入り・減衰・リリース・終わり・強弱"})`;
+  volumeSummary.textContent = `音量の形(${parts.length ? parts.join("・") : "入り・終わりのフェード・強弱"})`;
 }
 volumeShape.addEventListener("toggle", () => refreshFadeGrips());
 function refreshFadeGrips(): void {
@@ -830,7 +842,9 @@ function refreshMakeMode(): void {
   for (const e of holdOnly) e.hidden = !hold;
   for (const e of oneShotOnly) e.hidden = hold;
   wavetableRow.hidden = !hold || params.sustainMode !== "wavetable";
-  decayRow.hidden = sustainLevelRow.hidden = params.amp.sustain >= 1;
+  const decayChoice = decayChoiceNow();
+  decayRow.hidden = decayChoice !== "custom";
+  sustainLevelRow.hidden = decayHelp.hidden = decayChoice === "none";
   // (A one-shot only fades where it is let go with 離したら止める.)
   releaseRow.hidden = !hold && !params.stopOnRelease;
   refreshVolumeSummary();
@@ -900,6 +914,11 @@ const tunePanel = el("section", { className: "panel tune" }, [
   sustainOnlyRow,
   oneShot(playRangeRow),
   oneShot(stopOnReleaseRow),
+  decaySelect,
+  decayRow,
+  sustainLevelRow,
+  decayHelp,
+  releaseRow,
   pitchModeNote,
   shaping(pitchGroup([
     range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
@@ -2292,6 +2311,7 @@ function syncCut(): void {
 function applyCurrentCut(): void {
   const cut = cuts[current];
   if (!cut) return;
+  decayCustomOpen = false;
   markers = cut.markers;
   params = cut.params;
   note = cut.note;

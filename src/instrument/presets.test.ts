@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PARAMS, PRESETS, makeModeOf, withMakeMode, type InstrumentParams } from "./types";
+import { DECAY_CHOICES, DECAY_TO_SILENCE, DEFAULT_PARAMS, PRESETS, decayChoiceOf, makeModeOf, withDecayChoice, withMakeMode, type DecayChoice, type InstrumentParams } from "./types";
 import { parseSettings } from "../export/settings";
 
 const apply = (id: string, p: InstrumentParams) => PRESETS.find((x) => x.id === id)!.apply(p);
@@ -79,5 +79,23 @@ describe("作り方: 伸ばす(移調)", () => {
     const file = JSON.stringify({ app: "EasySampler", version: 1, cuts: [{ markers: { rangeStart: 0, sustainStart: 0.1, sustainEnd: 0.5, rangeEnd: 1 }, params }] });
     const p = parseSettings(file).cuts[0].params;
     expect([makeModeOf(p), p.driftFix]).toEqual(["holdTranspose", false]);
+  });
+});
+
+describe("音の消え方", () => {
+  it("each ready choice is gone (-60 dB) in its time, and is read back as itself; anything else is 自分で決める", () => {
+    for (const [choice, sec] of Object.entries(DECAY_CHOICES)) {
+      const amp = withDecayChoice(DEFAULT_PARAMS.amp, choice as DecayChoice);
+      expect(amp.decay * DECAY_TO_SILENCE).toBeCloseTo(sec);
+      expect([amp.sustain, decayChoiceOf(amp)]).toEqual([0, choice]);
+      expect(amp.release).toBeGreaterThanOrEqual(0.25);
+    }
+    expect(decayChoiceOf(DEFAULT_PARAMS.amp)).toBe("none");
+    expect(decayChoiceOf({ ...withDecayChoice(DEFAULT_PARAMS.amp, "piano"), sustain: 0.3 })).toBe("custom");
+    // 自分で決める keeps a decay already set, starts from ピアノ風 when there was none.
+    const mine = { ...DEFAULT_PARAMS.amp, decay: 2, sustain: 0.2 };
+    expect(withDecayChoice(mine, "custom")).toEqual(mine);
+    expect(withDecayChoice(DEFAULT_PARAMS.amp, "custom").decay * DECAY_TO_SILENCE).toBeCloseTo(3);
+    expect(decayChoiceOf(withDecayChoice(mine, "none"))).toBe("none");
   });
 });

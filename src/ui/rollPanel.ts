@@ -1047,12 +1047,13 @@ export class RollPanel {
   /** Inserts, deletes or duplicates the loop range on every track (notes and lines). */
   private arrange(kind: ArrangeKind): void {
     const { start, end } = this.project.loop;
-    if (kind === "delete" && !window.confirm(`${this.rangeText()}を全トラックから削除して、後ろを詰めますか?(「元に戻す」で戻せます)`)) return;
+    // (No question first: it is one step to undo, and the message says so.)
+    const range = this.rangeText();
     arrange(this.project, kind, start, end);
     this.afterArrange();
     this.commit();
     this.refreshButtons();
-    this.info.textContent = kind === "insert" ? "空白を入れました。" : kind === "delete" ? "削除して詰めました。" : "複製しました(ループ範囲は複製した側へ移りました)。";
+    this.info.textContent = kind === "insert" ? "空白を入れました。" : kind === "delete" ? `${range}を全トラックから削除して詰めました。「元に戻す」(Ctrl + Z)で戻せます。` : "複製しました(ループ範囲は複製した側へ移りました)。";
   }
 
   /** Every track changed at once: the roll shows the track afresh. */

@@ -11,7 +11,7 @@
 import { applyCorrections, CORRECTION_LABELS, correctionLabel, type CorrectionKind, type PitchCorrection } from "./analysis/corrections";
 import { midiToHz, pitchLabel } from "./analysis/pitch";
 import { EngineClient } from "./audio/engineClient";
-import { askToPersist, forget, keep, kept, onSaveState, storageEstimate, whenSaved, type SaveState } from "./audio/store";
+import { askToPersist, forget, keep, kept, onSaveState, startAnnouncing, storageEstimate, watchOtherTabs, whenSaved, type SaveState } from "./audio/store";
 import { chooseProject, createProject, currentProject, duplicateProject, newMaterialId, openProjects, projectKey, projectList, remapMaterials, removeProject, renameProject, touchProject } from "./audio/projects";
 import { buildProjectFile, parseProjectFile, PROJECT_FILE_EXTENSION } from "./audio/projectFile";
 import { addToLibrary, builtinPiano, copyInLibrary, findSame, inLibrary, libraryList, openLibrary, removeFromLibrary, setLibraryFrames, setLibraryName, songsUsing, updateStoredSongs } from "./audio/library";
@@ -60,7 +60,8 @@ import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 import { evenStems, renderSong, type RenderTrack } from "./daw/songRender";
 import { bandSpectrum, fitBalance, type BalanceStyle } from "./fx/balance";
 import { balanceGains, cleanEq, lowCutFor, madeByAuto, maskingDip } from "./daw/autoMix";
-import { integratedLoudness } from "./audio/loudness";
+import { ROLE_NAMES } from "./daw/roles";
+import { integratedLoudness, truePeak } from "./audio/loudness";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, KEY_FAMILIES, newSlot, renderSlot, slotFor, soundKey, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
@@ -3570,6 +3571,97 @@ async function autoEq(): Promise<void> {
   }
 }
 rollPanel.onAutoEq = () => void autoEq();
+
+/**
+ * まとめて自動ミックス (design.md 37): the automatic steps in the order they build on — the clean-up EQ, the ducking,
+ * the rooms (what the volumes are then measured through), the volumes, and the master EQ last (on the mix as it
+ * now is). Each stays its own step to undo.
+ */
+async function autoMixAll(): Promise<void> {
+  if (songBuilding) return;
+  const said: string[] = [];
+  const note = (label: string) => said.push(`${label}: ${rollPanel.info.textContent}`);
+  await autoEq();
+  note("EQ");
+  rollPanel.autoDuck();
+  note("沈め");
+  rollPanel.autoRooms();
+  note("残響");
+  await autoLevels();
+  note("音量");
+  await balanceMaster(rollPanel.balanceStyle());
+  rollPanel.info.textContent = `まとめて自動ミックスをしました。${said.map((s, k) => `${k + 1}. ${s}`).join(" ")} 5. マスター EQ: 下の「音域のバランス」に結果があります。`;
+}
+rollPanel.onAutoMixAll = () => void autoMixAll();
+
+/**
+ * ミックスを診断する (design.md 37): each heard track alone and the whole song (through the master, before the
+ * playback's safety limiter) rendered and measured, and what stands out listed. Changes nothing.
+ */
+async function diagnoseMix(): Promise<void> {
+  if (songBuilding) return;
+  const project = rollPanel.snapshot();
+  const roles = rollPanel.roles();
+  const heard = new Set(heardTracks(project));
+  if (!heard.size) {
+    rollPanel.info.textContent = "診断するトラック(音符があり、ミュートしていないもの)がありません。";
+    return;
+  }
+  songBuilding = true;
+  try {
+    const dB = (x: number) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
+    const peakOf = (channels: Float32Array[]) => {
+      let p = 0;
+      for (const c of channels) for (let i = 0; i < c.length; i++) p = Math.max(p, Math.abs(c[i]));
+      return dB(p);
+    };
+    const rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[] = [];
+    const lufsOf = new Map<number, number>();
+    let k = 0;
+    for (const [i, t] of project.tracks.entries()) {
+      if (!t.notes.length) continue;
+      const notes = rollPanel.trackWarnings(i);
+      if (!heard.has(i)) {
+        rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: null, peakDb: null, notes: [t.mute ? "ミュート中" : "ソロの外", ...notes] });
+        continue;
+      }
+      k++;
+      const song = await renderTrackAlone(project, t.id, (share) => (rollPanel.info.textContent = `診断しています… ${k} / ${heard.size + 1}「${t.name}」${Math.round(share * 100)}%`));
+      const l = integratedLoudness(song.channels[0], song.channels[1], song.sampleRate);
+      if (Number.isFinite(l) && l > -70) lufsOf.set(i, l);
+      rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: lufsOf.get(i) ?? null, peakDb: peakOf(song.channels), notes });
+    }
+    const whole = await renderSong(
+      { sampleRate: client.sampleRate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, null), tempoMap: tempoMapSec(project), raw: true },
+      async (share) => {
+        rollPanel.info.textContent = `診断しています… ${heard.size + 1} / ${heard.size + 1}(曲全体)${Math.round(share * 100)}%`;
+        await yieldToScreen();
+      },
+    );
+    const song = { lufs: integratedLoudness(whole.channels[0], whole.channels[1], whole.sampleRate), peakDb: dB(truePeak(whole.channels[0], whole.channels[1])) };
+    // What stands out.
+    const points: string[] = [];
+    if (song.peakDb > 0) points.push(`曲全体が 0 dB を超えます(トゥルーピーク +${song.peakDb.toFixed(1)} dB)。再生と書き出しでは抑えますが、そのぶん潰れます。全体の音量(フェーダー)かマスターのコンプのメイクアップを下げると素直な音になります。`);
+    const leads = [...lufsOf].filter(([i]) => roles[i] === "lead" || roles[i] === "audio").map(([, l]) => l);
+    const lead = leads.length ? Math.max(...leads) : null;
+    if (lead !== null) {
+      for (const [i, l] of lufsOf) {
+        const t = project.tracks[i];
+        if (roles[i] !== "lead" && roles[i] !== "audio" && roles[i] !== "drum" && l > lead + 1) points.push(`「${t.name}」(${ROLE_NAMES[roles[i]]})がメロディより ${(l - lead).toFixed(1)} dB 大きく、メロディを隠しがちです。`);
+        if (l < lead - 24) points.push(`「${t.name}」はメロディより ${(lead - l).toFixed(0)} dB 小さく、ほとんど聞こえません(要らなければミュート、要るなら音量を上げる)。`);
+      }
+    } else points.push("メロディのトラックがありません。ミックスの列で役割を「メロディ」にすると、自動の音量・EQ の基準になります。");
+    const wet = project.tracks.filter((t, i) => heard.has(i) && t.fx.reverb.on);
+    if (wet.length >= 3 && wet.length > (heard.size * 2) / 3) points.push(`${heard.size} 本中 ${wet.length} 本にリバーブがかかっています。全体がぼやけやすいので、速いパートや低いパートからは外すのが目安です。`);
+    if (project.masterFx.eq.on && project.masterFx.eq.lowDb >= 6) points.push("マスター EQ の低音が上限(+6 dB)です。低音が足りない曲は、EQ よりシンセベースを重ねるほうが効果的です(「マスター EQ を目安に寄せる」のあと、足りなければ下にボタンが出ます)。");
+    for (const r of rows) if (r.peakDb !== null && r.peakDb > 0) points.push(`「${r.name}」だけで 0 dB を超えています(+${r.peakDb.toFixed(1)} dB)。トラックの音量かエフェクト(コンプのメイクアップなど)を下げてください。`);
+    rollPanel.showDiagnosis(rows, song, points);
+    rollPanel.info.textContent = `診断しました: 曲全体 ${song.lufs.toFixed(1)} LUFS・ピーク ${song.peakDb.toFixed(1)} dBTP、気になる点 ${points.length} 件(下の「診断の結果」)。`;
+  } finally {
+    songBuilding = false;
+  }
+}
+rollPanel.onDiagnose = () => void diagnoseMix();
 client.onMeters = (meters) => rollPanel.showMeters(meters);
 
 /** The cuts of every material, for the tracks' lists. */
@@ -4135,6 +4227,59 @@ function benchmark(): void {
 }
 
 // ---------------------------------------------------------------- PWA
+
+/** This page's build (vite.config.ts); "dev" while developing. */
+declare const __BUILD_ID__: string;
+
+/**
+ * A new release (design.md 37): version.json names the newest build; when it is not this page's, a bar says so with
+ * a button that saves and reloads (a page left open would go on running the old code).
+ */
+function watchForRelease(): void {
+  if (__BUILD_ID__ === "dev") return;
+  const bar = el("div", { className: "release-bar", role: "status", hidden: true }, [
+    el("span", { textContent: "新しい版があります。読み込み直すと使えます(作業中の内容は保存してから読み込み直します)。" }),
+    button("読み込み直す", "small primary", () => {
+      void rollPanel
+        .flush()
+        .then(() => whenSaved())
+        .finally(() => location.reload());
+    }),
+  ]);
+  document.body.append(bar);
+  const check = async () => {
+    try {
+      const response = await fetch(`${import.meta.env.BASE_URL}version.json?t=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) return;
+      const { build } = (await response.json()) as { build?: string };
+      if (build && build !== __BUILD_ID__) bar.hidden = false;
+    } catch {
+      // offline: nothing to say
+    }
+  };
+  void check();
+  window.setInterval(() => void check(), 10 * 60 * 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void check();
+  });
+}
+watchForRelease();
+
+/**
+ * The same project (or the shared materials) changed in another tab (design.md 37): this tab's copy is old, so the
+ * store stops taking its writes, and a bar says so with a button that loads it again (without saving).
+ */
+for (const type of ["pointerdown", "keydown"]) window.addEventListener(type, startAnnouncing, { capture: true, once: true });
+watchOtherTabs(
+  (key) => key === `project:${currentProject().id}` || key.startsWith("settings:") || key.startsWith("audio:") || key === "materialLibrary",
+  () => {
+    const bar = el("div", { className: "release-bar stale-bar", role: "alert" }, [
+      el("span", { textContent: "別のタブでこのプロジェクト(または素材)が変更されました。このタブの内容は古いので、上書きしないよう保存を止めています。" }),
+      button("読み込み直す", "small primary", () => location.reload()),
+    ]);
+    document.body.append(bar);
+  },
+);
 
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {

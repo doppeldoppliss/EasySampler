@@ -17,7 +17,9 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
-  if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) return;
+  const url = new URL(request.url);
+  // (version.json is how the page learns of a new release: always from the network.)
+  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.endsWith("/version.json")) return;
   event.respondWith(
     (async () => {
       const cache = await caches.open(CACHE);

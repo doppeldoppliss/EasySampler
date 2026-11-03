@@ -57,13 +57,56 @@ export function whenSaved(): Promise<void> {
   return pending === 0 ? Promise.resolve() : new Promise((resolve) => idle.push(resolve));
 }
 
-/** Keeps a value under its key (structured clone: typed arrays as they are). Whether it was kept. */
+// ------------------------------------------------------------ other tabs (design.md 37)
+
+/** This tab, among the others on the same store. */
+const TAB = Math.random().toString(36).slice(2);
+const channel = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel("easysampler-store");
+/** Another tab wrote what this one holds: this one writes no more (its copy is old), until it is loaded again. */
+let frozen = false;
+let onFrozen: ((key: string) => void) | null = null;
+let mine: (key: string) => boolean = () => false;
+/**
+ * Whether this tab's writes are told to the others: not before the person has touched it — a page coming up writes
+ * back what it just read (its project, its material), and a second tab merely opened must not stop the first.
+ */
+let announcing = false;
+
+/** From now on this tab's writes are told to the other tabs. */
+export function startAnnouncing(): void {
+  announcing = true;
+}
+
+/**
+ * Watches the other tabs on the store: when one of them writes a key `holds` says this tab has open (its project,
+ * a shared material), this tab stops writing and `frozen` is told (once) — so an old copy never overwrites a newer one.
+ */
+export function watchOtherTabs(holds: (key: string) => boolean, frozenNow: (key: string) => void): void {
+  mine = holds;
+  onFrozen = frozenNow;
+}
+
+channel?.addEventListener("message", (event: MessageEvent<{ tab: string; key: string }>) => {
+  const { tab, key } = event.data ?? {};
+  if (!key || tab === TAB || frozen || !mine(key)) return;
+  frozen = true;
+  onFrozen?.(key);
+});
+
+/** Whether another tab's write has stopped this one's. */
+export function isFrozen(): boolean {
+  return frozen;
+}
+
+/** Keeps a value under its key (structured clone: typed arrays as they are). Whether it was kept (not when another tab's newer write froze this one). */
 export async function keep(key: string, value: unknown): Promise<boolean> {
+  if (frozen) return false;
   pending++;
   notify();
   try {
     await run("readwrite", (store) => store.put(value, key));
     failed = false;
+    if (announcing) channel?.postMessage({ tab: TAB, key });
     return true;
   } catch {
     failed = true;
@@ -85,6 +128,7 @@ export async function kept(key: string): Promise<unknown> {
 
 /** Forgets a key. */
 export async function forget(key: string): Promise<void> {
+  if (frozen) return;
   try {
     await run("readwrite", (store) => store.delete(key));
   } catch {

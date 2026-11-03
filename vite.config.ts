@@ -3,7 +3,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vitest/config";
 
-/** Gives the service worker's cache a name of this build's own (public/sw.js carries a placeholder). */
+/** This build's id: the page knows it (__BUILD_ID__), version.json says the newest one served, the service worker's cache is named by it. */
+const BUILD_ID = Date.now().toString(36);
+
+/** Gives the service worker's cache a name of this build's own (public/sw.js carries a placeholder), and writes version.json. */
 function stampServiceWorker(): Plugin {
   return {
     name: "maddaw-stamp-sw",
@@ -11,7 +14,8 @@ function stampServiceWorker(): Plugin {
     closeBundle() {
       const file = fileURLToPath(new URL("dist/sw.js", import.meta.url));
       if (!existsSync(file)) return;
-      writeFileSync(file, readFileSync(file, "utf8").replace("__BUILD__", Date.now().toString(36)));
+      writeFileSync(file, readFileSync(file, "utf8").replace("__BUILD__", BUILD_ID));
+      writeFileSync(fileURLToPath(new URL("dist/version.json", import.meta.url)), JSON.stringify({ build: BUILD_ID }));
     },
   };
 }
@@ -23,6 +27,7 @@ export default defineConfig(({ mode }) => {
   const lan = mode === "lan";
   return {
     base: "./",
+    define: { __BUILD_ID__: JSON.stringify(mode === "production" ? BUILD_ID : "dev") },
     plugins: [stampServiceWorker(), ...(lan ? [basicSsl()] : [])],
     server: { host: lan ? true : undefined },
     preview: { host: lan ? true : undefined },

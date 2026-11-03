@@ -11,6 +11,7 @@ import type { TrackSpec } from "../engine/messages";
 import {
   autoToSec,
   BACKING,
+  MAX_TRACK_GAIN,
   clampPitch,
   newTrackId,
   setTimeSig,
@@ -210,6 +211,9 @@ export class RollPanel {
   /** 音量を合わせる / トラックの EQ (自動): the page renders and measures, then calls applyGains / applyTrackFx. */
   onAutoLevels: () => void = () => {};
   onAutoEq: () => void = () => {};
+  /** まとめて自動ミックス / ミックスを診断する: the page runs them (they render). */
+  onAutoMixAll: () => void = () => {};
+  onDiagnose: () => void = () => {};
   readonly exportStatus = el("p", { className: "fine", role: "status" });
 
   private project: Project = emptyProject();
@@ -414,7 +418,7 @@ export class RollPanel {
   // (Twice over: the bar that follows the scroll, and the ミックス view's master strip.)
   private readonly masterFills = [0, 1].map(() => el("span", { className: "meter-fill" }));
   private readonly masterTexts = [0, 1].map(() => el("span", { className: "fine num master-meter-text" }));
-  private readonly clipMarks = [0, 1].map(() => el("button", { type: "button", className: "clip-mark", textContent: "0 dB 超え", title: "どこかで 0 dB を超えました(書き出すと音割れします)。押すと消えます" }));
+  private readonly clipMarks = [0, 1].map(() => el("button", { type: "button", className: "clip-mark", textContent: "0 dB 超え", title: "この再生のどこかでミックスが 0 dB を超えました。聞こえる音はリミッターで -1 dB に抑え、書き出す WAV も割れないよう調整しますが、そのぶん潰れたり全体が小さくなったりします。音量を下げると素直な音になります。押すと消えます(再生を始めるたびにも消えます)" }));
   /** The ミックス view: a strip per track and the master's (placed by the page), with the song's export under them. */
   readonly mixElement: HTMLElement;
   private readonly mixStrips = el("div", { className: "mix-strips" });
@@ -427,6 +431,13 @@ export class RollPanel {
     (Object.entries(BALANCE_STYLES) as [BalanceStyle, string][]).map(([id, label]) => el("option", { value: id, textContent: label })),
   );
   private readonly balanceStatus = el("p", { className: "fine", role: "status" });
+  /** Shown when the master EQ cannot make up for missing lows: a synth bass under the bass line. */
+  private readonly bassFill = el("div", { className: "row tight", hidden: true }, [
+    el("span", { className: "warn fine", textContent: "低音(30〜80 Hz)が目安よりかなり足りません。EQ では補えないので、ベースの音符をシンセベースで重ねるのが効果的です。" }),
+    button("シンセベースを重ねる", "small", () => this.layerSynthBass(), "ベースのトラックを複製して、簡易シンセの「シンセベース」で鳴らすトラックを足します(元に戻すで戻せます)"),
+  ]);
+  /** ミックスを診断する: its table (empty until run). */
+  private readonly diagnosis = el("div", { className: "diagnosis" });
   private readonly balanceCanvas = el("canvas", { className: "balance-chart", ariaLabel: "目安との差(変える前と後)" });
   private balanceShown: { result: BalanceResult; style: BalanceStyle } | null = null;
   // The spectrum of what plays (the ミックス view), drawn while that view is on screen.
@@ -598,6 +609,11 @@ export class RollPanel {
         button("トラック名を自動で付ける", "small", () => this.nameTracks(), "「MIDI Out #3」のような名前のトラックに、音符から「ベース」「メロディ」「和音」などの名前を付けます(名前のあるトラックはそのまま)"),
       ]),
       el("div", { className: "row tight mix-tools" }, [
+        button("まとめて自動ミックス", "small primary", () => this.onAutoMixAll(), "トラックの EQ → キックに合わせて沈める → 残響 → 音量 → マスター EQ(下で選んだ目安)を、この順で続けて行います。それぞれ「元に戻す」で 1 段ずつ戻せます"),
+        button("ミックスを診断する", "small", () => this.onDiagnose(), "トラックを 1 本ずつと曲全体を書き出して、聞こえの大きさ・ピーク・気になる点を一覧にします(設定は変えません)"),
+      ]),
+      this.diagnosis,
+      el("div", { className: "row tight mix-tools" }, [
         el("span", { className: "fine", textContent: "役割から自動で:" }),
         button("音量を合わせる", "small", () => this.onAutoLevels(), "トラックを 1 本ずつ書き出して聞こえの大きさ(LUFS)を測り、役割ごとの目安(原曲・伴奏かメロディを基準に、ベース −2・ドラム −1・和音 −5・伴奏 −6・ハモリ −8 dB。同じ役割が複数なら分け合う)に音量を合わせます"),
         button("トラックの EQ", "small", () => this.onAutoEq(), "メロディ・和音・伴奏・ハモリのトラックに、低い音符の少し下からのローカットと、メロディとぶつかる帯を 2〜3 dB 削る EQ を入れます(EQ を自分で入れたトラックはそのまま)"),
@@ -614,6 +630,7 @@ export class RollPanel {
         ]),
         el("p", { className: "fine", textContent: "仕上がった曲の平均は、低音から高音へなだらかに下がる形になります。その目安(標準 / 電子音・ボカロ系は低音と高音が多め / 生楽器系はなだらか)との差を測って、マスター EQ で半分ほど寄せます(各 ±6 dB まで)。直せるのは全体の傾きだけで、トラック同士のぶつかりは各トラックの EQ で。最後は耳で調整してください。" }),
         this.balanceStatus,
+        this.bassFill,
         this.balanceCanvas,
       ]),
       el("div", { className: "spectrum-box" }, [
@@ -1628,7 +1645,7 @@ export class RollPanel {
   }
 
   /** キックに合わせて沈める: the bass and the held accompaniment duck to the drum tracks' kick. */
-  private autoDuck(): void {
+  autoDuck(): void {
     const hasKick = this.project.tracks.some((t) => t.kind === "drum" && t.notes.some((n) => KICK_KEYS.includes(n.pitch)));
     if (!hasKick) {
       this.info.textContent = "キック(ドラムトラックの 35・36 番の音符)がないので、沈めるきっかけがありません。";
@@ -1654,7 +1671,7 @@ export class RollPanel {
   }
 
   /** 残響を付ける: a room on each track by its part and the tempo. */
-  private autoRooms(): void {
+  autoRooms(): void {
     const roles = this.roles();
     const { fxs, done, kept, removed } = this.autoEffect(
       "reverb",
@@ -1723,8 +1740,77 @@ export class RollPanel {
     this.balanceStatus.textContent = `「${BALANCE_STYLES[style]}」に寄せて、マスター EQ を ローカット ${hz(e.lowCutHz)}・低音(${hz(e.lowHz)} 以下)${signed(e.lowDb)} dB・中音(${hz(e.midHz)})${signed(e.midDb)} dB・高音(${hz(e.highHz)} 以上)${signed(e.highDb)} dB にしました。「元に戻す」で戻せます。`;
     this.balanceShown = { result, style };
     this.drawBalance();
+    // The lows still well short after the EQ (30–80 Hz, 6 dB and more under the target): the EQ cannot do it.
+    const lows = BAND_HZ.map((hz, j) => (hz >= 30 && hz <= 80 ? result.after[j] : null)).filter((x): x is number => x !== null);
+    const short = lows.reduce((a, b) => a + b, 0) / Math.max(1, lows.length);
+    this.bassFill.hidden = !(short < -6);
   }
 
+  /** What stands out on a track for the diagnosis: its range, a fader at the top, a heavy room set by hand. */
+  trackWarnings(i: number): string[] {
+    const t = this.project.tracks[i];
+    if (!t) return [];
+    const out: string[] = [];
+    if (this.farWarning(t)) out.push("音源の高さから離れすぎ");
+    if (t.gain >= MAX_TRACK_GAIN - 1e-6) out.push("音量が上限");
+    if (t.fx.reverb.on && t.fx.reverb.mix >= 0.35) out.push(`残響が多め(${Math.round(t.fx.reverb.mix * 100)}%)`);
+    if (t.fx.compressor.on && t.fx.compressor.makeupDb >= 6) out.push(`コンプのメイクアップが大きめ(+${t.fx.compressor.makeupDb} dB)`);
+    return out;
+  }
+
+  /** The style chosen for the master EQ (まとめて自動ミックス uses it too). */
+  balanceStyle(): BalanceStyle {
+    return this.balanceSelect.value as BalanceStyle;
+  }
+
+  /**
+   * シンセベースを重ねる: the bass track (the one with the most notes among the bass parts on a material) copied onto
+   * the 簡易シンセ's synth bass, right after it, with its effects and volume.
+   */
+  private layerSynthBass(): void {
+    const roles = this.roles();
+    if (this.project.tracks.some((t, i) => roles[i] === "bass" && t.instrument === BACKING && t.synth === "bass")) {
+      this.info.textContent = "シンセベースのトラックはもうあります。音量を上げるか、「マスター EQ を目安に寄せる」をもう一度試してください。";
+      return;
+    }
+    const candidates = this.project.tracks.map((t, i) => ({ t, i })).filter(({ t, i }) => roles[i] === "bass" && t.kind === "melodic" && t.notes.length);
+    if (!candidates.length) {
+      this.info.textContent = "ベースのトラックが見つかりません(ミックスの列で役割を「ベース」にすると選べます)。";
+      return;
+    }
+    const { t, i } = candidates.reduce((a, b) => (b.t.notes.length > a.t.notes.length ? b : a));
+    // (Down by octaves until its middle is at A2 or under: a bass line written high would add nothing under 80 Hz.)
+    const pitches = t.notes.map((n) => n.pitch).sort((x, y) => x - y);
+    let down = 0;
+    while (pitches[pitches.length >> 1] - 12 * down > 45 && pitches[0] - 12 * (down + 1) >= 24) down++;
+    const copy: Track = { ...structuredClone(t), id: newTrackId(), name: "シンセベース", instrument: BACKING, synth: "bass", role: "bass", solo: false, notes: t.notes.map((n) => ({ ...structuredClone(n), id: newId(), pitch: n.pitch - 12 * down })) };
+    this.project.tracks.splice(i + 1, 0, copy);
+    if (this.selected > i) this.selected++;
+    this.reload();
+    this.renderTracks();
+    this.renderMix();
+    this.onTrackChange();
+    this.scheduleSave();
+    this.commit();
+    this.bassFill.hidden = true;
+    this.info.textContent = `「${t.name}」の音符をシンセベースで重ねたトラックを足しました${down ? `(低音が出るよう ${down} オクターブ下)` : ""}。「音量を合わせる」と「マスター EQ を目安に寄せる」をもう一度押すと、足した分も含めて整います。「元に戻す」で戻せます。`;
+  }
+
+  /** ミックスを診断する: the table of what was measured, and what stands out. */
+  showDiagnosis(rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[], song: { lufs: number; peakDb: number } | null, points: string[]): void {
+    const f = (x: number | null, unit: string) => (x === null || !Number.isFinite(x) ? "—" : `${x.toFixed(1)} ${unit}`);
+    const table = el("table", { className: "diagnosis-table fine" }, [
+      el("tr", {}, ["トラック", "役割", "大きさ", "ピーク", "気になる点"].map((h) => el("th", { textContent: h }))),
+      ...rows.map((r) => el("tr", {}, [r.name, r.role, f(r.lufs, "LUFS"), f(r.peakDb, "dB"), r.notes.join("・") || "—"].map((c) => el("td", { textContent: c })))),
+    ]);
+    this.diagnosis.replaceChildren(
+      el("details", { open: true }, [
+        el("summary", { textContent: `診断の結果${song ? `(曲全体 ${f(song.lufs, "LUFS")}・ピーク ${f(song.peakDb, "dBTP")})` : ""}` }),
+        ...(points.length ? [el("ul", { className: "fine" }, points.map((p) => el("li", { textContent: p })))] : [el("p", { className: "fine", textContent: "目立った問題は見つかりませんでした。" })]),
+        el("div", { className: "diagnosis-scroll" }, [table]),
+      ]),
+    );
+  }
   /** The song against the target, band by band: the band around the target (±3 dB), before (thin) and after (thick). */
   private drawBalance(): void {
     const shown = this.balanceShown;
@@ -1854,6 +1940,14 @@ export class RollPanel {
       const plays = this.playsLabel(t);
       const far = this.farWarning(t);
       const shift = far ? this.octaveFitOf(t) : 0;
+      // What the automatic mixing put in (its own, not hand-set): a mark that opens the effects.
+      const autos = (["eq", "duck", "reverb"] as const).filter((k) => t.fx[k].on && madeByAuto(t.fx, k, this.project.bpm)).map((k) => ({ eq: "EQ", duck: "沈め", reverb: "残響" })[k]);
+      const autoMark = autos.length
+        ? button(`自動 ${autos.join("・")}`, "small mix-auto", () => {
+            this.selectTrack(i);
+            this.onOpenFx();
+          }, `自動ミックスで入れた設定: ${autos.join("・")}。押すとエフェクトを開きます(手で変えると自分の設定になり、自動では触らなくなります)`)
+        : el("span", { className: "mix-auto" });
       const strip = el("div", { className: `mix-strip${i === this.selected ? " selected" : ""}` }, [
         el("span", { className: "mix-name", textContent: t.name, title: t.name }),
         el("span", { className: "fine mix-plays", textContent: plays, title: plays }),
@@ -1863,6 +1957,7 @@ export class RollPanel {
             : el("span", { className: "warn fine mix-far", textContent: "⚠ 音域", title: far })
           : el("span", { className: "mix-far" }),
         this.roleSelect(t, roles[i].role),
+        autoMark,
         el("span", { className: "row tight mix-ms" }, [c.mute, c.solo]),
         el("label", { className: "mix-pan fine" }, ["パン", c.pan]),
         el("span", { className: "mix-fader" }, [c.volume, el("span", { className: "meter vertical" }, [c.meterFill])]),
@@ -2573,6 +2668,8 @@ export class RollPanel {
     this.sendMasterAuto();
     this.postLoop(this.loopSecs());
     this.startedAt = this.client.playSong(this.from);
+    // (A new playback: the 0 dB 超え mark says what this one does, not a playback before.)
+    for (const mark of this.clipMarks) mark.hidden = true;
     this.playButton.textContent = "■ 停止";
     this.summarize();
     this.onPlayingChange(true);

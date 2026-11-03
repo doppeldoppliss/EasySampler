@@ -1772,3 +1772,63 @@ button.mix-far {
   font-size: 11px;
   cursor: pointer;
 }
+
+/* A new release: a bar along the bottom, above everything (design.md 37). */
+.release-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  font-size: 13px;
+}
+.release-bar[hidden] {
+  display: none;
+}
+/* Another tab changed this project: at the top, so it is not missed (and not under the release bar). */
+.release-bar.stale-bar {
+  top: 12px;
+  bottom: auto;
+  border-color: var(--warn, #d9534f);
+}
+
+/* A strip's mark for what the automatic mixing put in (design.md 37). */
+.mix-auto {
+  min-height: 1.2em;
+  font-size: 10px;
+}
+button.mix-auto {
+  min-height: 0;
+  padding: 1px 4px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ミックスを診断する: the table scrolls sideways on a phone. */
+.diagnosis details {
+  margin: 6px 0;
+}
+.diagnosis-scroll {
+  overflow-x: auto;
+}
+.diagnosis-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.diagnosis-table th,
+.diagnosis-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}

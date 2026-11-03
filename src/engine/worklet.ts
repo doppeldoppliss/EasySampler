@@ -8,7 +8,7 @@
 
 import { ShortTermMeter } from "../audio/loudness";
 import { FxChain } from "../fx/chain";
-import type { InstrumentParams, Markers } from "../instrument/types";
+import { DEFAULT_FX, type InstrumentParams, type Markers } from "../instrument/types";
 import { SongPlayer, type TrackSound } from "../song/player";
 import { BackingSound, ClipSound, EngineSound, SampleSound } from "../song/sounds";
 import type { PreparedSource } from "./engine";
@@ -64,6 +64,17 @@ class EngineProcessor extends AudioWorkletProcessor {
   /** The keyboard through the master effects too (the 曲 view), or past them (dry). */
   private liveMaster = false;
   private readonly master = new FxChain(sampleRate);
+  /**
+   * The last guard (design.md 37): what reaches the speakers is held under −1 dBFS, as an exported WAV is (playback
+   * and the file sound alike). The meters read before it, so a mix too hot still says so (0 dB 超え).
+   */
+  private readonly safety = (() => {
+    const chain = new FxChain(sampleRate);
+    const fx = structuredClone(DEFAULT_FX);
+    fx.limiter = { on: true, gainDb: 0, ceilingDb: -1, releaseMs: 80 };
+    chain.set(fx);
+    return chain;
+  })();
   private masterOn = false;
   private hold = 1;
   private bpm = 120;
@@ -366,6 +377,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
     }
     this.meter(left, right, frames);
+    this.safety.process(left, right, frames);
     if (++this.quanta >= STATUS_EVERY) {
       this.quanta = 0;
       let voices = this.live.engine.activeVoices();

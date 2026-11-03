@@ -140,7 +140,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     }
     this.trackSounds = next;
     this.trackSpecs = tracks;
-    this.song.setTracks(tracks.map((t) => ({ ...t, sound: next.get(t.id)! })));
+    this.song.setTracks(tracks.map((t) => ({ ...t, sound: next.get(t.id)!, kicks: t.instrument === "drum" })));
     this.song.setTempo(this.bpm);
   }
 

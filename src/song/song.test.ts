@@ -3,6 +3,7 @@ import { MidiParseError, parseMidi } from "./midi";
 import { BackingSynth } from "./backing";
 import { songParts, type SeqNote } from "./parts";
 import { autoValue, SongPlayer, type PlayerTrack, type TrackSound } from "./player";
+import { DEFAULT_FX } from "../instrument/types";
 
 // ------------------------------------------------------------ a tiny SMF writer
 
@@ -180,6 +181,32 @@ describe("SongPlayer", () => {
     run(player, 256, 4);
     // Song 1.0 s = context frame 500 → the sound has rendered 500 − 256 = 244 frames by then.
     expect(log).toEqual(["on 62 @244", "off 62 @344"]);
+  });
+
+  it("ducks to the kick: a track with the sidechain on \"kick\" goes down where a drum track's 35 / 36 falls (not its snare), even muted", () => {
+    const player = new SongPlayer(SR);
+    const fx = structuredClone(DEFAULT_FX);
+    fx.duck = { ...fx.duck, on: true, source: "kick", depthDb: -12, releaseMs: 50 };
+    const quiet = (id: string, notes: SeqNote[], extra = {}) => track(id, fakeSound([], "", 0), notes, extra);
+    player.setTracks([
+      track("bass", fakeSound([], "", 0.5), [n(0, 2, 40)], { fx }),
+      quiet("drums", [n(0.5, 0.6, 36), n(1.0, 1.1, 38)], { kicks: true, mute: true }),
+    ]);
+    player.play(0, 0);
+    const levels: number[] = [];
+    const l = new Float32Array(128);
+    const r = new Float32Array(128);
+    for (let b = 0; b < 12; b++) {
+      player.render(b * 128, l, r, 128);
+      for (let i = 0; i < 128; i += 16) levels[b * 128 + i] = Math.abs(l[i]);
+    }
+    const at = (frame: number) => levels[Math.round(frame / 16) * 16];
+    expect(at(400)).toBeCloseTo(0.5, 2);
+    // About 12 dB down while the kick holds.
+    expect(at(528)).toBeLessThan(0.2);
+    // Back up after it lets go; the snare at 1.0 s does nothing.
+    expect(at(800)).toBeGreaterThan(0.45);
+    expect(at(1040)).toBeGreaterThan(0.45);
   });
 
   it("loops: at the loop's end everything is released and the loop's start plays again, on the exact sample", () => {

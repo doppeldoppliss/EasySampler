@@ -1759,3 +1759,16 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
 .balance-chart.on {
   display: block;
 }
+
+/* A mix strip's role (自動 or set by hand), and its octave fix. */
+.mix-role {
+  width: 100%;
+  font-size: 11px;
+  text-align: center;
+}
+button.mix-far {
+  min-height: 0;
+  padding: 1px 4px;
+  font-size: 11px;
+  cursor: pointer;
+}

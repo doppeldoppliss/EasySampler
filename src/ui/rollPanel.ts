@@ -54,7 +54,9 @@ import { songParts } from "../song/parts";
 import { drumRows, keyLabel, soundKey, type Kit } from "../daw/kit";
 import { arrange, type ArrangeKind } from "../daw/arrange";
 import { armOnce, el } from "./dom";
-import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, spreadPans } from "../daw/roles";
+import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, ROLE_NAMES, spreadPans, trackRoles, type Role } from "../daw/roles";
+import { kickDuck, octaveFit, roomFor } from "../daw/autoMix";
+import { KICK_KEYS } from "../song/player";
 import { PianoRoll } from "./pianoRoll";
 import { isSynthPreset, SYNTH_PRESETS } from "../song/backing";
 import { BALANCE_STYLES, BAND_HZ, type BalanceResult, type BalanceStyle } from "../fx/balance";
@@ -205,6 +207,9 @@ export class RollPanel {
   onExport: (kind: "wav" | "stems" | "mid") => void = () => {};
   /** マスター EQ を目安に寄せる: the page renders and measures the song, then calls applyBalance. */
   onBalance: (style: BalanceStyle) => void = () => {};
+  /** 音量を合わせる / トラックの EQ (自動): the page renders and measures, then calls applyGains / applyTrackFx. */
+  onAutoLevels: () => void = () => {};
+  onAutoEq: () => void = () => {};
   readonly exportStatus = el("p", { className: "fine", role: "status" });
 
   private project: Project = emptyProject();
@@ -591,6 +596,13 @@ export class RollPanel {
       el("div", { className: "row tight mix-tools" }, [
         button("パンを自動で広げる", "small", () => this.spreadPans(), "ドラム・ベース・メロディは中央のまま、和音と伴奏を高さの順に左右へ振り分けます(元に戻すで戻せます)"),
         button("トラック名を自動で付ける", "small", () => this.nameTracks(), "「MIDI Out #3」のような名前のトラックに、音符から「ベース」「メロディ」「和音」などの名前を付けます(名前のあるトラックはそのまま)"),
+      ]),
+      el("div", { className: "row tight mix-tools" }, [
+        el("span", { className: "fine", textContent: "役割から自動で:" }),
+        button("音量を合わせる", "small", () => this.onAutoLevels(), "トラックを 1 本ずつ書き出して聞こえの大きさ(LUFS)を測り、役割ごとの目安(原曲・伴奏かメロディを基準に、ベース −2・ドラム −1・和音 −5・伴奏 −6・ハモリ −8 dB。同じ役割が複数なら分け合う)に音量を合わせます"),
+        button("トラックの EQ", "small", () => this.onAutoEq(), "メロディ・和音・伴奏・ハモリのトラックに、低い音符の少し下からのローカットと、メロディとぶつかる帯を 2〜3 dB 削る EQ を入れます(EQ を自分で入れたトラックはそのまま)"),
+        button("キックに合わせて沈める", "small", () => this.autoDuck(), "ベース(−6 dB)と和音・伴奏・ハモリ(−3 dB)に、ドラムトラックのキック(35・36 番)で沈むサイドチェーンを入れます(サイドチェーンを自分で入れたトラックはそのまま)"),
+        button("残響を付ける", "small", () => this.autoRooms(), "メロディは少し、和音・伴奏・ハモリは多めに、テンポに合った長さのリバーブを入れます。ベース・ドラム・原曲にはなし(リバーブを自分で入れたトラックはそのまま)"),
       ]),
       this.mixInfo,
       this.mixStrips,
@@ -1491,6 +1503,153 @@ export class RollPanel {
     return null;
   }
 
+  /** Each track's role: set by hand (the ミックス strip) or worked out from its notes. */
+  roles(): Role[] {
+    return trackRoles(this.project.tracks).map((r) => r.role);
+  }
+
+  /** A melodic track's role, chosen by hand: 自動 (what it would be worked out as, shown) or one of the parts. */
+  private roleSelect(t: Track, now: Role): HTMLElement {
+    if (t.kind !== "melodic") return el("span", { className: "fine mix-role", textContent: ROLE_NAMES[now] });
+    const i = this.project.tracks.indexOf(t);
+    const worked = t.role ? trackRoles(this.project.tracks.map((x) => (x === t ? { ...x, role: null } : x)))[i].role : now;
+    const parts: Role[] = ["lead", "bass", "chords", "backing", "harmony"];
+    const select = el("select", { className: "mix-role", ariaLabel: "トラックの役割", title: "自動の音量・EQ・サイドチェーン・残響が使う役割。「自動」は音符から判定します" }, [
+      el("option", { value: "", textContent: `自動(${ROLE_NAMES[worked]})` }),
+      ...parts.map((r) => el("option", { value: r, textContent: ROLE_NAMES[r] })),
+    ]);
+    select.value = t.role ?? "";
+    select.addEventListener("change", () => {
+      t.role = (select.value || null) as Role | null;
+      this.scheduleSave();
+      this.commit();
+      // (Another track's worked-out role may change with it: a lead set by hand.)
+      this.renderMix();
+    });
+    return select;
+  }
+
+  /** How many octaves would bring a track's notes nearest its cut's recorded pitch (0: none, or not on a cut). */
+  private octaveFitOf(t: Track): number {
+    if (t.kind !== "melodic" || !t.instrument || t.instrument === BACKING) return 0;
+    const root = this.options.find((o) => o.id === t.instrument)?.note;
+    return root === undefined ? 0 : octaveFit(t.notes, root);
+  }
+
+  /** The track row's button for it (none when no octave would help). */
+  private octaveFitButton(i: number): HTMLElement[] {
+    const k = this.octaveFitOf(this.project.tracks[i]);
+    if (!k) return [];
+    return [button(`${Math.abs(k)} オクターブ${k > 0 ? "上げ" : "下げ"}て合わせる`, "small", () => this.fitOctave(i), "音符をまとめてオクターブ移動し、音源の録音した高さに近づけます(曲で鳴る高さも変わります。元に戻すで戻せます)")];
+  }
+
+  /** 音域を合わせる: the track's notes moved by those octaves (one step to undo). */
+  private fitOctave(i: number): void {
+    const t = this.project.tracks[i];
+    if (!t) return;
+    const k = this.octaveFitOf(t);
+    if (!k) return;
+    t.notes = t.notes.map((n) => ({ ...n, pitch: clampPitch(n.pitch + 12 * k) }));
+    if (i === this.selected) this.showTrackInRoll();
+    this.reload();
+    this.renderTracks();
+    this.renderMix();
+    this.scheduleSave();
+    this.commit();
+    this.info.textContent = `「${t.name}」の音符を ${Math.abs(k)} オクターブ${k > 0 ? "上げ" : "下げ"}て、音源の録音した高さに近づけました。「元に戻す」で戻せます。`;
+  }
+
+  /** New gains from 音量を合わせる (null: left), applied as one step to undo. */
+  applyGains(gains: readonly (number | null)[], reference: number): void {
+    let moved = 0;
+    this.project.tracks.forEach((t, i) => {
+      const g = gains[i];
+      if (g === null || g === undefined || Math.abs(20 * Math.log10(Math.max(1e-6, g) / Math.max(1e-6, t.gain))) < 0.1) return;
+      t.gain = g;
+      this.syncMix(t);
+      this.client.setTrackMix(t.id, this.mixOf(t));
+      moved++;
+    });
+    this.scheduleSave();
+    this.commit();
+    const ref = this.project.tracks[reference];
+    this.info.textContent = moved
+      ? `${moved} 本のトラックの音量を、「${ref?.name ?? "?"}」(基準・動かしていません)に対する役割ごとの目安に合わせました。「元に戻す」で戻せます。`
+      : "音量を動かすトラックはありませんでした(測れる音のあるトラックがないか、すでに目安どおりです)。";
+  }
+
+  /** New effects for some tracks (null: left), applied as one step to undo, and what was done said. */
+  applyTrackFx(fxs: readonly (FxSettings | null)[], message: string): void {
+    this.project.tracks.forEach((t, i) => {
+      const fx = fxs[i];
+      if (!fx) return;
+      t.fx = fx;
+      this.client.setTrackMix(t.id, this.mixOf(t));
+    });
+    this.renderTracks();
+    this.renderMix();
+    this.onTrackChange();
+    this.onLiveChange();
+    this.scheduleSave();
+    this.commit();
+    this.info.textContent = message;
+  }
+
+  /** キックに合わせて沈める: the bass and the accompaniment duck to the drum tracks' kick. */
+  private autoDuck(): void {
+    const hasKick = this.project.tracks.some((t) => t.kind === "drum" && t.notes.some((n) => KICK_KEYS.includes(n.pitch)));
+    if (!hasKick) {
+      this.info.textContent = "キック(ドラムトラックの 35・36 番の音符)がないので、沈めるきっかけがありません。";
+      return;
+    }
+    const roles = this.roles();
+    let kept = 0;
+    let releaseMs = 0;
+    const done: string[] = [];
+    const fxs = this.project.tracks.map((t, i) => {
+      const duck = kickDuck(roles[i], this.project.bpm, t.fx.duck);
+      if (!duck || !t.notes.length) return null;
+      if (t.fx.duck.on && t.fx.duck.source !== "kick") {
+        kept++;
+        return null;
+      }
+      releaseMs = duck.releaseMs;
+      done.push(`「${t.name}」${duck.depthDb} dB`);
+      return { ...structuredClone(t.fx), duck };
+    });
+    const keptNote = kept ? `サイドチェーンを自分で入れていた ${kept} 本はそのままです。` : "";
+    this.applyTrackFx(
+      fxs,
+      done.length
+        ? `キックで沈むサイドチェーンを入れました: ${done.join("、")}(戻るまで ${releaseMs} ms)。${keptNote}「元に戻す」で戻せます。`
+        : `沈めるトラック(ベース・和音・伴奏・ハモリ)がありませんでした。${keptNote}`,
+    );
+  }
+
+  /** 残響を付ける: a room on each track by its part and the tempo. */
+  private autoRooms(): void {
+    const roles = this.roles();
+    let kept = 0;
+    const done: string[] = [];
+    const fxs = this.project.tracks.map((t, i) => {
+      const reverb = roomFor(roles[i], this.project.bpm, t.fx.reverb);
+      if (!reverb || !t.notes.length) return null;
+      if (t.fx.reverb.on) {
+        kept++;
+        return null;
+      }
+      done.push(`「${t.name}」${Math.round(reverb.mix * 100)}%`);
+      return { ...structuredClone(t.fx), reverb };
+    });
+    const keptNote = kept ? `リバーブを自分で入れていた ${kept} 本はそのままです。` : "";
+    this.applyTrackFx(
+      fxs,
+      done.length
+        ? `リバーブを入れました(かかる量): ${done.join("、")}。長さはテンポに合わせました。${keptNote}「元に戻す」で戻せます。`
+        : `残響を付けるトラック(メロディ・和音・伴奏・ハモリ)がありませんでした。${keptNote}`,
+    );
+  }
+
   /** パンを自動で広げる: the chords and accompaniment out to the sides, the rest in the middle (tracks with a pan line left alone). */
   private spreadPans(): void {
     const pans = spreadPans(this.project.tracks);
@@ -1664,6 +1823,7 @@ export class RollPanel {
 
   /** The ミックス view's strips: per track its name, mute / solo, pan, fader with meter, dB and effects; then the master's. */
   private renderMix(): void {
+    const roles = trackRoles(this.project.tracks);
     const strips = this.project.tracks.map((t, i) => {
       const c = this.mixControlsFor(t, true);
       const fxOn = Object.values(t.fx).some((g) => (g as { on?: boolean }).on);
@@ -1673,10 +1833,16 @@ export class RollPanel {
       }, fxOn ? "このトラックにエフェクトがかかっています(押すとエフェクトを開きます)" : "このトラックのエフェクトを開きます");
       const plays = this.playsLabel(t);
       const far = this.farWarning(t);
+      const shift = far ? this.octaveFitOf(t) : 0;
       const strip = el("div", { className: `mix-strip${i === this.selected ? " selected" : ""}` }, [
         el("span", { className: "mix-name", textContent: t.name, title: t.name }),
         el("span", { className: "fine mix-plays", textContent: plays, title: plays }),
-        far ? el("span", { className: "warn fine mix-far", textContent: "⚠ 音域", title: far }) : el("span", { className: "mix-far" }),
+        far
+          ? shift
+            ? button(`⚠ ${shift > 0 ? "+" : "−"}${Math.abs(shift)} oct`, "small warn mix-far", () => this.fitOctave(i), `${far}\n\n押すと、音符を ${Math.abs(shift)} オクターブ${shift > 0 ? "上げ" : "下げ"}て、録音した高さに近づけます(元に戻すで戻せます)。`)
+            : el("span", { className: "warn fine mix-far", textContent: "⚠ 音域", title: far })
+          : el("span", { className: "mix-far" }),
+        this.roleSelect(t, roles[i].role),
         el("span", { className: "row tight mix-ms" }, [c.mute, c.solo]),
         el("label", { className: "mix-pan fine" }, ["パン", c.pan]),
         el("span", { className: "mix-fader" }, [c.volume, el("span", { className: "meter vertical" }, [c.meterFill])]),
@@ -1769,7 +1935,7 @@ export class RollPanel {
           : t.kind === "audio" && !t.notes.length
             ? el("span", { className: "fine track-note", textContent: "ピアノロールをタップで素材を置きます" })
             : far
-              ? el("span", { className: "warn fine track-note", textContent: "⚠ 音源の高さから離れすぎ", title: far })
+              ? el("span", { className: "warn fine track-note", title: far }, ["⚠ 音源の高さから離れすぎ ", ...this.octaveFitButton(i)])
               : null;
       const fxOn = Object.values(t.fx).some((g) => (g as { on?: boolean }).on);
       const fxMark = fxOn

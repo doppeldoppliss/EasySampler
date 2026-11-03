@@ -7,7 +7,10 @@
 
 import type { Note, Track } from "./model";
 
-export type Role = "drum" | "audio" | "bass" | "lead" | "chords" | "backing";
+export type Role = "drum" | "audio" | "bass" | "lead" | "chords" | "backing" | "harmony";
+
+/** A track as the roles read it: its kind, its notes, and the role set by hand (null / absent: worked out). */
+type RoleTrack = Pick<Track, "kind" | "notes"> & { role?: Role | null };
 
 export interface TrackRole {
   role: Role;
@@ -43,12 +46,18 @@ function chordShare(notes: readonly Note[]): number {
 /** Below this middle pitch (E3), a line is the bass. */
 const BASS_BELOW = 52;
 
-/** Each track's role (in the tracks' order). */
-export function trackRoles(tracks: readonly Pick<Track, "kind" | "notes">[]): TrackRole[] {
+/** Each track's role (in the tracks' order): the one set by hand, or worked out from the notes. */
+export function trackRoles(tracks: readonly RoleTrack[]): TrackRole[] {
   const roles: TrackRole[] = tracks.map((t) => ({ role: t.kind === "drum" ? "drum" : t.kind === "audio" ? "audio" : "backing", median: median(t.notes.map((n) => n.pitch)) }));
   let lead = -1;
   let best = 0;
+  // (A lead set by hand: no other is looked for.)
+  const leadByHand = tracks.some((t) => t.role === "lead");
   tracks.forEach((t, i) => {
+    if (t.role) {
+      roles[i].role = t.role;
+      return;
+    }
     if (t.kind !== "melodic" || !t.notes.length) return;
     const share = chordShare(t.notes);
     if (roles[i].median < BASS_BELOW) roles[i].role = "bass";
@@ -56,7 +65,7 @@ export function trackRoles(tracks: readonly Pick<Track, "kind" | "notes">[]): Tr
     else {
       // The lead: a single line, high, with many notes.
       const score = t.notes.length * (1 - share) * (roles[i].median - 40);
-      if (score > best) {
+      if (score > best && !leadByHand) {
         best = score;
         lead = i;
       }
@@ -68,14 +77,14 @@ export function trackRoles(tracks: readonly Pick<Track, "kind" | "notes">[]): Tr
 
 /** The GM instrument families (program ÷ 8), named. */
 const GM_FAMILIES = ["ピアノ", "鍵盤打楽器", "オルガン", "ギター", "ベース", "ストリングス", "アンサンブル", "ブラス", "リード", "笛", "シンセリード", "シンセパッド", "シンセ効果", "民族楽器", "打楽器", "効果音"];
-const ROLE_NAMES: Record<Role, string> = { drum: "ドラム", audio: "音声", bass: "ベース", lead: "メロディ", chords: "和音", backing: "伴奏" };
+export const ROLE_NAMES: Record<Role, string> = { drum: "ドラム", audio: "音声", bass: "ベース", lead: "メロディ", chords: "和音", backing: "伴奏", harmony: "ハモリ" };
 
 /**
  * Names for the tracks whose names say nothing: by their GM instrument when the file gave one (`programs[i]`),
  * otherwise by their role; the same name twice is numbered ("伴奏 2"). Tracks with names of their own keep them
  * (null in the result).
  */
-export function autoNames(tracks: readonly Pick<Track, "kind" | "notes" | "name">[], programs: readonly (number | null)[] = []): (string | null)[] {
+export function autoNames(tracks: readonly (RoleTrack & Pick<Track, "name">)[], programs: readonly (number | null)[] = []): (string | null)[] {
   const roles = trackRoles(tracks);
   const wanted = tracks.map((t, i) => {
     if (!isGenericName(t.name)) return null;
@@ -107,12 +116,12 @@ export function autoNames(tracks: readonly Pick<Track, "kind" | "notes" | "name"
  * accompaniment — alternately left and right, further out the more there are, ordered by pitch so neighbours in
  * range end up on different sides. Returns a pan per track (null: leave it).
  */
-export function spreadPans(tracks: readonly Pick<Track, "kind" | "notes">[]): (number | null)[] {
+export function spreadPans(tracks: readonly RoleTrack[]): (number | null)[] {
   const roles = trackRoles(tracks);
   const out: (number | null)[] = tracks.map(() => null);
   const side = roles
     .map((r, i) => ({ ...r, i }))
-    .filter((r) => (r.role === "chords" || r.role === "backing") && tracks[r.i].notes.length > 0)
+    .filter((r) => (r.role === "chords" || r.role === "backing" || r.role === "harmony") && tracks[r.i].notes.length > 0)
     .sort((a, b) => a.median - b.median);
   side.forEach((r, k) => {
     const amount = Math.min(0.7, 0.35 + 0.1 * Math.floor(k / 2));

@@ -141,7 +141,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
     }
     if (!sound) continue;
     sounds.push(sound);
-    tracks.push({ id: t.id, sound, notes: t.notes, fx: t.fx, gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, volumeAuto: t.volumeAuto, panAuto: t.panAuto });
+    tracks.push({ id: t.id, sound, notes: t.notes, kicks: !!t.samples, fx: t.fx, gain: t.gain, pan: t.pan, mute: t.mute, solo: t.solo, volumeAuto: t.volumeAuto, panAuto: t.panAuto });
   }
   const player = new SongPlayer(sr);
   player.setTracks(tracks);

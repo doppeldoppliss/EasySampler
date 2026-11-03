@@ -59,11 +59,13 @@ import { isMidiFile } from "./song/midi";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 import { evenStems, renderSong, type RenderTrack } from "./daw/songRender";
 import { bandSpectrum, fitBalance, type BalanceStyle } from "./fx/balance";
+import { balanceGains, cleanEq, lowCutFor, maskingDip } from "./daw/autoMix";
+import { integratedLoudness } from "./audio/loudness";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, KEY_FAMILIES, newSlot, renderSlot, slotFor, soundKey, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
 import { MidiInput } from "./audio/midiInput";
-import { autoToSec, BACKING, beatsToSec, clipsToSeq, tempoMapSec, toSeqNotes, trimClips, withHarmony, type Tempo } from "./daw/model";
+import { autoToSec, BACKING, beatsToSec, clipsToSeq, MAX_TRACK_GAIN, tempoMapSec, toSeqNotes, trimClips, withHarmony, type Tempo } from "./daw/model";
 import { autoValue, type AutoPoint } from "./song/player";
 import { zipStore, type ZipEntry } from "./export/zip";
 import { encodeWavBytes } from "./audio/wav";
@@ -1160,12 +1162,13 @@ function fxDuckSource(): HTMLElement {
     const source = fxNow().duck.source;
     input.replaceChildren(
       el("option", { value: "beat", textContent: "曲の拍(拍ごとに一定に沈む)" }),
+      ...(fxTarget === "master" ? [] : [el("option", { value: "kick", textContent: "キック(ドラムトラックの 35・36 番が鳴ったとき)" })]),
       ...choices.map((t) => el("option", { value: t.id, textContent: `トラック「${t.name}」が鳴ったとき` })),
-      ...(source !== "beat" && !choices.some((t) => t.id === source) ? [el("option", { value: source, textContent: "(なくなったトラック)" })] : []),
+      ...(source !== "beat" && source !== "kick" && !choices.some((t) => t.id === source) ? [el("option", { value: source, textContent: "(なくなったトラック)" })] : []),
     );
     input.value = source;
     duckBeatsRow.hidden = source !== "beat";
-    duckThresholdRow.hidden = source === "beat";
+    duckThresholdRow.hidden = source === "beat" || source === "kick";
   };
   controlsRefreshers.push(refresh);
   input.addEventListener("change", () => {
@@ -3238,7 +3241,10 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
   if (only !== null) {
     const follow = (id: string) => {
       const src = project.tracks.find((x) => x.id === id)?.fx.duck;
-      if (src?.on && src.source !== "beat" && !keys.has(src.source)) {
+      if (src?.on && src.source === "kick") {
+        // (Ducking to the kick: the drum tracks come along, unheard, for their kick notes.)
+        for (const d of project.tracks) if (d.kind === "drum") keys.add(d.id);
+      } else if (src?.on && src.source !== "beat" && !keys.has(src.source)) {
         keys.add(src.source);
         follow(src.source);
       }
@@ -3448,6 +3454,105 @@ async function balanceMaster(style: BalanceStyle): Promise<void> {
   }
 }
 rollPanel.onBalance = (style) => void balanceMaster(style);
+
+/** One track as the song plays it (its effects, its volume; no master), offline: what the automatic mixing measures. */
+async function renderTrackAlone(project: ReturnType<typeof rollPanel.snapshot>, id: string, say: (share: number) => void): Promise<{ channels: [Float32Array, Float32Array]; sampleRate: number }> {
+  return renderSong({ sampleRate: client.sampleRate, bpm: project.bpm, tracks: songTracks(project, id, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, async (share) => {
+    say(share);
+    await yieldToScreen();
+  });
+}
+
+/** The tracks the mix lets through (not muted, not outside a solo) that have notes: what the automatic mixing works on. */
+function heardTracks(project: ReturnType<typeof rollPanel.snapshot>): number[] {
+  const soloing = project.tracks.some((t) => t.solo);
+  return project.tracks.flatMap((t, i) => (t.notes.length && !t.mute && (!soloing || t.solo) ? [i] : []));
+}
+
+/** 音量を合わせる (design.md 36): each heard track measured alone (LUFS), then brought to its part's level. */
+async function autoLevels(): Promise<void> {
+  if (songBuilding) return;
+  const project = rollPanel.snapshot();
+  const roles = rollPanel.roles();
+  const heard = heardTracks(project);
+  if (!heard.length) {
+    rollPanel.info.textContent = "測れるトラック(音符があり、ミュートしていないもの)がありません。";
+    return;
+  }
+  songBuilding = true;
+  try {
+    const lufs: (number | null)[] = project.tracks.map(() => null);
+    for (const [k, i] of heard.entries()) {
+      const t = project.tracks[i];
+      const song = await renderTrackAlone(project, t.id, (share) => (rollPanel.info.textContent = `音量を測っています… ${k + 1} / ${heard.length}「${t.name}」${Math.round(share * 100)}%`));
+      const l = integratedLoudness(song.channels[0], song.channels[1], song.sampleRate);
+      lufs[i] = Number.isFinite(l) && l > -70 ? l : null;
+    }
+    const { gains, reference } = balanceGains(
+      project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain })),
+      MAX_TRACK_GAIN,
+    );
+    rollPanel.applyGains(gains, reference);
+  } finally {
+    songBuilding = false;
+  }
+}
+rollPanel.onAutoLevels = () => void autoLevels();
+
+/**
+ * トラックの EQ (design.md 36): on the lead, the chords, the accompaniment and the harmonies (their EQ not set by
+ * hand), a low cut a little under their notes; on all but the lead, a dip where the lead is strong and so are they
+ * (both measured alone, third-octave bands).
+ */
+async function autoEq(): Promise<void> {
+  if (songBuilding) return;
+  const project = rollPanel.snapshot();
+  const roles = rollPanel.roles();
+  const heard = new Set(heardTracks(project));
+  const wanted = new Set(["lead", "chords", "backing", "harmony"]);
+  const targets = project.tracks.flatMap((t, i) => (heard.has(i) && t.kind === "melodic" && wanted.has(roles[i]) ? [i] : []));
+  const kept = targets.filter((i) => project.tracks[i].fx.eq.on);
+  const work = targets.filter((i) => !project.tracks[i].fx.eq.on);
+  if (!work.length) {
+    rollPanel.info.textContent = targets.length
+      ? `EQ を入れるトラックはありませんでした(対象の ${targets.length} 本はどれも EQ を自分で入れてあります)。`
+      : "EQ を入れるトラック(メロディ・和音・伴奏・ハモリ)がありませんでした。";
+    return;
+  }
+  songBuilding = true;
+  try {
+    const lead = roles.findIndex((r, i) => r === "lead" && heard.has(i));
+    const measure = async (i: number, k: number, n: number) => {
+      const t = project.tracks[i];
+      const song = await renderTrackAlone(project, t.id, (share) => (rollPanel.info.textContent = `周波数の分布を測っています… ${k} / ${n}「${t.name}」${Math.round(share * 100)}%`));
+      return bandSpectrum(song.channels, song.sampleRate);
+    };
+    const dipped = work.filter((i) => i !== lead);
+    const total = dipped.length + (lead >= 0 && dipped.length ? 1 : 0);
+    let step = 0;
+    const leadSpectrum = lead >= 0 && dipped.length ? await measure(lead, ++step, total) : null;
+    const fxs: (FxSettings | null)[] = project.tracks.map(() => null);
+    const said: string[] = [];
+    const hz = (v: number) => (v >= 1000 ? `${+(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz`);
+    for (const i of work) {
+      const t = project.tracks[i];
+      const notes = withHarmony(t.notes, t.harmony, t.glide);
+      const spectrum = i !== lead && leadSpectrum ? await measure(i, ++step, total) : null;
+      const dip = leadSpectrum && spectrum ? maskingDip(leadSpectrum, spectrum) : null;
+      const fx = structuredClone(t.fx);
+      fx.eq = cleanEq(fx.eq, lowCutFor(notes), dip);
+      fxs[i] = fx;
+      said.push(`「${t.name}」ローカット ${hz(fx.eq.lowCutHz)}${dip ? `・${hz(dip.hz)} ${dip.db} dB` : ""}`);
+    }
+    rollPanel.applyTrackFx(
+      fxs,
+      `トラックの EQ を入れました: ${said.join("、")}。${lead < 0 ? "メロディのトラックがないので、ぶつかりを削る EQ は入れていません。" : ""}${kept.length ? `EQ を自分で入れていた ${kept.length} 本はそのままです。` : ""}「元に戻す」で戻せます。`,
+    );
+  } finally {
+    songBuilding = false;
+  }
+}
+rollPanel.onAutoEq = () => void autoEq();
 client.onMeters = (meters) => rollPanel.showMeters(meters);
 
 /** The cuts of every material, for the tracks' lists. */

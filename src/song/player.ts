@@ -67,7 +67,15 @@ export interface PlayerTrack extends MixSettings {
   id: string;
   sound: TrackSound;
   notes: readonly SeqNote[];
+  /** A drum track: its notes on the kick keys are what a ducking to the kick (source "kick") follows. */
+  kicks?: boolean;
 }
+
+/** The GM keys that are a kick. */
+export const KICK_KEYS: readonly number[] = [35, 36];
+
+/** How long each kick holds the ducking down before it lets go (seconds). */
+const KICK_HOLD_SEC = 0.05;
 
 interface SongEvent {
   /** Song seconds × sample rate. */
@@ -110,6 +118,8 @@ class Lane {
   /** Its level per sample this block (after its effects, before its volume), when another track ducks to it. */
   key = new Float32Array(128);
   keyLive = false;
+  /** It ducks to the kick (the drum tracks' kick notes), not to a track's sound. */
+  kickKeyed = false;
 
   constructor(id: string, sound: TrackSound, sampleRate: number) {
     this.id = id;
@@ -177,6 +187,11 @@ export class SongPlayer {
       lane.spans = t.sound.resume ? t.notes.map((n) => ({ start: Math.round(n.start * sr), end: Math.round(n.end * sr), note: n.note, velocity: n.velocity })) : [];
       return lane;
     });
+    // Where the kicks fall (song frames), for the lanes that duck to them; muted or not, the kick still keys.
+    this.kickFrames = tracks
+      .filter((t) => t.kicks)
+      .flatMap((t) => t.notes.filter((n) => KICK_KEYS.includes(n.note)).map((n) => Math.round(n.start * sr)))
+      .sort((a, b) => a - b);
     this.positioned = false;
   }
 
@@ -195,6 +210,39 @@ export class SongPlayer {
    * to B, B to C) by how deep it goes, a loop of keys cut.
    */
   private routing: Lane[] | null = null;
+  private kickFrames: number[] = [];
+  /** The kick as a key, for the block: 1 while a kick holds, else 0. */
+  private kickKey = new Float32Array(128);
+
+  /** The kick key over a block: from where the song is at its start (a loop's wrap inside it is not followed). */
+  private fillKickKey(blockFrame: number, frames: number): void {
+    if (this.kickKey.length < frames) this.kickKey = new Float32Array(frames);
+    const key = this.kickKey;
+    key.fill(0, 0, frames);
+    if (this.startFrame === null || !this.kickFrames.length) return;
+    const kicks = this.kickFrames;
+    const hold = Math.round(KICK_HOLD_SEC * this.sampleRate);
+    const first = this.fromFrame + (blockFrame - this.startFrame);
+    // The last kick that could still hold at the block's start.
+    let k = SongPlayer.seekFrame(kicks, first - hold);
+    for (let i = 0; i < frames; i++) {
+      const f = first + i;
+      while (k < kicks.length && kicks[k] + hold <= f) k++;
+      if (k < kicks.length && kicks[k] <= f) key[i] = 1;
+    }
+  }
+
+  /** The first of sorted frames at or after `frame`. */
+  private static seekFrame(frames: readonly number[], frame: number): number {
+    let lo = 0;
+    let hi = frames.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (frames[mid] < frame) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
 
   private route(): Lane[] {
     const byId = new Map(this.lanes.map((l) => [l.id, l]));
@@ -203,6 +251,7 @@ export class SongPlayer {
       const duck = lane.mix.fx?.duck;
       const source = lane.fxOn && duck?.on && duck.source !== "beat" ? (byId.get(duck.source) ?? null) : null;
       lane.keySource = source;
+      lane.kickKeyed = !!(lane.fxOn && duck?.on && duck.source === "kick");
       if (source) source.isKey = true;
     }
     const depthOf = (lane: Lane, seen: Set<Lane>): number => {
@@ -405,6 +454,7 @@ export class SongPlayer {
     // Sidechains: the tracks others duck to are worked out first, so their level is there for the ones that follow.
     const order = this.routing ?? (this.routing = this.route());
     for (const lane of order) lane.keyLive = false;
+    if (order.some((l) => l.kickKeyed)) this.fillKickKey(blockFrame, frames);
     for (const lane of order) {
       const { gain, mute, solo } = lane.mix;
       // (Muted, or another track soloed: down to 0, ramped like any change.)
@@ -427,6 +477,7 @@ export class SongPlayer {
       if (lane.fxOn) {
         if (startBeat !== null) lane.fx.setBeat(startBeat);
         if (lane.keySource) lane.fx.setKey(lane.keySource.keyLive ? lane.keySource.key : null);
+        else if (lane.kickKeyed) lane.fx.setKey(this.kickKey);
         lane.fx.process(lane.l, lane.r, frames);
       }
       if (lane.isKey) {

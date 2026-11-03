@@ -9,11 +9,13 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "listen": "tsx tools/eval/listen.ts"
+    "listen": "tsx tools/eval/listen.ts",
+    "e2e": "tsx tools/e2e/smoke.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "playwright-core": "1.52",
     "tsx": "^4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.3.4",

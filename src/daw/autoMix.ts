@@ -5,7 +5,7 @@
 // toward its cut's recorded pitch, and a room on each by its part. Each is a
 // starting point, undoable, for the ear to finish.
 
-import type { FxSettings } from "../instrument/types";
+import { DEFAULT_FX, type FxSettings } from "../instrument/types";
 import { BAND_HZ } from "../fx/balance";
 import type { Note } from "./model";
 import type { Role } from "./roles";
@@ -27,9 +27,9 @@ export interface LevelIn {
  * first audio track (原曲・伴奏), else the lead, else the loudest. Several tracks of one part share its level
  * (four accompaniments, each 6 dB under one).
  */
-export function balanceGains(tracks: readonly LevelIn[], maxGain: number): { gains: (number | null)[]; reference: number } {
+export function balanceGains(tracks: readonly LevelIn[], maxGain: number): { gains: (number | null)[]; reference: number; loweredDb: number } {
   const measured = tracks.map((t, i) => ({ ...t, i })).filter((t): t is LevelIn & { i: number; lufs: number } => t.lufs !== null && Number.isFinite(t.lufs));
-  if (!measured.length) return { gains: tracks.map(() => null), reference: -1 };
+  if (!measured.length) return { gains: tracks.map(() => null), reference: -1, loweredDb: 0 };
   const ref =
     measured.find((t) => t.role === "audio") ?? measured.find((t) => t.role === "lead") ?? measured.reduce((a, b) => (b.lufs > a.lufs ? b : a));
   const count = new Map<Role, number>();
@@ -37,13 +37,19 @@ export function balanceGains(tracks: readonly LevelIn[], maxGain: number): { gai
   const share = (role: Role) => 10 * Math.log10(count.get(role) ?? 1);
   // The lead's level, from the reference's (which is where its part says it is).
   const lead = ref.lufs - LEVEL_FROM_LEAD[ref.role] + share(ref.role);
-  const gains = tracks.map(() => null as number | null);
+  const wanted = tracks.map(() => null as number | null);
   for (const t of measured) {
     if (t === ref) continue;
     const want = lead + LEVEL_FROM_LEAD[t.role] - share(t.role);
-    gains[t.i] = Math.min(maxGain, Math.max(0.01, t.gain * 10 ** ((want - t.lufs) / 20)));
+    wanted[t.i] = t.gain * 10 ** ((want - t.lufs) / 20);
   }
-  return { gains, reference: ref.i };
+  // A track that would need more than the fader gives: everything (the reference too) comes down by the
+  // difference instead, so the balance holds (a quiet kit would otherwise stop at the top, under its level).
+  const most = Math.max(...wanted.map((g) => g ?? 0));
+  const lower = most > maxGain ? maxGain / most : 1;
+  const gains = wanted.map((g) => (g === null ? null : Math.max(0.01, g * lower)));
+  if (lower < 1) gains[ref.i] = Math.max(0.01, ref.gain * lower);
+  return { gains, reference: ref.i, loweredDb: -20 * Math.log10(lower) };
 }
 
 // ------------------------------------------------------------ the clean-up EQ
@@ -92,9 +98,12 @@ export function maskingDip(lead: readonly number[], track: readonly number[]): {
   return { hz: Math.round(BAND_HZ[best]), db: score > 8 ? -3 : -2 };
 }
 
-/** The clean-up EQ on a track's EQ: its low cut, and the dip (when there is one). */
-export function cleanEq(eq: FxSettings["eq"], lowCutHz: number, dip: { hz: number; db: number } | null): FxSettings["eq"] {
-  return { ...eq, on: true, lowCutHz, ...(dip ? { midHz: dip.hz, midDb: dip.db, midQ: 1.4 } : {}) };
+/**
+ * The clean-up EQ: its low cut and the dip (when there is one), on an EQ otherwise flat — not on what the track's
+ * switched-off EQ was left at (its shelves would come back on with it).
+ */
+export function cleanEq(lowCutHz: number, dip: { hz: number; db: number } | null): FxSettings["eq"] {
+  return { ...DEFAULT_FX.eq, on: true, lowCutHz, ...(dip ? { midHz: dip.hz, midDb: dip.db, midQ: 1.4 } : {}) };
 }
 
 // ------------------------------------------------------------ ducking to the kick

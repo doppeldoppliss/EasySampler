@@ -53,12 +53,13 @@ export function trackRoles(tracks: readonly RoleTrack[]): TrackRole[] {
   let best = 0;
   // (A lead set by hand: no other is looked for.)
   const leadByHand = tracks.some((t) => t.role === "lead");
+  const doubles = tracks.map((t, i) => (t.role ? -1 : doubleOf(tracks, i)));
   tracks.forEach((t, i) => {
     if (t.role) {
       roles[i].role = t.role;
       return;
     }
-    if (t.kind !== "melodic" || !t.notes.length) return;
+    if (t.kind !== "melodic" || !t.notes.length || doubles[i] >= 0) return;
     const share = chordShare(t.notes);
     if (roles[i].median < BASS_BELOW) roles[i].role = "bass";
     else if (share > 0.4) roles[i].role = "chords";
@@ -72,7 +73,33 @@ export function trackRoles(tracks: readonly RoleTrack[]): TrackRole[] {
     }
   });
   if (lead >= 0) roles[lead].role = "lead";
+  // An octave double goes with what it doubles: the bass's is bass; any other's, accompaniment.
+  doubles.forEach((j, i) => {
+    if (j >= 0) roles[i].role = roles[j].role === "bass" ? "bass" : "backing";
+  });
   return roles;
+}
+
+/**
+ * The track this one doubles in octaves (index), or −1: most of its notes (80%) start with a note of a lower
+ * melodic track, a whole number of octaves above it (a bass line copied an octave up is still the bass, not a lead).
+ */
+function doubleOf(tracks: readonly RoleTrack[], i: number): number {
+  const t = tracks[i];
+  if (t.kind !== "melodic" || t.notes.length < 4) return -1;
+  for (let j = 0; j < tracks.length; j++) {
+    const o = tracks[j];
+    if (j === i || o.kind !== "melodic" || !o.notes.length || o.role === "lead") continue;
+    const at = new Map<number, number[]>();
+    for (const n of o.notes) {
+      const k = Math.round(n.start * 64);
+      at.set(k, [...(at.get(k) ?? []), n.pitch]);
+    }
+    let hits = 0;
+    for (const n of t.notes) if ((at.get(Math.round(n.start * 64)) ?? []).some((p) => n.pitch > p && (n.pitch - p) % 12 === 0)) hits++;
+    if (hits >= 0.8 * t.notes.length) return j;
+  }
+  return -1;
 }
 
 /** The GM instrument families (program ÷ 8), named. */

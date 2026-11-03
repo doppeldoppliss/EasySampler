@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { balanceGains, kickDuck, lowCutFor, maskingDip, octaveFit, roomFor } from "./autoMix";
+import { balanceGains, cleanEq, kickDuck, lowCutFor, maskingDip, octaveFit, roomFor } from "./autoMix";
 import { BAND_HZ } from "../fx/balance";
 import { DEFAULT_FX } from "../instrument/types";
 import type { Note } from "./model";
@@ -30,7 +30,7 @@ describe("自動ミックス", () => {
     expect(db(gains[3])).toBeCloseTo(-9, 1);
   });
 
-  it("volumes: an audio track (原曲) is the reference when there is one; gains stay in range", () => {
+  it("volumes: an audio track (原曲) is the reference when there is one; no gain past the fader", () => {
     const { gains, reference } = balanceGains(
       [
         { role: "lead", lufs: -30, gain: 1 },
@@ -39,7 +39,9 @@ describe("自動ミックス", () => {
       2,
     );
     expect(reference).toBe(1);
-    expect(gains[0]).toBe(2);
+    expect(gains[0]).toBeCloseTo(2, 6);
+    // (The lead wanted far more: the audio track came down instead of the lead stopping short.)
+    expect(20 * Math.log10(gains[1]!)).toBeCloseTo(-12, 1);
   });
 
   it("the low cut sits a little under a track's low notes", () => {
@@ -88,5 +90,38 @@ describe("自動ミックス", () => {
       { kind: "melodic" as const, notes: [note(64), note(65, 1)], role: "harmony" as const },
     ];
     expect(trackRoles(tracks).map((r) => r.role)).toEqual(["backing", "lead", "harmony"]);
+  });
+
+  it("a track that would need more than the fader gives brings everything down instead (the balance holds)", () => {
+    const { gains, loweredDb } = balanceGains(
+      [
+        { role: "lead", lufs: -14, gain: 1 },
+        { role: "drum", lufs: -30, gain: 1 },
+      ],
+      2,
+    );
+    const db = (g: number | null) => 20 * Math.log10(g!);
+    // The kit wants +15 dB, the fader stops at +6: all 9 dB down, the lead too.
+    expect(loweredDb).toBeCloseTo(9, 1);
+    expect(db(gains[1])).toBeCloseTo(6, 1);
+    expect(db(gains[0])).toBeCloseTo(-9, 1);
+  });
+
+  it("the clean-up EQ starts flat: a switched-off EQ's old shelves do not come back with it", () => {
+    const eq = cleanEq(120, { hz: 800, db: -3 });
+    expect(eq).toMatchObject({ on: true, lowCutHz: 120, lowDb: 0, highDb: 0, midHz: 800, midDb: -3 });
+  });
+
+  it("a bass line copied an octave up is the bass, not the lead", () => {
+    const line = [36, 38, 40, 43, 41, 40, 38, 36];
+    const bass = line.map((p, k) => note(p, k));
+    const up = line.map((p, k) => note(p + 12, k));
+    const melody = [72, 71, 69, 67].map((p, k) => note(p, k * 2));
+    const roles = trackRoles([
+      { kind: "melodic", notes: bass },
+      { kind: "melodic", notes: up },
+      { kind: "melodic", notes: melody },
+    ]);
+    expect(roles.map((r) => r.role)).toEqual(["bass", "bass", "lead"]);
   });
 });

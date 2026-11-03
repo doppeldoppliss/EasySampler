@@ -3488,11 +3488,11 @@ async function autoLevels(): Promise<void> {
       const l = integratedLoudness(song.channels[0], song.channels[1], song.sampleRate);
       lufs[i] = Number.isFinite(l) && l > -70 ? l : null;
     }
-    const { gains, reference } = balanceGains(
+    const { gains, reference, loweredDb } = balanceGains(
       project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain })),
       MAX_TRACK_GAIN,
     );
-    rollPanel.applyGains(gains, reference);
+    rollPanel.applyGains(gains, reference, loweredDb);
   } finally {
     songBuilding = false;
   }
@@ -3540,7 +3540,7 @@ async function autoEq(): Promise<void> {
       const spectrum = i !== lead && leadSpectrum ? await measure(i, ++step, total) : null;
       const dip = leadSpectrum && spectrum ? maskingDip(leadSpectrum, spectrum) : null;
       const fx = structuredClone(t.fx);
-      fx.eq = cleanEq(fx.eq, lowCutFor(notes), dip);
+      fx.eq = cleanEq(lowCutFor(notes), dip);
       fxs[i] = fx;
       said.push(`「${t.name}」ローカット ${hz(fx.eq.lowCutHz)}${dip ? `・${hz(dip.hz)} ${dip.db} dB` : ""}`);
     }

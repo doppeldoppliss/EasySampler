@@ -1560,7 +1560,7 @@ export class RollPanel {
   }
 
   /** New gains from 音量を合わせる (null: left), applied as one step to undo. */
-  applyGains(gains: readonly (number | null)[], reference: number): void {
+  applyGains(gains: readonly (number | null)[], reference: number, loweredDb = 0): void {
     let moved = 0;
     this.project.tracks.forEach((t, i) => {
       const g = gains[i];
@@ -1574,7 +1574,7 @@ export class RollPanel {
     this.commit();
     const ref = this.project.tracks[reference];
     this.info.textContent = moved
-      ? `${moved} 本のトラックの音量を、「${ref?.name ?? "?"}」(基準・動かしていません)に対する役割ごとの目安に合わせました。「元に戻す」で戻せます。`
+      ? `${moved} 本のトラックの音量を、「${ref?.name ?? "?"}」(基準)に対する役割ごとの目安に合わせました。${loweredDb > 0.05 ? `音量の上限まで上げても届かないトラックがあったので、基準も含めて全体を ${loweredDb.toFixed(1)} dB 下げてあります(足りない分はマスターや書き出しの音量で)。` : "基準は動かしていません。"}「元に戻す」で戻せます。`
       : "音量を動かすトラックはありませんでした(測れる音のあるトラックがないか、すでに目安どおりです)。";
   }
 

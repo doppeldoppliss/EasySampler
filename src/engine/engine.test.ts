@@ -455,9 +455,9 @@ describe("Melodyne-style controls", () => {
       }
       return num / den;
     };
-    const keep = centroidOf(play(setup(material, { formantFollow: 0, sustainOnlySynth: false }).engine, 62 + 19, 1, 0.1));
-    const half = centroidOf(play(setup(material, { formantFollow: 0.5, sustainOnlySynth: false }).engine, 62 + 19, 1, 0.1));
-    const full = centroidOf(play(setup(material, { formantFollow: 1, sustainOnlySynth: false }).engine, 62 + 19, 1, 0.1));
+    const keep = centroidOf(play(setup(material, { formantFollow: 0, keepHeadContour: false }).engine, 62 + 19, 1, 0.1));
+    const half = centroidOf(play(setup(material, { formantFollow: 0.5, keepHeadContour: false }).engine, 62 + 19, 1, 0.1));
+    const full = centroidOf(play(setup(material, { formantFollow: 1, keepHeadContour: false }).engine, 62 + 19, 1, 0.1));
     expect(half).toBeGreaterThan(keep * 1.05);
     expect(full).toBeGreaterThan(half * 1.05);
   });
@@ -632,12 +632,12 @@ describe("Engine: 持続部だけシンセ化", () => {
   // A scoop up into the note (two semitones under, over 0.25 s), then the vowel held with a vibrato.
   const scooped = () => synthVoice({ sampleRate: SR, durationSec: 1.2, pitch: (t) => (t < 0.25 ? 55 + 8 * t : 57 + 0.4 * Math.sin(2 * Math.PI * 5.5 * t)) });
   /** The output's pitch (MIDI) over a span, the median, from a note held 1.2 s. */
-  const run = (sustainOnlySynth: boolean) => {
+  const run = (keepHeadContour: boolean) => {
     const material = scooped();
     const analysis = analyzeMaterial([material], SR);
     const engine = new Engine(SR);
     engine.setSource(prepareSource([material], analysis, SR));
-    engine.setInstrument({ ...analysis.markers, rangeStart: 0, sustainStart: 0.3, sustainEnd: 1.1 }, { ...DEFAULT_PARAMS, root: 57, sustainOnlySynth });
+    engine.setInstrument({ ...analysis.markers, rangeStart: 0, sustainStart: 0.3, sustainEnd: 1.1 }, { ...DEFAULT_PARAMS, root: 57, keepHeadContour });
     const f0 = analyzePitch(play(engine, 57, 1.2), SR).f0;
     const at = (from: number, to: number) => {
       const xs = Array.from(f0.slice(Math.round(from / 0.005), Math.round(to / 0.005))).filter(Number.isFinite).sort((a, b) => a - b);
@@ -673,7 +673,7 @@ describe("Engine: a voiced gap the analysis lost the pitch of", () => {
     }
     const engine = new Engine(SR);
     engine.setSource(source);
-    engine.setInstrument({ ...analysis.markers, rangeStart: 0, sustainStart: 0.2, sustainEnd: 1.1 }, { ...DEFAULT_PARAMS, root: 58, sustainMode: "stretch", sustainOnlySynth: false });
+    engine.setInstrument({ ...analysis.markers, rangeStart: 0, sustainStart: 0.2, sustainEnd: 1.1 }, { ...DEFAULT_PARAMS, root: 58, sustainMode: "stretch", keepHeadContour: false });
     const out = play(engine, 64, 1.2);
     // The stretch reads the sustain about 1:1 here; the lost 40 ms sits around 0.5 s of the output. Its energy at the
     // note (E4) against the recorded pitch the periods used to slip through at, untouched (C#4):

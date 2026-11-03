@@ -675,7 +675,7 @@ export class Engine {
       const f0 = this.f0[k];
       let correction = 0;
       let tau = params.tune.retuneSec;
-      const headKept = params.sustainOnlySynth && params.sustainEnabled && params.sustainMode !== "none";
+      const headKept = params.keepHeadContour && params.sustainEnabled && params.sustainMode !== "none";
       // (移調: the contour is left as recorded; only the shift moves it. 伸ばす(移調): past the head, the slow drift
       // is brought onto the root, the vibrato and the fast movement kept. It fades in once, as the head ends, and then
       // follows the read position at once: a loop or the pool jumping back finds its correction there.)
@@ -722,7 +722,7 @@ export class Engine {
       if (Number.isFinite(bridged)) {
         // A voiced sound the analysis lost the pitch of, between two that have one: moved like them — by the key,
         // and (not 移調, not the head kept as recorded) onto the note — read faster or slower, as the noise is.
-        const headKept = params.sustainOnlySynth && params.sustainEnabled && params.sustainMode !== "none" && v.phase === Phase.Head;
+        const headKept = params.keepHeadContour && params.sustainEnabled && params.sustainMode !== "none" && v.phase === Phase.Head;
         const correction = params.transposeOnly || headKept ? 0 : (params.root - bridged) * params.flatten;
         alpha = 2 ** ((shift + wobble + correction) / 12);
         spacing = period / alpha;

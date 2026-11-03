@@ -152,7 +152,8 @@ function readParams(raw: unknown): InstrumentParams {
     stopOnRelease: raw.stopOnRelease === true,
     transposeOnly: raw.transposeOnly === true,
     driftFix: raw.driftFix !== false,
-    sustainOnlySynth: raw.sustainOnlySynth !== false,
+    // (Named sustainOnlySynth and on by default until 2026-11-03: that old value is not read, so every cut starts off.)
+    keepHeadContour: raw.keepHeadContour === true,
     levelEven: clamp(num(raw.levelEven, d.levelEven), 0, 1),
     formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
     // (Older files stored on / off.)

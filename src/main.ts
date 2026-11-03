@@ -808,9 +808,9 @@ const oneShot = (e: HTMLElement) => (oneShotOnly.push(e), e);
 const shapingOnly: HTMLElement[] = [];
 const shaping = (e: HTMLElement) => (shapingOnly.push(e), e);
 let wavetableRow: HTMLElement;
-// 持続部だけシンセ化 (伸ばす, on by default): the head keeps its contour, the shaping from the sustain on.
+// 持続部だけシンセ化 (伸ばす, off by default since 2026-11-03): on, the head keeps its contour, the shaping from the sustain on.
 const sustainOnlyRow = el("div", {}, [
-  check("持続部だけシンセ化する(頭部は録音の抑揚のまま)", () => params.sustainOnlySynth, (p, v) => (p.sustainOnlySynth = v)),
+  check("持続部だけシンセ化する(頭部は録音の抑揚のまま)", () => params.keepHeadContour, (p, v) => (p.keepHeadContour = v)),
   el("p", { className: "fine help", textContent: "オンのとき、平坦化などの音程の整え方は持続区間から後ろにだけかかり、頭部(しゃくり・子音のあとの立ち上がり)は録音の抑揚のまま鍵の高さへ移します。頭部が終わると 0.15 秒かけて整えた音程に入ります。オフにすると頭部も含めて全体を整えます。" }),
 ]);
 // 伸ばす(移調): the slow drift past the head brought onto the key (on by default).
@@ -2567,7 +2567,7 @@ function refreshExport(): void {
   if (markers) {
     const flatten = params.transposeOnly ? 0 : params.flatten;
     editor.setParts(playedParts(params));
-    editor.setState(markers, params.root, flatten, note, !params.transposeOnly && params.sustainOnlySynth && makeModeOf(params) === "hold");
+    editor.setState(markers, params.root, flatten, note, !params.transposeOnly && params.keepHeadContour && makeModeOf(params) === "hold");
     refreshFadeGrips();
     editor.setLayout(
       outputLayout(markers, params, held),

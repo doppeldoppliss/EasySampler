@@ -46,12 +46,88 @@ export interface Track {
   solo: boolean;
   /** Portamento (seconds; 0 = off): notes that touch or overlap slide from one to the next, one at a time. */
   glide: number;
+  /** ハモリ (a melodic track): notes added in the key, played by the same cut. */
+  harmony: Harmony;
   /** What a note placed on this track gets: its length (beats) and velocity (0–1) (Domino's default Gate / Velocity). */
   noteLength: number;
   noteVelocity: number;
   /** The volume line (a factor on `gain`, 0–2) and the pan line (−1…1, in place of `pan`); empty = none. */
   volumeAuto: BeatPoint[];
   panAuto: BeatPoint[];
+}
+
+/**
+ * ハモリ: every note of the track gets company `voices` scale steps away in the key (`key` 0 = C … 11 = B, major
+ * or natural minor): 2 = a third up, -2 a third down, 4 a fifth up, 7 an octave up. The added notes are as long as
+ * theirs, `level` as strong. Not with portamento (the track is one note at a time then).
+ */
+export interface Harmony {
+  on: boolean;
+  key: number;
+  minor: boolean;
+  voices: number[];
+  level: number;
+}
+
+export const DEFAULT_HARMONY: Harmony = { on: false, key: 0, minor: false, voices: [2], level: 0.8 };
+
+const MAJOR = [0, 2, 4, 5, 7, 9, 11];
+const MINOR = [0, 2, 3, 5, 7, 8, 10];
+
+/** A pitch moved `steps` along the key's scale (a note off the scale keeps how far off it was, from the step under it). */
+export function harmonizePitch(pitch: number, steps: number, key: number, minor: boolean): number {
+  const scale = minor ? MINOR : MAJOR;
+  const rel = (((pitch - key) % 12) + 12) % 12;
+  let degree = 0;
+  for (let d = 0; d < 7; d++) if (scale[d] <= rel) degree = d;
+  const off = rel - scale[degree];
+  const target = degree + steps;
+  const octave = Math.floor(target / 7);
+  const moved = pitch - rel + 12 * octave + scale[((target % 7) + 7) % 7] + off;
+  return Math.max(0, Math.min(127, moved));
+}
+
+/** A track's notes with its ハモリ added (as they are, when it has none, or slides). */
+export function withHarmony(notes: readonly Note[], harmony: Harmony | undefined, glide = 0): Note[] {
+  if (!harmony?.on || !harmony.voices.length || glide > 0) return [...notes];
+  const added: Note[] = [];
+  for (const n of notes) {
+    for (const steps of harmony.voices) added.push({ ...n, pitch: harmonizePitch(n.pitch, steps, harmony.key, harmony.minor), velocity: Math.max(0.01, Math.min(1, n.velocity * harmony.level)) });
+  }
+  return [...notes, ...added];
+}
+
+/**
+ * The key the notes are most likely in (Krumhansl–Schmuckler: the pitch classes, weighted by length, against each
+ * key's profile).
+ */
+export function estimateKey(notes: readonly Note[]): { key: number; minor: boolean } {
+  const major = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+  const minor = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+  const hist = new Array(12).fill(0);
+  for (const n of notes) hist[((n.pitch % 12) + 12) % 12] += n.length;
+  const corr = (a: number[], b: number[]) => {
+    const ma = a.reduce((x, y) => x + y, 0) / 12;
+    const mb = b.reduce((x, y) => x + y, 0) / 12;
+    let num = 0;
+    let da = 0;
+    let db = 0;
+    for (let i = 0; i < 12; i++) {
+      num += (a[i] - ma) * (b[i] - mb);
+      da += (a[i] - ma) ** 2;
+      db += (b[i] - mb) ** 2;
+    }
+    return da && db ? num / Math.sqrt(da * db) : 0;
+  };
+  let best = { key: 0, minor: false, score: -Infinity };
+  for (let key = 0; key < 12; key++) {
+    const rotated = hist.map((_, i) => hist[(i + key) % 12]);
+    for (const [isMinor, profile] of [[false, major], [true, minor]] as const) {
+      const score = corr(rotated, profile);
+      if (score > best.score) best = { key, minor: isMinor, score };
+    }
+  }
+  return { key: best.key, minor: best.minor };
 }
 
 /** A point of an automation line, in beats (straight lines between points, sorted by beat). */
@@ -128,7 +204,7 @@ export function setTimeSig(project: Project, num: number, den: number): void {
 export const BACKING = "backing";
 
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
+  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, harmony: structuredClone(DEFAULT_HARMONY), noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
 }
 
 /** An audio track: clips of materials on the timeline (a new clip plays `material`). */
@@ -321,6 +397,18 @@ export function shifted(notes: readonly Note[], dBeats: number, dPitch: number):
 }
 
 /** A project read back from storage or a file: anything missing or odd is put right. */
+function sanitizeHarmony(raw: unknown): Harmony {
+  const h = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const voices = Array.isArray(h.voices) ? [...new Set(h.voices.filter((v): v is number => Number.isInteger(v) && v !== 0 && Math.abs(v) <= 14))] : [...DEFAULT_HARMONY.voices];
+  return {
+    on: h.on === true,
+    key: Number.isInteger(h.key) && (h.key as number) >= 0 && (h.key as number) < 12 ? (h.key as number) : 0,
+    minor: h.minor === true,
+    voices,
+    level: typeof h.level === "number" && Number.isFinite(h.level) ? Math.max(0, Math.min(1, h.level)) : DEFAULT_HARMONY.level,
+  };
+}
+
 export function sanitizeProject(raw: unknown): Project {
   const d = emptyProject();
   if (!raw || typeof raw !== "object") return d;
@@ -369,6 +457,7 @@ export function sanitizeProject(raw: unknown): Project {
           mute: tr.mute === true,
           solo: tr.solo === true,
           glide: num(tr.glide, 0, 0, 2),
+          harmony: sanitizeHarmony(tr.harmony),
           noteLength: num(tr.noteLength, 1, MIN_LENGTH, 64),
           noteVelocity: num(tr.noteVelocity, DEFAULT_VELOCITY, 0.01, 1),
           volumeAuto: line(tr.volumeAuto, 0, VOLUME_AUTO_MAX),

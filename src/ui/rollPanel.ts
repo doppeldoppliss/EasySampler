@@ -32,6 +32,9 @@ import {
   tempoAt,
   tempoMapSec,
   trimClips,
+  estimateKey,
+  withHarmony,
+  type Harmony,
   dbToGain,
   FADER_FLOOR_DB,
   gainToDb,
@@ -74,6 +77,16 @@ function remember(key: string, value: string): void {
 const COARSE = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 /** How far past the last note playback runs before it stops on its own (beats). */
 const END_PAD_BEATS = 2;
+
+/** The ハモリ's voices offered: scale steps from the note, and what they are called. */
+const HARMONY_VOICES: [number, string][] = [
+  [2, "3度上"],
+  [-2, "3度下"],
+  [4, "5度上"],
+  [-3, "4度下"],
+  [7, "オクターブ上"],
+  [-7, "オクターブ下"],
+];
 
 /** Where 書き出す音量 is kept (this browser). */
 const LOUDNESS_KEY = "easysampler.exportLoudness";
@@ -302,10 +315,29 @@ export class RollPanel {
     el("option", { value: "master", textContent: "マスター音量の線" }),
   ]);
   private readonly glideSelect = el("select", { ariaLabel: "ポルタメント" }, GLIDES.map(([v, label]) => el("option", { value: String(v), textContent: label })));
+  // ハモリ (a melodic track): on, the key, which voices, how strong.
+  private readonly harmonyOn = el("input", { type: "checkbox" });
+  private readonly harmonyKey = el("select", { ariaLabel: "ハモリのキー" }, ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"].map((name, i) => el("option", { value: String(i), textContent: name })));
+  private readonly harmonyMode = el("select", { ariaLabel: "長調 / 短調" }, [el("option", { value: "major", textContent: "長調" }), el("option", { value: "minor", textContent: "短調" })]);
+  private readonly harmonyVoiceButtons = HARMONY_VOICES.map(([steps, label]) => {
+    const b = button(label, "small toggle", () => this.changeHarmony((h) => (h.voices = h.voices.includes(steps) ? h.voices.filter((v) => v !== steps) : [...h.voices, steps])));
+    b.dataset.steps = String(steps);
+    return b;
+  });
+  private readonly harmonyLevel = el("input", { type: "range", min: "0", max: "1", step: "0.05", ariaLabel: "ハモリの強さ" });
+  private readonly harmonyNote = el("span", { className: "fine" });
   private readonly glideRow = el("div", { className: "track-options" }, [
     el("div", { className: "row" }, [
       el("label", { className: "inline" }, ["ポルタメント ", this.glideSelect]),
       el("span", { className: "fine", textContent: "つながった(重なった)音符を、前の高さから滑らせてつなぎます。このトラックは単音になります。" }),
+    ]),
+    el("div", { className: "row harmony-row" }, [
+      el("label", { className: "inline" }, [this.harmonyOn, " ハモリを足す"]),
+      el("span", { className: "inline" }, ["キー ", this.harmonyKey, this.harmonyMode]),
+      button("曲から推定", "small", () => this.estimateHarmonyKey(), "曲の全部の音符から、いちばん合いそうなキーを選びます"),
+      ...this.harmonyVoiceButtons,
+      el("label", { className: "inline fine" }, ["強さ ", this.harmonyLevel]),
+      this.harmonyNote,
     ]),
   ]);
   // Step input: notes played on the keyboard go in at the position, which then moves on by one grid step.
@@ -451,9 +483,19 @@ export class RollPanel {
       this.roll.draw();
     });
     this.selectToggle.hidden = !COARSE;
+    this.harmonyOn.addEventListener("change", () => this.changeHarmony((h) => (h.on = this.harmonyOn.checked)));
+    this.harmonyKey.addEventListener("change", () => this.changeHarmony((h) => (h.key = Number(this.harmonyKey.value))));
+    this.harmonyMode.addEventListener("change", () => this.changeHarmony((h) => (h.minor = this.harmonyMode.value === "minor")));
+    this.harmonyLevel.addEventListener("input", () => {
+      this.track.harmony.level = Number(this.harmonyLevel.value);
+      this.reload();
+      this.scheduleSave();
+      this.commitSoon();
+    });
     this.glideSelect.addEventListener("change", () => {
       const t = this.track;
       t.glide = Number(this.glideSelect.value) || 0;
+      this.showHarmony();
       this.reload();
       this.scheduleSave();
       this.commit();
@@ -576,6 +618,40 @@ export class RollPanel {
     });
     this.grabLoopEnd(this.loopEndGrip, "end");
     this.applyProject();
+  }
+
+  /** The selected track's ハモリ changed: kept, heard, one undo step. */
+  private changeHarmony(change: (h: Harmony) => void): void {
+    const t = this.track;
+    change(t.harmony);
+    this.showHarmony();
+    this.reload();
+    this.scheduleSave();
+    this.commit();
+  }
+
+  /** The key the whole song's melodic notes suggest, for the ハモリ. */
+  private estimateHarmonyKey(): void {
+    const notes = this.project.tracks.filter((t) => t.kind === "melodic").flatMap((t) => t.notes);
+    if (!notes.length) return;
+    const found = estimateKey(notes);
+    this.changeHarmony((h) => {
+      h.key = found.key;
+      h.minor = found.minor;
+    });
+    this.info.textContent = `曲の音符から、キーを ${this.harmonyKey.selectedOptions[0]?.textContent ?? ""}${found.minor ? "短調" : "長調"}と推定しました。`;
+  }
+
+  /** The selected track's ハモリ on screen. */
+  private showHarmony(): void {
+    const h = this.track.harmony;
+    this.harmonyOn.checked = h.on;
+    this.harmonyKey.value = String(h.key);
+    this.harmonyMode.value = h.minor ? "minor" : "major";
+    for (const b of this.harmonyVoiceButtons) b.classList.toggle("on", h.voices.includes(Number(b.dataset.steps)));
+    this.harmonyLevel.value = String(h.level);
+    for (const x of [this.harmonyKey, this.harmonyMode, this.harmonyLevel, ...this.harmonyVoiceButtons]) x.disabled = !h.on;
+    this.harmonyNote.textContent = h.on && this.track.glide > 0 ? "ポルタメント中は単音なので、ハモリは鳴りません" : h.on && !h.voices.length ? "足す声を選んでください" : "";
   }
 
   /** The song's tempo (the sampling side can take it for its export length). */
@@ -939,6 +1015,7 @@ export class RollPanel {
     this.roll.splitNote = audio ? (n, at) => (n.clip ? { clip: { ...n.clip, offset: n.clip.offset + beatsToSec(at, this.project) - beatsToSec(n.start, this.project) } } : {}) : null;
     this.roll.noteLabel = audio ? (n) => (n.clip ? (this.project.materials.find((x) => x.id === n.clip!.material)?.name ?? "(なくなった素材)") : "") : null;
     this.glideSelect.value = String(GLIDES.some(([v]) => v === t.glide) ? t.glide : 0);
+    this.showHarmony();
     this.stepHeld.clear();
     this.stepHistory.length = 0;
     this.stepLastChord = null;
@@ -1840,7 +1917,7 @@ export class RollPanel {
         instrument: t.kind === "drum" ? "drum" : t.instrument!,
         samples: t.kind === "drum" ? kit.samples : undefined,
         drumKeys: t.kind === "drum" ? kit.keys : undefined,
-        notes: toSeqNotes(t.notes, this.project, t.kind !== "drum" && t.glide > 0),
+        notes: toSeqNotes(t.kind === "melodic" ? withHarmony(t.notes, t.harmony, t.glide) : t.notes, this.project, t.kind !== "drum" && t.glide > 0),
         glide: t.kind === "drum" ? 0 : t.glide,
         ...this.mixOf(t),
         };

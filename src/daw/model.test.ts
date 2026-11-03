@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptyProject, fromSongNotes, sanitizeProject, setTimeSig, shifted, snap, snapDown, songEnd, toSeqNotes, type Note } from "./model";
+import { emptyProject, estimateKey, fromSongNotes, harmonizePitch, withHarmony, sanitizeProject, setTimeSig, shifted, snap, snapDown, songEnd, toSeqNotes, type Note } from "./model";
 
 const note = (start: number, length: number, pitch: number): Note => ({ id: 0, start, length, pitch, velocity: 0.8 });
 
@@ -82,5 +82,40 @@ describe("time signature", () => {
     expect([back.timeSig, back.beatsPerBar]).toEqual([{ num: 7, den: 8 }, 3.5]);
     // An older save (beatsPerBar only): n/4.
     expect(sanitizeProject({ beatsPerBar: 3 }).timeSig).toEqual({ num: 3, den: 4 });
+  });
+});
+
+describe("ハモリ", () => {
+  it("moves a note along the key's scale: thirds major or minor as the key has them, fifths, octaves", () => {
+    // C major: C→E (a major third), D→F (a minor third), B→D; a fifth up from E is B; an octave up is +12.
+    expect(harmonizePitch(60, 2, 0, false)).toBe(64);
+    expect(harmonizePitch(62, 2, 0, false)).toBe(65);
+    expect(harmonizePitch(71, 2, 0, false)).toBe(74);
+    expect(harmonizePitch(64, 4, 0, false)).toBe(71);
+    expect(harmonizePitch(60, 7, 0, false)).toBe(72);
+    // A third down from E is C; in A minor, a third up from A is C.
+    expect(harmonizePitch(64, -2, 0, false)).toBe(60);
+    expect(harmonizePitch(57, 2, 9, true)).toBe(60);
+    // Off the scale (C# in C major): from the step under it, the same distance off.
+    expect(harmonizePitch(61, 2, 0, false)).toBe(65);
+  });
+
+  it("adds a note per voice (as long, softer by the level), and nothing on a sliding track or when off", () => {
+    const notes = [{ id: 1, start: 0, length: 1, pitch: 60, velocity: 1 }];
+    const h = { on: true, key: 0, minor: false, voices: [2, 4], level: 0.5 };
+    const out = withHarmony(notes, h);
+    expect(out.map((n) => [n.pitch, n.start, n.length, n.velocity])).toEqual([
+      [60, 0, 1, 1],
+      [64, 0, 1, 0.5],
+      [67, 0, 1, 0.5],
+    ]);
+    expect(withHarmony(notes, h, 0.1)).toHaveLength(1);
+    expect(withHarmony(notes, { ...h, on: false })).toHaveLength(1);
+  });
+
+  it("estimates the key from the notes", () => {
+    const scale = (root: number, steps: number[]) => steps.map((s, i) => ({ id: i, start: i, length: s === 0 || s === 7 ? 2 : 1, pitch: 60 + root + s, velocity: 0.8 }));
+    expect(estimateKey(scale(7, [0, 2, 4, 5, 7, 9, 11, 0, 4, 7]))).toEqual({ key: 7, minor: false });
+    expect(estimateKey(scale(9, [0, 2, 3, 5, 7, 8, 10, 0, 3, 7]))).toEqual({ key: 9, minor: true });
   });
 });

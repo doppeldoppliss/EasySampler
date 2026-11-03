@@ -1025,6 +1025,10 @@ body.keys-pinned {
     grid-template-columns: 3.4em 9em 16em 7em auto auto auto auto 3em minmax(0, 1fr) auto;
   }
   .track-row > .track-edit { width: 7em; }
+  /* A note (音源を選ぶと鳴ります, ⚠ 音源の高さから離れすぎ) on a line of its own under the name, not squeezed into the last
+     column letter by letter; × stays at the end of the first line. */
+  .track-row > .track-note:not(:empty) { grid-column: 2 / -1; grid-row: 2; }
+  .track-row > :nth-child(11) { grid-column: 11; grid-row: 1; }
   .track-row > select,
   .track-row > .track-drum {
     width: 100%;

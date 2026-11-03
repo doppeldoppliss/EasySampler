@@ -100,6 +100,11 @@ export interface InstrumentParams {
    * vibrato and fast movement kept, so a long held note does not wander off the key.
    */
   driftFix: boolean;
+  /**
+   * 持続部だけシンセ化 (伸ばす): the pitch shaping (平坦化 and the rest) applies from the sustain on; the head keeps
+   * its contour as recorded (only moved to the key), the shaping coming in as it ends.
+   */
+  sustainOnlySynth: boolean;
   /** Wavetable sustain: how many consecutive periods are cycled (1 = one period over and over). */
   wavetableCycles: number;
   /**
@@ -212,6 +217,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   heldSustainMode: "pool",
   transposeOnly: false,
   driftFix: true,
+  sustainOnlySynth: true,
   wavetableCycles: 1,
   stretch: { head: 1 },
   wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, vibratoAttackSec: 0.15, vibratoReleaseSec: 0, vibratoPhase: 0, tremoloDepth: 0, driftCents: 0, micro: true, smoothSec: 0, keepDrift: 1, keepModulation: 1 },
@@ -287,6 +293,7 @@ function presetBase(p: InstrumentParams): InstrumentParams {
     heldSustainMode: "pool",
     transposeOnly: false,
     driftFix: d.driftFix,
+    sustainOnlySynth: d.sustainOnlySynth,
     stretch: { ...d.stretch },
     wobble: { ...d.wobble },
     amp: { ...d.amp, attack: p.amp.attack, fadeOut: p.amp.fadeOut, velocitySens: p.amp.velocitySens },

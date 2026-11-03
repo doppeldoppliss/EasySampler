@@ -98,6 +98,8 @@ export class MaterialEditor {
   /** The note the file is tuned to: where the edited curve is drawn. */
   private target = 60;
   private flatten = 0;
+  /** The head drawn as recorded (持続部だけシンセ化). */
+  private headKept = false;
   /** How a detected pitch becomes the output pitch (the yellow curve); null = flatten toward the target. */
   private selection: TimeSelection | null = null;
   private layout: OutputLayout | null = null;
@@ -172,7 +174,9 @@ export class MaterialEditor {
     this.announceView();
   }
 
-  setState(markers: Markers, root: number, flatten: number, target = root): void {
+  /** `headKept`: the head is drawn with its contour as recorded (持続部だけシンセ化), the shaping from the sustain on. */
+  setState(markers: Markers, root: number, flatten: number, target = root, headKept = false): void {
+    this.headKept = headKept;
     this.markers = markers;
     const removed = normalizeRemoved(markers.removed, markers.rangeStart, markers.rangeEnd);
     if (JSON.stringify(removed) !== JSON.stringify(this.removed)) this.mappingVersion++;
@@ -803,7 +807,9 @@ export class MaterialEditor {
     // After flattening, as it will be written (on the target note): yellow, thick, solid — within the range.
     g.strokeStyle = cssVar("--pitch-edited");
     g.lineWidth = 3 * dpr;
-    curve((p) => this.target + (1 - this.flatten) * (p - this.root), markers.rangeStart, this.playedEnd(markers));
+    const shapedFrom = this.headKept ? Math.min(markers.sustainStart, this.playedEnd(markers)) : markers.rangeStart;
+    if (shapedFrom > markers.rangeStart) curve((p) => this.target + (p - this.root), markers.rangeStart, shapedFrom);
+    curve((p) => this.target + (1 - this.flatten) * (p - this.root), shapedFrom, this.playedEnd(markers));
 
     // Marker strip: the head and the sustain with labels, or (録音の終わりまで) the range as one band.
     const bands: [number, number, string, string][] = this.parts.tail

@@ -455,9 +455,9 @@ describe("Melodyne-style controls", () => {
       }
       return num / den;
     };
-    const keep = centroidOf(play(setup(material, { formantFollow: 0 }).engine, 62 + 19, 1, 0.1));
-    const half = centroidOf(play(setup(material, { formantFollow: 0.5 }).engine, 62 + 19, 1, 0.1));
-    const full = centroidOf(play(setup(material, { formantFollow: 1 }).engine, 62 + 19, 1, 0.1));
+    const keep = centroidOf(play(setup(material, { formantFollow: 0, sustainOnlySynth: false }).engine, 62 + 19, 1, 0.1));
+    const half = centroidOf(play(setup(material, { formantFollow: 0.5, sustainOnlySynth: false }).engine, 62 + 19, 1, 0.1));
+    const full = centroidOf(play(setup(material, { formantFollow: 1, sustainOnlySynth: false }).engine, 62 + 19, 1, 0.1));
     expect(half).toBeGreaterThan(keep * 1.05);
     expect(full).toBeGreaterThan(half * 1.05);
   });
@@ -625,5 +625,35 @@ describe("Engine: 伸ばす(移調)", () => {
     const fixed = steps(true);
     expect(spread(fixed)).toBeLessThan(0.3);
     for (const m of fixed) expect(Math.abs(m)).toBeLessThan(0.2);
+  });
+});
+
+describe("Engine: 持続部だけシンセ化", () => {
+  // A scoop up into the note (two semitones under, over 0.25 s), then the vowel held with a vibrato.
+  const scooped = () => synthVoice({ sampleRate: SR, durationSec: 1.2, pitch: (t) => (t < 0.25 ? 55 + 8 * t : 57 + 0.4 * Math.sin(2 * Math.PI * 5.5 * t)) });
+  /** The output's pitch (MIDI) over a span, the median, from a note held 1.2 s. */
+  const run = (sustainOnlySynth: boolean) => {
+    const material = scooped();
+    const analysis = analyzeMaterial([material], SR);
+    const engine = new Engine(SR);
+    engine.setSource(prepareSource([material], analysis, SR));
+    engine.setInstrument({ ...analysis.markers, rangeStart: 0, sustainStart: 0.3, sustainEnd: 1.1 }, { ...DEFAULT_PARAMS, root: 57, sustainOnlySynth });
+    const f0 = analyzePitch(play(engine, 57, 1.2), SR).f0;
+    const at = (from: number, to: number) => {
+      const xs = Array.from(f0.slice(Math.round(from / 0.005), Math.round(to / 0.005))).filter(Number.isFinite).sort((a, b) => a - b);
+      return { median: xs[xs.length >> 1], spread: xs[Math.floor(xs.length * 0.9)] - xs[Math.floor(xs.length * 0.1)] };
+    };
+    return { head: at(0.04, 0.12), sustain: at(0.6, 1.1) };
+  };
+
+  it("on: the head keeps its scoop, the sustain is flat; off: both flat", () => {
+    const on = run(true);
+    const off = run(false);
+    expect(on.head.median).toBeLessThan(56.2);
+    expect(Math.abs(off.head.median - 57)).toBeLessThan(0.2);
+    for (const r of [on, off]) {
+      expect(Math.abs(r.sustain.median - 57)).toBeLessThan(0.1);
+      expect(r.sustain.spread).toBeLessThan(0.15);
+    }
   });
 });

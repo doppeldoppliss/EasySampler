@@ -748,6 +748,11 @@ const oneShot = (e: HTMLElement) => (oneShotOnly.push(e), e);
 const shapingOnly: HTMLElement[] = [];
 const shaping = (e: HTMLElement) => (shapingOnly.push(e), e);
 let wavetableRow: HTMLElement;
+// 持続部だけシンセ化 (伸ばす, on by default): the head keeps its contour, the shaping from the sustain on.
+const sustainOnlyRow = el("div", {}, [
+  check("持続部だけシンセ化する(頭部は録音の抑揚のまま)", () => params.sustainOnlySynth, (p, v) => (p.sustainOnlySynth = v)),
+  el("p", { className: "fine help", textContent: "オンのとき、平坦化などの音程の整え方は持続区間から後ろにだけかかり、頭部(しゃくり・子音のあとの立ち上がり)は録音の抑揚のまま鍵の高さへ移します。頭部が終わると 0.15 秒かけて整えた音程に入ります。オフにすると頭部も含めて全体を整えます。" }),
+]);
 // 伸ばす(移調): the slow drift past the head brought onto the key (on by default).
 const driftFixRow = el("div", {}, [
   check("伸ばす部分のゆっくりした音程のずれだけ直す(ビブラートや細かい抑揚は残す)", () => params.driftFix, (p, v) => (p.driftFix = v)),
@@ -796,6 +801,7 @@ function refreshMakeMode(): void {
   const mode = makeModeOf(params);
   const hold = isHeld(mode);
   driftFixRow.hidden = mode !== "holdTranspose";
+  sustainOnlyRow.hidden = mode !== "hold";
   for (const e of holdOnly) e.hidden = !hold;
   for (const e of oneShotOnly) e.hidden = hold;
   wavetableRow.hidden = !hold || params.sustainMode !== "wavetable";
@@ -866,6 +872,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
   held(sustainHelp),
   (wavetableRow = range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`)),
   driftFixRow,
+  sustainOnlyRow,
   oneShot(playRangeRow),
   oneShot(stopOnReleaseRow),
   pitchModeNote,
@@ -2358,7 +2365,7 @@ function refreshExport(): void {
   if (markers) {
     const flatten = params.transposeOnly ? 0 : params.flatten;
     editor.setParts(playedParts(params));
-    editor.setState(markers, params.root, flatten, note);
+    editor.setState(markers, params.root, flatten, note, !params.transposeOnly && params.sustainOnlySynth && makeModeOf(params) === "hold");
     refreshFadeGrips();
     editor.setLayout(
       outputLayout(markers, params, held),

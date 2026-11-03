@@ -64,8 +64,8 @@ const SHIMMER = 0.03;
 const FORMANT_FOLLOW_FROM = 7;
 const FORMANT_FOLLOW_POWER = 0.4;
 
-/** 伸ばす(移調): how long the drift correction takes to come in (and go), so the head runs on into it smoothly. */
-const DRIFT_FIX_SEC = 0.15;
+/** How long the sustain's pitch shaping takes to come in as the head ends (持続部だけシンセ化, 伸ばす(移調)'s drift fix), so the head runs on into it smoothly. */
+const SHAPE_IN_SEC = 0.15;
 
 const Phase = {
   Head: 0,
@@ -126,8 +126,8 @@ class Voice {
   releasedAt = Infinity;
   /** The pitch correction as it has glided in so far (semitones), for tune.retuneSec. */
   retuneCorr = 0;
-  /** 伸ばす(移調): how far the drift correction has come in (0 in the head, up to 1 over DRIFT_FIX_SEC after it). */
-  driftIn = 0;
+  /** How far the sustain's pitch shaping has come in (0 in the head, up to 1 over SHAPE_IN_SEC after it). */
+  shapeIn = 0;
   /** The last grain's spacing (samples): the time step the glide advances by. */
   lastStep = 0;
   /** Portamento: semitones still to slide (added to the note, moving to 0), and how much it moves per output sample. */
@@ -446,7 +446,7 @@ export class Engine {
     v.released = false;
     v.releasedAt = Infinity;
     v.retuneCorr = 0;
-    v.driftIn = 0;
+    v.shapeIn = 0;
     v.lastStep = 0;
     v.bend = 0;
     v.bendPerSample = 0;
@@ -630,6 +630,7 @@ export class Engine {
       const f0 = this.f0[k];
       let correction = 0;
       let tau = params.tune.retuneSec;
+      const headKept = params.sustainOnlySynth && params.sustainEnabled && params.sustainMode !== "none";
       // (移調: the contour is left as recorded; only the shift moves it. 伸ばす(移調): past the head, the slow drift
       // is brought onto the root, the vibrato and the fast movement kept. It fades in once, as the head ends, and then
       // follows the read position at once: a loop or the pool jumping back finds its correction there.)
@@ -637,8 +638,8 @@ export class Engine {
         tau = 0;
         const slow = this.f0slow[k];
         if (params.driftFix && params.sustainMode !== "none" && v.phase !== Phase.Head && Number.isFinite(slow)) {
-          v.driftIn = Math.min(1, v.driftIn + v.lastStep / this.sampleRate / DRIFT_FIX_SEC);
-          correction = v.driftIn * (params.root - slow);
+          v.shapeIn = Math.min(1, v.shapeIn + v.lastStep / this.sampleRate / SHAPE_IN_SEC);
+          correction = v.shapeIn * (params.root - slow);
         }
       } else if (Number.isFinite(f0)) {
         // The target in the material's own pitch space: the root (the one detected note).
@@ -647,6 +648,12 @@ export class Engine {
         const slow = Number.isFinite(this.f0slow[k]) ? this.f0slow[k] : f0;
         const kept = params.wobble.keepDrift * (slow - target) + params.wobble.keepModulation * (f0 - slow);
         correction = target + (1 - params.flatten) * kept - f0;
+        // 持続部だけシンセ化 (伸ばす): the head keeps its contour, the shaping fades in once it ends.
+        if (headKept) {
+          if (v.phase === Phase.Head) correction = 0;
+          else v.shapeIn = Math.min(1, v.shapeIn + v.lastStep / this.sampleRate / SHAPE_IN_SEC);
+          correction *= v.shapeIn;
+        }
       }
       // The correction glides in over the retune time (Auto-Tune's Retune Speed); 0 = at once.
       if (tau > 0) {
@@ -661,7 +668,7 @@ export class Engine {
       spacing = Number.isFinite(f0) ? this.sampleRate / (440 * 2 ** ((f0 + offset - 69) / 12)) : period * 2 ** (-offset / 12);
       alpha = this.formantAlpha(shift);
       gain = Math.sqrt((spacing * alpha) / period);
-      if (params.wobble.micro && !params.transposeOnly) {
+      if (params.wobble.micro && !params.transposeOnly && !(headKept && v.phase === Phase.Head)) {
         spacing *= 1 + (this.random() * 2 - 1) * JITTER;
         gain *= 1 + (this.random() * 2 - 1) * SHIMMER;
       }

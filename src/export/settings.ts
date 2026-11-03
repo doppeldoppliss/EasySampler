@@ -157,6 +157,7 @@ function readParams(raw: unknown): InstrumentParams {
     stopOnRelease: raw.stopOnRelease === true,
     transposeOnly: raw.transposeOnly === true,
     driftFix: raw.driftFix !== false,
+    sustainOnlySynth: raw.sustainOnlySynth !== false,
     levelEven: clamp(num(raw.levelEven, d.levelEven), 0, 1),
     formantSemitones: clamp(num(raw.formantSemitones, d.formantSemitones), -12, 12),
     // (Older files stored on / off.)

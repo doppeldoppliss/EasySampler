@@ -353,7 +353,11 @@ export class RollPanel {
   private readonly loopStartGrip = el("div", { className: "seek-loop-grip start", title: "ループの始まり(ドラッグで動かす。小節単位、Alt で拍単位)" });
   private readonly loopEndGrip = el("div", { className: "seek-loop-grip end", title: "ループの終わり(ドラッグで動かす。小節単位、Alt で拍単位)" });
   private readonly loopBand = el("div", { className: "seek-loop" });
-  private readonly seekWrap = el("div", { className: "seek-wrap" }, [this.loopBand, this.loopStartGrip, this.loopEndGrip, this.seekBar]);
+  /** Where the selected track has notes, roughly, under the seek bar. */
+  private readonly seekActivity = el("canvas", { className: "seek-activity", ariaHidden: "true" });
+  private readonly seekWrap = el("div", { className: "seek-wrap" }, [this.loopBand, this.loopStartGrip, this.loopEndGrip, this.seekBar, this.seekActivity]);
+  /** Each track row's lamp: lit while that track sounds (a note under the playhead, the track heard). */
+  private trackLamps: HTMLElement[] = [];
   private seeking = false;
   private seekTimer = 0;
   readonly info = el("p", { className: "fine", role: "status" });
@@ -502,6 +506,8 @@ export class RollPanel {
       clearTimeout(this.seekTimer);
       if (this.playing) this.start();
     });
+    // (The strip is drawn in pixels: again when the bar changes width.)
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => this.drawSeekActivity()).observe(this.seekActivity);
     this.grabLoopEnd(this.loopStartGrip, "start");
     this.grabLoopEnd(this.loopEndGrip, "end");
     this.applyProject();
@@ -1220,6 +1226,9 @@ export class RollPanel {
 
   private renderTracks(): void {
     this.summarize();
+    // (The lamps come back with the rows below.)
+    this.trackLamps = [];
+    this.drawSeekActivity();
     this.refreshTrackOps();
     this.renderLongList();
     this.refreshSeekRange(secToBeats(this.from, this.project));
@@ -1299,8 +1308,9 @@ export class RollPanel {
         t.kind === "melodic" && t.instrument && t.instrument !== BACKING
           ? button("音源を編集", "small track-edit", () => this.onEditCut(t.instrument!), "このトラックが鳴らしているサンプリング済音源を、素材の画面で開きます")
           : null;
+      const lamp = el("span", { className: "track-lamp", title: "鳴っている間、点きます" });
       const row = el("div", { className: `track-row${selected ? " selected" : ""}` }, [
-        el("span", { className: "track-count fine num", textContent: `${t.notes.length}` }),
+        el("span", { className: "track-count fine num" }, [lamp, `${t.notes.length}`]),
         name,
         instrument,
         // (A row without one keeps its place empty: the columns line up from row to row.)
@@ -1317,6 +1327,7 @@ export class RollPanel {
         if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLButtonElement)) this.selectTrack(i);
       });
       instrument.addEventListener("focus", () => this.selectTrack(i));
+      this.trackLamps.push(lamp);
       return row;
     });
     this.trackList.replaceChildren(...rows);
@@ -1827,9 +1838,66 @@ export class RollPanel {
       }
       this.roll.setPlayhead(beat, true);
       this.showPosition(beatsToSec(beat, this.project));
+      this.lightLamps(beat);
       this.frame = requestAnimationFrame(tick);
     };
     this.frame = requestAnimationFrame(tick);
+  }
+
+  /**
+   * The lamps at a beat (null: all off): a track is lit where a note is under the playhead and the track is heard
+   * (not muted; with a solo on, only the soloed ones). A short note (a drum hit) stays lit a quarter beat, so it is seen.
+   */
+  private lightLamps(beat: number | null): void {
+    const tracks = this.project.tracks;
+    const soloing = tracks.some((t) => t.solo);
+    tracks.forEach((t, i) => {
+      const lamp = this.trackLamps[i];
+      if (!lamp) return;
+      let on = false;
+      if (beat !== null && !t.mute && (!soloing || t.solo) && (t.kind === "audio" || t.instrument)) {
+        for (const n of t.notes) {
+          if (n.start > beat) break;
+          if (beat < n.start + Math.max(n.length, 0.25)) {
+            on = true;
+            break;
+          }
+        }
+      }
+      lamp.classList.toggle("on", on);
+    });
+  }
+
+  /** The selected track's notes along the seek bar, merged into stretches: where in the song it plays. */
+  private drawSeekActivity(): void {
+    const canvas = this.seekActivity;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (!width || !height) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    const g = canvas.getContext("2d");
+    if (!g) return;
+    g.clearRect(0, 0, canvas.width, canvas.height);
+    const max = Number(this.seekBar.max) || 1;
+    // (Everything shorter than a pixel still shows: a drum hit is a tick.)
+    const x = (beat: number) => (Math.min(max, Math.max(0, beat)) / max) * canvas.width;
+    g.fillStyle = getComputedStyle(canvas).color;
+    let from = -1;
+    let to = -1;
+    const flush = () => {
+      if (from >= 0) g.fillRect(x(from), 0, Math.max(dpr, x(to) - x(from)), canvas.height);
+    };
+    for (const n of this.track?.notes ?? []) {
+      if (n.start <= to + 1e-9) to = Math.max(to, n.start + n.length);
+      else {
+        flush();
+        from = n.start;
+        to = n.start + n.length;
+      }
+    }
+    flush();
   }
 
   // ------------------------------------------------------------- recording (design.md 13)
@@ -1945,6 +2013,7 @@ export class RollPanel {
   /** Stops playback (the position stays where it was). */
   stop(): void {
     cancelAnimationFrame(this.frame);
+    this.lightLamps(null);
     if (this.startedAt === null) return;
     // A recording ends here: where the keys still held are let go, before the clock stops.
     const rec = this.recording;
@@ -2001,6 +2070,7 @@ export class RollPanel {
     this.loopStartGrip.style.left = at(loop.start);
     this.loopEndGrip.style.left = at(loop.end);
     this.seekWrap.classList.toggle("loop-on", loop.on);
+    this.drawSeekActivity();
   }
 
   /** One end of the loop dragged along the seek bar: to whole bars (beats with Alt), the loop switched on, kept at least a beat long. */

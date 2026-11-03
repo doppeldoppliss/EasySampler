@@ -1022,7 +1022,7 @@ body.keys-pinned {
 @media (min-width: 900px) {
   .track-row {
     display: grid;
-    grid-template-columns: 2.2em 9em 16em 7em auto auto auto auto 3em minmax(0, 1fr) auto;
+    grid-template-columns: 3.4em 9em 16em 7em auto auto auto auto 3em minmax(0, 1fr) auto;
   }
   .track-row > .track-edit { width: 7em; }
   .track-row > select,
@@ -1415,6 +1415,7 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
   position: relative;
   width: 100%;
   padding-top: 14px;
+  padding-bottom: 7px;
 }
 .seek-wrap .song-seek {
   position: relative;
@@ -1425,7 +1426,7 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
 .seek-loop {
   position: absolute;
   top: 14px;
-  bottom: 0;
+  bottom: 7px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
@@ -1459,4 +1460,37 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
 .seek-wrap.loop-on .seek-loop-grip::after,
 .seek-loop-grip.dragging::after {
   background: var(--accent);
+}
+
+/* Under the seek bar: where the selected track has notes (the thumb's half-width in at each end, like the track). */
+.seek-activity {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 5px;
+  width: calc(100% - 16px);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--line) 60%, transparent);
+  color: var(--pitch-edited);
+  pointer-events: none;
+}
+
+/* A track row's lamp: lit while the track sounds. */
+.track-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.track-lamp {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--line) 80%, transparent);
+}
+.track-lamp.on {
+  background: #2ecc71;
+  box-shadow: 0 0 6px #2ecc71;
 }

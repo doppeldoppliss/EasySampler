@@ -302,3 +302,31 @@ function num(v: unknown, fallback: number): number {
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
+
+/**
+ * A material's settings after its recording is cut down to [from, from + lengthSec) (素材を切り詰める): every
+ * cut's markers and removed stretches and every hand correction move back by `from`, kept within the new length
+ * (what lay outside is gone).
+ */
+export function trimSettings<T extends Pick<SettingsFile, "cuts" | "corrections" | "material">>(s: T, from: number, lengthSec: number): T {
+  const at = (t: number) => Math.min(lengthSec, Math.max(0, t - from));
+  const span = <R extends { start: number; end: number }>(r: R): R => ({ ...r, start: at(r.start), end: at(r.end) });
+  return {
+    ...s,
+    material: { ...s.material, durationSec: lengthSec },
+    cuts: s.cuts.map((c) => ({
+      ...c,
+      markers: clampMarkers({
+        ...c.markers,
+        rangeStart: at(c.markers.rangeStart),
+        rangeEnd: at(c.markers.rangeEnd),
+        attack: at(c.markers.attack),
+        sustainStart: at(c.markers.sustainStart),
+        sustainEnd: at(c.markers.sustainEnd),
+        tailStart: at(c.markers.tailStart),
+        removed: (c.markers.removed ?? []).map(span).filter((r) => r.end > r.start),
+      }),
+    })),
+    corrections: s.corrections.map(span).filter((c) => c.end > c.start),
+  };
+}

@@ -400,3 +400,22 @@ export function sanitizeProject(raw: unknown): Project {
     kit: sanitizeKit(r.kit),
   };
 }
+
+/**
+ * 素材を切り詰める: a material's recording now starts `from` seconds later, so its clips (on audio tracks, live or
+ * as kept) read `from` seconds earlier; a clip that began in the part cut away starts at the new beginning.
+ * Returns how many clips were moved.
+ */
+export function trimClips(tracks: unknown, material: string, from: number): number {
+  let moved = 0;
+  if (!Array.isArray(tracks)) return 0;
+  for (const t of tracks as { notes?: unknown }[]) {
+    if (!Array.isArray(t?.notes)) continue;
+    for (const n of t.notes as { clip?: { material?: unknown; offset?: unknown } }[]) {
+      if (n?.clip?.material !== material || typeof n.clip.offset !== "number") continue;
+      n.clip.offset = Math.max(0, n.clip.offset - from);
+      moved++;
+    }
+  }
+  return moved;
+}

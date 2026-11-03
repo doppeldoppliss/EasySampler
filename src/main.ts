@@ -14,14 +14,14 @@ import { EngineClient } from "./audio/engineClient";
 import { askToPersist, forget, keep, kept, onSaveState, storageEstimate, whenSaved, type SaveState } from "./audio/store";
 import { chooseProject, createProject, currentProject, duplicateProject, newMaterialId, openProjects, projectKey, projectList, remapMaterials, removeProject, renameProject, touchProject } from "./audio/projects";
 import { buildProjectFile, parseProjectFile, PROJECT_FILE_EXTENSION } from "./audio/projectFile";
-import { addToLibrary, builtinPiano, copyInLibrary, findSame, inLibrary, libraryList, openLibrary, removeFromLibrary, songsUsing } from "./audio/library";
+import { addToLibrary, builtinPiano, copyInLibrary, findSame, inLibrary, libraryList, openLibrary, removeFromLibrary, setLibraryFrames, songsUsing, updateStoredSongs } from "./audio/library";
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, resample, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
 import type { PitchTrack } from "./analysis/pyin";
 import { buildBatch, buildOne, type Built, type BuildInput } from "./export/build";
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
 import { exportFileName, safeBaseName, stripExtension } from "./export/render";
-import { newCutId, parseSettings, serializeSettings, type CutSettings, type SettingsFile } from "./export/settings";
+import { newCutId, parseSettings, serializeSettings, trimSettings, type CutSettings, type SettingsFile } from "./export/settings";
 import { hiddenPartsOf, normalizeRemoved, outputLayout, playedParts } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
 import {
@@ -61,7 +61,7 @@ import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, newSlot, renderSlot, slotFor, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
 import { MidiInput } from "./audio/midiInput";
-import { autoToSec, BACKING, beatsToSec, clipsToSeq, tempoMapSec, toSeqNotes, type Tempo } from "./daw/model";
+import { autoToSec, BACKING, beatsToSec, clipsToSeq, tempoMapSec, toSeqNotes, trimClips, type Tempo } from "./daw/model";
 import { autoValue, type AutoPoint } from "./song/player";
 import { zipStore, type ZipEntry } from "./export/zip";
 import { encodeWavBytes } from "./audio/wav";
@@ -408,6 +408,13 @@ function refreshCutUsage(): void {
 }
 const materialSelect = el("select", { ariaLabel: "編集する素材", className: "material-select" });
 materialSelect.addEventListener("change", () => switchMaterial(materialSelect.value));
+const trimUnusedButton = armedButton(
+  "使っていない部分を捨てる",
+  "もう一度押すと捨てる",
+  "small",
+  () => void trimToCuts(),
+  "素材の録音を、どの音源の範囲にも入っていない前後を捨てて短くします(元に戻せません)。音声トラックのクリップがその部分を鳴らしていれば、そこは鳴らなくなります",
+);
 const removeMaterialButton = armedButton("この素材を曲から外す", "もう一度押すと外す", "small", () => material && removeMaterial(material.id), "素材ライブラリには残り、「＋ ライブラリから」で戻せます。この素材を鳴らしているトラックは無音になります");
 // A library material shared with other songs: which ones, and 「この曲用に分ける」 to make it this song's own.
 const sharedNote = el("span", { className: "fine shared-note" });
@@ -496,13 +503,21 @@ const removeButton = button("選択した部分を削除", "small", () => {
   editor.setSelection(null);
   afterMarkersEdited();
 });
-const trimButton = button("選択した部分だけ残す", "small", () => {
+const trimButton = button("選択した部分を音源の範囲にする", "small", () => {
   if (!selection || !markers) return;
   markers = clampMarkers({ ...markers, rangeStart: selection.from, rangeEnd: selection.to });
   selection = null;
   editor.setSelection(null);
   afterMarkersEdited();
 });
+// 素材を切り詰める: the recording itself, to the selection (cannot be undone: asked on the button).
+const trimMaterialButton = armedButton(
+  "選択部分だけ残して素材を切り詰める",
+  "もう一度押すと切り詰める",
+  "small",
+  () => selection && void trimMaterial(selection.from, selection.to),
+  "素材の録音そのものを選んだ部分だけにします(元に戻せません)。すべての音源の範囲・手直し・音声トラックのクリップは位置を合わせて残ります(ほかの曲で使っていても同じです)",
+);
 const removedLabel = el("span", { className: "fine" });
 const undoRemoveButton = button("削除を 1 つ戻す", "small", () => {
   if (!markers?.removed?.length) return;
@@ -535,7 +550,7 @@ const fixStatus = el("span", { className: "fine fix-status", role: "status" });
 const undoCorrectionButton = button("手直しを 1 つ戻す", "small", () => void setCorrections(material?.corrections.slice(0, -1) ?? []));
 const clearCorrectionsButton = button("手直しをすべて戻す", "small", () => void setCorrections([]));
 const fixBar = el("div", { className: "fix-bar" }, [
-  el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, toKitKey, toKitButton, clearSelectionButton, fixStatus]),
+  el("div", { className: "row tight" }, [selectionLabel, removeButton, trimButton, trimMaterialButton, toKitKey, toKitButton, clearSelectionButton, fixStatus]),
   el("div", { className: "row tight fix-pitch" }, [el("span", { className: "fine", textContent: "判定の手直し:" }), ...fixButtons, ...shiftButtons, setNoteButton]),
   el("div", { className: "row tight" }, [removedLabel, undoRemoveButton, clearRemovedButton]),
   el("div", { className: "row tight" }, [correctionsLabel, undoCorrectionButton, clearCorrectionsButton]),
@@ -548,7 +563,7 @@ function refreshFixBar(): void {
   selectionLabel.textContent = hasSelection
     ? `選択 ${selection!.from.toFixed(2)}–${selection!.to.toFixed(2)} 秒:`
     : "波形の上を横にドラッグして選ぶと、その部分を削除したり、判定を直したりできます。";
-  for (const b of [removeButton, trimButton, toKitKey, toKitButton, ...fixButtons, ...shiftButtons, setNoteButton, clearSelectionButton]) b.hidden = !hasSelection;
+  for (const b of [removeButton, trimButton, trimMaterialButton, toKitKey, toKitButton, ...fixButtons, ...shiftButtons, setNoteButton, clearSelectionButton]) b.hidden = !hasSelection;
   setNoteButton.textContent = `${pitchLabel(note)} に`;
   setNoteButton.parentElement!.hidden = !hasSelection;
   removedLabel.textContent = removed.length ? `削除 ${removed.length} か所(${removed.map((r) => `${r.start.toFixed(2)}–${r.end.toFixed(2)} 秒`).join("、")})` : "";
@@ -630,7 +645,7 @@ editor.onViewChange = (view) => {
 };
 
 const materialPanel = el("section", { className: "panel" }, [
-  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, removeMaterialButton, splitButton, sharedNote]),
+  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, trimUnusedButton, removeMaterialButton, splitButton, sharedNote]),
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [
@@ -3426,6 +3441,49 @@ async function addPiano(): Promise<void> {
   await loadPiano();
   refreshInstruments();
   if (material?.name === PIANO_NAME) status.textContent = `「${PIANO_NAME}」を素材に加えました。トラックで鳴らすには、トラック一覧の音源の欄で選ぶか、「＋ トラックを追加」で新しいトラックを作ってください。`;
+}
+
+/**
+ * 素材を切り詰める: the recording itself cut down to [from, to) and kept so in the library; every cut's markers,
+ * the hand corrections and the material's clips (in every song) move to match; then it is analysed again. It cannot
+ * be undone (the button asks twice).
+ */
+async function trimMaterial(from: number, to: number): Promise<void> {
+  if (!material) return;
+  const m = material;
+  const sr = m.sampleRate;
+  const total = m.channels[0].length;
+  const a = Math.max(0, Math.round(from * sr));
+  const b = Math.min(total, Math.round(to * sr));
+  if (b - a < 0.05 * sr || (a === 0 && b === total)) {
+    status.textContent = "切り詰める部分がありません(素材の全体か、短すぎる範囲です)。";
+    return;
+  }
+  const fromSec = a / sr;
+  const lengthSec = (b - a) / sr;
+  const channels = m.channels.map((c) => c.slice(a, b));
+  const settings = parseSettings(serializeSettings(trimSettings(settingsBody(), fromSec, lengthSec)));
+  await keep(`audio:${m.id}`, { name: m.name, sampleRate: sr, channels });
+  await keep(`settings:${m.id}`, serializeSettings(settings));
+  await setLibraryFrames(m.id, b - a);
+  rollPanel.trimMaterialClips(m.id, fromSec);
+  await updateStoredSongs(currentProject().id, (song) => trimClips(song.tracks, m.id, fromSec) > 0);
+  await load(m.name, channels, sr, { id: m.id, settings });
+  refreshInstruments();
+  selection = null;
+  editor.setSelection(null);
+  refreshFixBar();
+  status.textContent = `「${m.name}」を ${fromSec.toFixed(2)}〜${(fromSec + lengthSec).toFixed(2)} 秒の部分だけに切り詰めました(${(total / sr).toFixed(1)} 秒 → ${lengthSec.toFixed(1)} 秒)。音源の範囲・手直し・クリップは位置を合わせてあります。`;
+}
+
+/** 使っていない部分を捨てる: the recording cut down to what the cuts' ranges cover (a hair of margin kept). */
+async function trimToCuts(): Promise<void> {
+  if (!material) return;
+  const body = settingsBody();
+  const margin = 0.02;
+  const from = Math.max(0, Math.min(...body.cuts.map((c) => c.markers.rangeStart)) - margin);
+  const to = Math.min(material.channels[0].length / material.sampleRate, Math.max(...body.cuts.map((c) => c.markers.rangeEnd)) + margin);
+  await trimMaterial(from, to);
 }
 
 /** Whether adding `seconds` of material would go past what an iPhone / iPad can hold (and says so). */

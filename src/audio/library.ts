@@ -79,6 +79,23 @@ export async function addToLibrary(entry: Omit<LibraryEntry, "addedAt">): Promis
   await keep(INDEX, entries);
 }
 
+/** A material's recording got shorter (素材を切り詰める). */
+export async function setLibraryFrames(id: string, frames: number): Promise<void> {
+  const entry = libraryEntry(id);
+  if (!entry) return;
+  entry.frames = frames;
+  await keep(INDEX, entries);
+}
+
+/** Every stored song but `except`, changed in place by `change` and kept again when it says it changed something. */
+export async function updateStoredSongs(except: string, change: (song: Record<string, unknown>) => boolean): Promise<void> {
+  for (const project of projectList()) {
+    if (project.id === except) continue;
+    const song = (await kept(projectKey(project.id))) as Record<string, unknown> | undefined;
+    if (song && change(song)) await keep(projectKey(project.id), song);
+  }
+}
+
 /** Removes a material from the library, its samples and settings with it (songs that list it drop it when opened). */
 export async function removeFromLibrary(id: string): Promise<void> {
   entries = entries.filter((e) => e.id !== id);

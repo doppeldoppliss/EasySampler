@@ -31,6 +31,7 @@ import {
   songEnd,
   tempoAt,
   tempoMapSec,
+  trimClips,
   type TempoChange,
   toSeqNotes,
   type Note,
@@ -616,6 +617,16 @@ export class RollPanel {
       for (const n of t.notes) if (n.clip?.material === from) n.clip = { ...n.clip, material: to.id };
     }
     this.scheduleSave();
+  }
+
+  /** 素材を切り詰める: the material's clips read `from` seconds earlier in its (shorter) recording. */
+  trimMaterialClips(material: string, from: number): number {
+    const moved = trimClips(this.project.tracks, material, from);
+    if (moved) {
+      this.reload();
+      this.scheduleSave();
+    }
+    return moved;
   }
 
   /** Whether a track plays a cut of this material, or has a clip of it. */

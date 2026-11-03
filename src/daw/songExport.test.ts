@@ -90,6 +90,22 @@ describe("renderSong", () => {
     expect(Math.max(...one.channels[0])).toBeCloseTo(0.8, 3);
   });
 
+  it("sidechain: a track ducks under another (its key), even with the key muted", async () => {
+    const pad = Float32Array.from({ length: SR }, () => 0.3);
+    const hit = new Float32Array(SR / 10).fill(0.8);
+    const ducked = { ...structuredClone(DEFAULT_FX), duck: { ...DEFAULT_FX.duck, on: true, source: "kick", depthDb: -12, releaseMs: 50, thresholdDb: -24 } };
+    const tracks = [
+      { id: "kick", instrument: null, samples: [[hit]], notes: [{ start: 0.5, end: 0.6, note: 0, velocity: 1, drum: false }], ...plain, mute: true },
+      { id: "pad", instrument: null, samples: [[pad]], notes: [{ start: 0, end: 1, note: 0, velocity: 1, drum: false }], ...plain, fx: ducked },
+    ];
+    const song = await renderSong({ sampleRate: SR, bpm: 120, masterFx: null, tracks });
+    const at = (sec: number) => Math.abs(song.channels[0][Math.round(sec * SR)]);
+    // Before the kick: the pad as it is; during it: about 12 dB down; well after it: back.
+    expect(at(0.3)).toBeCloseTo(0.3, 2);
+    expect(20 * Math.log10(at(0.55) / 0.3)).toBeLessThan(-10);
+    expect(at(0.9)).toBeCloseTo(0.3, 2);
+  });
+
   it("書き出す音量: brings the song to the target loudness under -1 dBTP, quiet or loud", async () => {
     const tone = (amp: number) => Float32Array.from({ length: SR * 3 }, (_, i) => amp * Math.sin((2 * Math.PI * 440 * i) / SR));
     for (const amp of [0.05, 0.9]) {

@@ -154,6 +154,8 @@ export type FxBeats = 0.25 | 0.5 | 1 | 2 | 4 | 8;
 export type StepBeats = 0.25 | 0.5;
 /** A stutter's slice, in beats: 1/16 = a sixty-fourth note … ½ = an eighth. */
 export type SliceBeats = 0.0625 | 0.125 | 0.25 | 0.5;
+/** How often the beat-led ducking pumps, in beats. */
+export type DuckBeats = 0.5 | 1 | 2;
 /** Steps in a gate or stutter pattern. */
 export const PATTERN_STEPS = 16;
 
@@ -196,6 +198,12 @@ export interface FxSettings {
   delay: { on: boolean; beats: DelayBeats; feedback: number; highCutHz: number; pingPong: boolean; mix: number };
   /** Reverb (a room): size 0–1, damping 0–1 (darker tail), pre-delay (ms), dry/wet. */
   reverb: { on: boolean; size: number; damping: number; preDelayMs: number; mix: number };
+  /**
+   * Sidechain (ダッキング): the sound pushed down by `depthDb` and let back up over `releaseMs` — on every
+   * `beats` of the song (source "beat", a pumping), or whenever another track (source = its id; a kick) is loud
+   * (fully past `thresholdDb`).
+   */
+  duck: { on: boolean; source: string; beats: DuckBeats; depthDb: number; releaseMs: number; thresholdDb: number };
   /** Limiter: input gain, ceiling (dBFS), release. */
   limiter: { on: boolean; gainDb: number; ceilingDb: number; releaseMs: number };
 }
@@ -217,6 +225,7 @@ export const DEFAULT_FX: FxSettings = {
   pan: { on: false, depth: 0.6, beats: 1 },
   delay: { on: false, beats: 0.5, feedback: 0.35, highCutHz: 6000, pingPong: true, mix: 0.25 },
   reverb: { on: false, size: 0.6, damping: 0.5, preDelayMs: 20, mix: 0.25 },
+  duck: { on: false, source: "beat", beats: 1, depthDb: -12, releaseMs: 250, thresholdDb: -24 },
   limiter: { on: false, gainDb: 3, ceilingDb: -1, releaseMs: 80 },
 };
 

@@ -146,6 +146,11 @@ export class FxChain {
   // gate
   private gateLevel = 1;
 
+  // sidechain: the key (another track's level, per sample of this block, from the player), and how far down it holds
+  // the sound (0–1, following the key with a quick attack and the release)
+  private duckKey: Float32Array | null = null;
+  private duckEnv = 0;
+
   // transient shaper
   /** Peak-hold level (instant attack): the waveform's envelope, smooth enough to compare. */
   private envFast = 0;
@@ -241,7 +246,7 @@ export class FxChain {
   get active(): boolean {
     const fx = this.fx;
     if (!fx) return false;
-    return fx.stutter.on || fx.gate.on || fx.transient.on || fx.compressor.on || fx.eq.on || fx.saturation.on || fx.air.on || fx.filter.on || fx.crush.on || fx.chorus.on || fx.delay.on || fx.reverb.on || fx.width.on || fx.pan.on || fx.limiter.on;
+    return fx.stutter.on || fx.gate.on || fx.duck.on || fx.transient.on || fx.compressor.on || fx.eq.on || fx.saturation.on || fx.air.on || fx.filter.on || fx.crush.on || fx.chorus.on || fx.delay.on || fx.reverb.on || fx.width.on || fx.pan.on || fx.limiter.on;
   }
 
   /**
@@ -308,6 +313,11 @@ export class FxChain {
     if (Number.isFinite(bpm) && bpm > 0) this.bpm = bpm;
   }
 
+  /** The sidechain's key for the next block: another track's level per sample (null: it is silent, or gone). */
+  setKey(key: Float32Array | null): void {
+    this.duckKey = key;
+  }
+
   /** Where the song is (beats) at the start of the next block: the gate and the stutter keep to its bars. */
   setBeat(beat: number): void {
     if (Number.isFinite(beat)) this.beat = beat;
@@ -363,6 +373,7 @@ export class FxChain {
     this.stutterRunning = false;
     this.stutterMix = 0;
     this.gateLevel = 1;
+    this.duckEnv = 0;
   }
 
   private resetLimiter(): void {
@@ -428,6 +439,14 @@ export class FxChain {
     const stutKeep = 1 - stutter.fade;
     const gate = fx.gate;
     const gateCoef = Math.exp(-1 / Math.max(1, (gate.smoothMs / 1000) * sr));
+    const duck = fx.duck;
+    const duckByBeat = duck.source === "beat";
+    const duckKey = this.duckKey;
+    const duckAtt = Math.exp(-1 / Math.max(1, 0.001 * sr));
+    const duckRel = Math.exp(-1 / Math.max(1, (duck.releaseMs / 1000) * sr));
+    const duckThr = dbToGain(duck.thresholdDb);
+    const duckReleaseSec = duck.releaseMs / 1000;
+    const secPerBeat = 60 / this.bpm;
 
     for (let i = 0; i < frames; i++) {
       let l = left[i];
@@ -672,6 +691,26 @@ export class FxChain {
         r *= gr;
         this.panPhase += panStep;
         if (this.panPhase >= 1) this.panPhase -= 1;
+      }
+
+      if (duck.on) {
+        // How far down, 0–1: on the beat, a quick dip that recovers over the release (the curve of a pump);
+        // from a key, all the way while the key is past the threshold (in within 1 ms), letting go over the release
+        // once it falls under it — so the release is the release, however loud the key was.
+        let amount: number;
+        if (duckByBeat) {
+          const since = (((beat % duck.beats) + duck.beats) % duck.beats) * secPerBeat;
+          amount = Math.min(1, since / 0.003) * Math.max(0, 1 - since / duckReleaseSec) ** 2;
+        } else {
+          const over = duckKey !== null && duckKey[i] >= duckThr ? 1 : 0;
+          this.duckEnv = over > this.duckEnv ? duckAtt * this.duckEnv + (1 - duckAtt) * over : duckRel * this.duckEnv + (1 - duckRel) * over;
+          amount = this.duckEnv;
+        }
+        if (amount > 0) {
+          const g = 10 ** ((duck.depthDb * amount) / 20);
+          l *= g;
+          r *= g;
+        }
       }
 
       if (fx.limiter.on) {

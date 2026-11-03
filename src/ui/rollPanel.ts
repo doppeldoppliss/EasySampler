@@ -1782,6 +1782,16 @@ export class RollPanel {
     return this.track.name;
   }
 
+  /** The selected track's id (what the effects panel edits when it shows a track). */
+  get trackId(): string {
+    return this.track.id;
+  }
+
+  /** Every track, by id and name (what a sidechain can listen to). */
+  trackChoices(): { id: string; name: string }[] {
+    return this.project.tracks.map((t) => ({ id: t.id, name: t.name }));
+  }
+
   /** Changes the selected track's effects (heard at once, kept). */
   updateTrackFx(change: (fx: FxSettings) => void): void {
     const t = this.track;

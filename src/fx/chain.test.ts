@@ -256,3 +256,30 @@ describe("FxChain: gate and stutter (on the song's beats)", () => {
     expect(l[STEP + 2 * slice + 700]).toBeCloseTo(0.125, 3);
   });
 });
+
+describe("FxChain: sidechain (ducking)", () => {
+  it("on the beat: down by the depth right after each beat, back up after the release", () => {
+    const x = new Float32Array(SR).fill(0.5);
+    const [l] = run(fx((f) => (f.duck = { ...f.duck, on: true, source: "beat", beats: 1, depthDb: -12, releaseMs: 250 })), x);
+    const db = (v: number) => 20 * Math.log10(v / 0.5);
+    // Just after the beat (5 ms): nearly the full -12 dB; past the release (300 ms): back to the level; the next beat (500 ms): down again.
+    expect(db(l[Math.round(0.005 * SR)])).toBeLessThan(-10);
+    expect(db(l[Math.round(0.3 * SR)])).toBeGreaterThan(-0.1);
+    expect(db(l[Math.round(0.505 * SR)])).toBeLessThan(-10);
+  });
+
+  it("from a key: down while the key is loud, back up after it stops", () => {
+    const chain = new FxChain(SR);
+    chain.set(fx((f) => (f.duck = { ...f.duck, on: true, source: "k", depthDb: -12, releaseMs: 50, thresholdDb: -24 })));
+    const out: number[] = [];
+    for (let b = 0; b < 100; b++) {
+      // The key loud for the first 20 blocks (about 53 ms), then silent.
+      chain.setKey(b < 20 ? new Float32Array(128).fill(0.5) : null);
+      const l = new Float32Array(128).fill(0.5);
+      chain.process(l, l.slice(), 128);
+      out.push(l[127]);
+    }
+    expect(20 * Math.log10(out[10] / 0.5)).toBeLessThan(-11);
+    expect(20 * Math.log10(out[99] / 0.5)).toBeGreaterThan(-0.5);
+  });
+});

@@ -1132,6 +1132,33 @@ function fxSteps(get: () => boolean[], set: (f: FxSettings, steps: boolean[]) =>
   return el("div", { className: "control step-pattern" }, [el("span", { className: "control-label", textContent: "パターン(押して切り替え)" }), el("div", { className: "steps-row" }, buttons), el("div", { className: "row tight" }, fillButtons)]);
 }
 
+// The sidechain's own rows: how often it pumps (on the beat), and how loud the key must be (from a track).
+const duckBeatsRow = fxSelect("沈める間隔", [["0.5", "1/8 音符ごと"], ["1", "1 拍ごと"], ["2", "2 拍ごと"]], () => String(fxNow().duck.beats) as "1", (f, v) => (f.duck.beats = Number(v) as FxSettings["duck"]["beats"]));
+const duckThresholdRow = fxRange("反応する大きさ(これより大きいと沈む)", -60, 0, 1, () => fxNow().duck.thresholdDb, (f, v) => (f.duck.thresholdDb = v), db);
+
+/** What the sidechain follows: the song's beat, or another track (the one being edited is not offered; the master follows the beat only). */
+function fxDuckSource(): HTMLElement {
+  const input = el("select", { ariaLabel: "沈めるきっかけ" });
+  const refresh = () => {
+    const choices = fxTarget === "master" ? [] : rollPanel.trackChoices().filter((t) => t.id !== rollPanel.trackId);
+    const source = fxNow().duck.source;
+    input.replaceChildren(
+      el("option", { value: "beat", textContent: "曲の拍(拍ごとに一定に沈む)" }),
+      ...choices.map((t) => el("option", { value: t.id, textContent: `トラック「${t.name}」が鳴ったとき` })),
+      ...(source !== "beat" && !choices.some((t) => t.id === source) ? [el("option", { value: source, textContent: "(なくなったトラック)" })] : []),
+    );
+    input.value = source;
+    duckBeatsRow.hidden = source !== "beat";
+    duckThresholdRow.hidden = source === "beat";
+  };
+  controlsRefreshers.push(refresh);
+  input.addEventListener("change", () => {
+    updateFx((f) => (f.duck.source = input.value));
+    refresh();
+  });
+  return el("label", { className: "control" }, [el("span", { className: "control-label", textContent: "沈めるきっかけ" }), input]);
+}
+
 function fxGroup(key: FxKey, label: string, note: string, controls: HTMLElement[]): HTMLElement {
   const summary = el("summary");
   fxSummaries.push({ key, summary, label });
@@ -1270,6 +1297,13 @@ const fxPanel = el("details", { className: "panel fx-panel" }, [
   fxGroup("pan", "オートパン", "音を拍に合わせて左右に振ります。アルペジオなどに。", [
     fxRange("深さ", 0, 1, 0.01, () => fxNow().pan.depth, (f, v) => (f.pan.depth = v), pct),
     fxSelect("周期", BEATS, () => String(fxNow().pan.beats), (f, v) => (f.pan.beats = Number(v) as FxBeats)),
+  ]),
+  fxGroup("duck", "サイドチェーン(ダッキング)", "音を一瞬沈めてから戻します。「曲の拍」なら拍ごとに一定に(うねる・ポンピング)、トラックを選ぶとそのトラックが鳴ったときに(キックで伴奏を沈める。選んだトラックはミュートしていても効きます)。", [
+    fxDuckSource(),
+    duckBeatsRow,
+    duckThresholdRow,
+    fxRange("沈める深さ", -40, 0, 0.5, () => fxNow().duck.depthDb, (f, v) => (f.duck.depthDb = v), db),
+    fxRange("戻るまでの時間", 20, 1000, 5, () => fxNow().duck.releaseMs, (f, v) => (f.duck.releaseMs = v), (v) => `${Math.round(v)} ms`),
   ]),
   fxHead("仕上げ"),
   fxGroup("limiter", "リミッター", "最後に音量を上げつつ、天井を超えないように抑えます。", [

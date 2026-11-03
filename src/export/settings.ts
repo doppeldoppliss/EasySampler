@@ -216,12 +216,21 @@ export function sanitizeFx(raw: unknown): FxSettings {
   const p = part("pan");
   const l = part("limiter");
   const g = part("gate");
+  const du = part("duck");
   const st = part("stutter");
   const steps = (v: unknown, fallback: boolean[]) => (Array.isArray(v) && v.length === PATTERN_STEPS ? v.map((x) => x === true) : [...fallback]);
   const stepBeats = (v: unknown, fallback: StepBeats): StepBeats => (v === 0.25 || v === 0.5 ? v : fallback);
   const sliceBeats = (v: unknown): SliceBeats => (v === 0.0625 || v === 0.125 || v === 0.25 || v === 0.5 ? v : d.stutter.sliceBeats);
   return {
     stutter: { on: on(st), steps: steps(st.steps, d.stutter.steps), stepBeats: stepBeats(st.stepBeats, d.stutter.stepBeats), sliceBeats: sliceBeats(st.sliceBeats), fade: clamp(num(st.fade, d.stutter.fade), 0, 0.9) },
+    duck: {
+      on: on(du),
+      source: typeof du.source === "string" && du.source ? du.source : "beat",
+      beats: du.beats === 0.5 || du.beats === 2 ? du.beats : 1,
+      depthDb: clamp(num(du.depthDb, d.duck.depthDb), -40, 0),
+      releaseMs: clamp(num(du.releaseMs, d.duck.releaseMs), 20, 1000),
+      thresholdDb: clamp(num(du.thresholdDb, d.duck.thresholdDb), -60, 0),
+    },
     gate: { on: on(g), steps: steps(g.steps, d.gate.steps), stepBeats: stepBeats(g.stepBeats, d.gate.stepBeats), depth: clamp(num(g.depth, d.gate.depth), 0, 1), smoothMs: clamp(num(g.smoothMs, d.gate.smoothMs), 0.5, 50) },
     transient: { on: on(t), attackDb: clamp(num(t.attackDb, d.transient.attackDb), -24, 24), sustainDb: clamp(num(t.sustainDb, d.transient.sustainDb), -24, 24) },
     compressor: {

@@ -102,6 +102,9 @@ class Lane {
   r = new Float32Array(128);
   /** The loudest sample it put into the mix since the meters last read it (after its gain and pan). */
   peak = 0;
+  /** Its level per sample this block (after its effects, before its volume), when another track ducks to it. */
+  key = new Float32Array(128);
+  keyLive = false;
 
   constructor(id: string, sound: TrackSound, sampleRate: number) {
     this.id = id;
@@ -357,7 +360,16 @@ export class SongPlayer {
     this.masterTo = endSec !== null && this.masterAuto.length ? autoValue(this.masterAuto, endSec, 1) : 1;
     // (A lane whose id starts with "__", the metronome, is never muted by another's solo.)
     const anySolo = this.lanes.some((l) => l.mix.solo && !l.id.startsWith("__"));
+    // Sidechains: the tracks others duck to are worked out first, so their level is there for the ones that follow.
+    const keyOf = (lane: Lane) => (lane.fxOn && lane.mix.fx!.duck.on && lane.mix.fx!.duck.source !== "beat" ? lane.mix.fx!.duck.source : null);
+    const keys = new Set<string>();
     for (const lane of this.lanes) {
+      const key = keyOf(lane);
+      if (key) keys.add(key);
+      lane.keyLive = false;
+    }
+    const order = keys.size ? [...this.lanes].sort((a, b) => Number(keyOf(a) !== null) - Number(keyOf(b) !== null)) : this.lanes;
+    for (const lane of order) {
       const { gain, mute, solo } = lane.mix;
       // (Muted, or another track soloed: down to 0, ramped like any change.)
       const level = mute || (anySolo && !solo && !lane.id.startsWith("__")) ? 0 : gain * (endSec !== null && lane.mix.volumeAuto?.length ? autoValue(lane.mix.volumeAuto, endSec, 1) : 1);
@@ -377,7 +389,17 @@ export class SongPlayer {
       SongPlayer.fill(lane, frames);
       if (lane.fxOn) {
         if (startBeat !== null) lane.fx.setBeat(startBeat);
+        const key = keyOf(lane);
+        if (key) {
+          const source = this.lanes.find((x) => x.id === key);
+          lane.fx.setKey(source?.keyLive ? source.key : null);
+        }
         lane.fx.process(lane.l, lane.r, frames);
+      }
+      if (keys.has(lane.id)) {
+        if (lane.key.length < frames) lane.key = new Float32Array(frames);
+        for (let i = 0; i < frames; i++) lane.key[i] = Math.max(Math.abs(lane.l[i]), Math.abs(lane.r[i]));
+        lane.keyLive = true;
       }
       if (gl0 <= 0 && gl1 <= 0 && gr0 <= 0 && gr1 <= 0) continue;
       const l = lane.l;

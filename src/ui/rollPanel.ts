@@ -2113,11 +2113,43 @@ export class RollPanel {
     if (this.track.instrument && this.track.instrument !== BACKING) this.client.previewNote(this.track.instrument, pitch);
   }
 
+  /** The loop range in song seconds, null while it is off. */
+  private loopSecs(): { a: number; b: number } | null {
+    const { loop } = this.project;
+    if (!loop.on) return null;
+    const a = beatsToSec(loop.start, this.project);
+    const b = beatsToSec(loop.end, this.project);
+    return b > a ? { a, b } : null;
+  }
+
+  /** The loop the playhead's clock wraps at: the one the engine was last given (not the one being dragged). */
+  private clockLoop: { a: number; b: number } | null = null;
+
+  /**
+   * The loop to the engine. While playing, the playhead's clock starts again from where the song is, so it follows
+   * the new loop from here as the engine does; a song already past the new loop's end goes to the loop's start.
+   */
   private sendLoop(): void {
     // (The master line's seconds follow the tempo too: it goes wherever the loop does.)
     this.sendMasterAuto();
-    const { loop } = this.project;
-    this.client.setSongLoop(loop.on ? { startSec: beatsToSec(loop.start, this.project), endSec: beatsToSec(loop.end, this.project) } : null);
+    const next = this.loopSecs();
+    if (this.startedAt !== null) {
+      const pos = this.currentSec();
+      if (next && pos >= next.b && !this.recording) {
+        this.from = next.a;
+        this.start();
+        return;
+      }
+      const now = this.client.currentTime;
+      this.from = pos;
+      if (now !== null) this.startedAt = Math.max(now, this.startedAt);
+    }
+    this.postLoop(next);
+  }
+
+  private postLoop(loop: { a: number; b: number } | null): void {
+    this.clockLoop = loop;
+    this.client.setSongLoop(loop ? { startSec: loop.a, endSec: loop.b } : null);
   }
 
   /** A new loop range (beats), switched on. */
@@ -2141,7 +2173,8 @@ export class RollPanel {
   /** The quick loop buttons: this bar, the selected notes' bars, between markers. */
   private loopAround(kind: "bar" | "selection" | "marker"): void {
     const bpb = this.project.beatsPerBar;
-    const beat = secToBeats(this.from, this.project);
+    // (Playing: the bar the playhead is in now.)
+    const beat = secToBeats(this.currentSec(), this.project);
     const barStart = (b: number) => Math.floor(b / bpb + 1e-9) * bpb;
     const barEnd = (b: number) => Math.max(bpb, Math.ceil(b / bpb - 1e-9) * bpb);
     if (kind === "bar") this.setLoopRange(barStart(beat), barStart(beat) + bpb);
@@ -2169,11 +2202,10 @@ export class RollPanel {
   private reload(): void {
     const position = this.currentSec();
     this.client.loadTracks(this.startedAt !== null ? this.playSpecs() : this.trackSpecs());
-    this.sendLoop();
     if (this.startedAt !== null) {
       this.from = position;
       this.start();
-    }
+    } else this.sendLoop();
   }
 
   /** The playing position (song seconds), or where playback would start. */
@@ -2181,12 +2213,8 @@ export class RollPanel {
     const now = this.client.currentTime;
     if (this.startedAt === null || now === null) return this.from;
     let pos = this.from + Math.max(0, now - this.startedAt);
-    const { loop } = this.project;
-    if (loop.on) {
-      const a = beatsToSec(loop.start, this.project);
-      const b = beatsToSec(loop.end, this.project);
-      if (this.from < b && pos >= b && b > a) pos = a + ((pos - b) % (b - a));
-    }
+    const loop = this.clockLoop;
+    if (loop && this.from < loop.b && pos >= loop.b) pos = loop.a + ((pos - loop.b) % (loop.b - loop.a));
     return pos;
   }
 
@@ -2215,13 +2243,17 @@ export class RollPanel {
     }
     const endSec = beatsToSec(this.lastBeat(), this.project);
     if (!this.project.loop.on && this.from >= endSec) this.from = 0;
+    // (With the loop on, a start past its end begins at its start: the loop is what is to be heard.)
+    const loop = this.loopSecs();
+    if (loop && this.from >= loop.b) this.from = loop.a;
     this.start();
   }
 
   private start(): void {
     this.client.setTempo(this.project.bpm);
     this.client.loadTracks(this.playSpecs());
-    this.sendLoop();
+    this.sendMasterAuto();
+    this.postLoop(this.loopSecs());
     this.startedAt = this.client.playSong(this.from);
     this.playButton.textContent = "■ 停止";
     this.summarize();

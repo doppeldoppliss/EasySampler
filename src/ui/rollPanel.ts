@@ -1935,7 +1935,7 @@ export class RollPanel {
     return { id: METRONOME, instrument: "backing", notes, gain: 2, pan: 0, mute: false, solo: false, fx: null };
   }
 
-  /** Stops playback keeping the position where it is now (leaving the 曲 view). */
+  /** Stops playback keeping the position where it is now. */
   pause(): void {
     if (!this.playing) return;
     this.from = this.currentSec();

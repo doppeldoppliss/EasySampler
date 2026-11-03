@@ -176,9 +176,19 @@ const fxMasterButton = button("マスター(曲全体)", "small toggle", () => {
   showFxTarget();
 });
 rollPanel.onPlayingChange = (playing) => {
+  refreshSongStops();
   if (!playing) return;
   client.stopPreview();
 };
+// The song playing on in the 素材 / ドラムキット view: a stop for it there (its own controls are in the 曲 view).
+const songStops = [0, 1].map(() => button("■ 曲を止める", "small song-stop", () => rollPanel.pause()));
+for (const b of songStops) b.title = "曲の再生を止めます(位置はそのまま。曲の画面で続きから再生できます)";
+const kitTransport = el("div", { className: "sticky-transport kit-transport axis-kit" }, [el("div", { className: "row tight transport" }, [songStops[1]])]);
+function refreshSongStops(): void {
+  const on = rollPanel.playing && view !== "song";
+  for (const b of songStops) b.hidden = !on;
+  kitTransport.hidden = !on;
+}
 
 // A control that was just changed gives the focus back, so Space / Ctrl+Z keep working after a dropdown.
 document.addEventListener("change", (event) => {
@@ -2238,7 +2248,9 @@ function setView(next: View): void {
     pianoBeforeKit = null;
   }
   rollPanel.setVisible(next === "song");
-  if (next !== "song") rollPanel.pause();
+  // (The song plays on in the other views — a material can be shaped against it; a recording stops: the keys belong to the view.)
+  if (next !== "song" && rollPanel.isRecording) rollPanel.pause();
+  refreshSongStops();
   // (A material preview does not follow into the other views.)
   if (next !== "material") client.stopPreview();
   else {
@@ -2254,8 +2266,8 @@ function setView(next: View): void {
 }
 
 // The play controls follow the page's scroll (in the 素材 view: ▶, 元の音 | 仕上がり, the time; in the 曲 view: the song's).
-const materialTransport = el("div", { className: "sticky-transport material-transport axis-material" }, [el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock])]);
-const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs, guide, materialTransport, materialPanel, tunePanel, kitPanel, keysPanel, rollPanel.transport, rollPanel.element, fxPanel, exportPanel, detailsPanel]);
+const materialTransport = el("div", { className: "sticky-transport material-transport axis-material" }, [el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, songStops[0]])]);
+const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs, guide, materialTransport, materialPanel, tunePanel, kitTransport, kitPanel, keysPanel, rollPanel.transport, rollPanel.element, fxPanel, exportPanel, detailsPanel]);
 setView(view);
 
 document.getElementById("app")!.append(

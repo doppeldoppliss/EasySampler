@@ -1590,10 +1590,14 @@ const pickerListen = button("▶ 選択範囲を聴く", "", () => {
   pickerFrame = requestAnimationFrame(step);
 });
 const pickerUse = button("この範囲を使う", "primary", () => void usePickedRange());
+// The other use of a long file: the song it is (原曲・オフボーカル), placed whole on an audio track (design.md 37).
+const pickerAsSong = button("原曲・伴奏として置く(切らずに音声トラックへ)", "", () => void placePickedAsSong());
+pickerAsSong.title = "このファイルを切らずに、曲の頭から鳴る音声トラックとして置き、曲の画面に移ります(音程の解析はしません)。素材(楽器)にするときは範囲を選んで「この範囲を使う」";
 const pickerPanel = el("section", { className: "panel picker-panel", hidden: true }, [
   pickerTitle,
   picker.element,
   el("div", { className: "row" }, [el("span", { className: "fine" }, ["使う範囲: ", pickerRange]), pickerListen, pickerUse]),
+  el("div", { className: "row" }, [pickerAsSong]),
   el("div", { className: "row tight seek-row" }, [pickerSeek, pickerClock]),
   el("p", { className: "fine", textContent: "ハンドルをドラッグして範囲を決めます。帯の中をドラッグすると範囲ごと動き、外を押すとそこへ移ります。波形を 1 回押すと再生位置、2 回押すとそこから再生。一度に使えるのは 60 秒までですが、あとから「別の範囲を選ぶ」で何度でも選び直せます。" }),
 ]);
@@ -1638,6 +1642,20 @@ async function usePickedRange(): Promise<void> {
   const base = longClip.file.name.replace(/\.[^.]+$/, "");
   await load(`${base} (${clock(r.from)}-${clock(r.to)})`, channels, rate);
   rePickButton.hidden = false;
+}
+
+/** 原曲・伴奏として置く: the long file, whole, onto an audio track of the song (as ＋ 原曲・伴奏を置く does), then the 曲 view. */
+async function placePickedAsSong(): Promise<void> {
+  if (!longClip) return;
+  const file = longClip.file;
+  if (pickerPlaying) client.stopPreview();
+  pickerClip = null;
+  longClip = null;
+  pickerPanel.hidden = true;
+  status.textContent = "";
+  workspace.hidden = false;
+  setView("song");
+  await addLongAudio(file);
 }
 
 /** Decodes the long file again and shows the picker, with the stretch in use selected. */

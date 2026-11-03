@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { remapMaterials } from "../audio/projects";
-import { drumRows, guessKey, newSlot, renderSlot, sanitizeKit } from "./kit";
+import { drumRows, guessKey, keyLabel, newSlot, renderSlot, sanitizeKit, soundKey } from "./kit";
 
 describe("drum kit", () => {
   it("puts a file on the key its name says, or the next common one free", () => {
@@ -59,5 +59,24 @@ describe("drum kit: where a hit begins", async () => {
     expect(detectOnset([new Float32Array(100)], sr)).toBe(0);
     const y = new Float32Array(100).fill(0.3);
     expect(detectOnset([y], sr)).toBe(0);
+  });
+});
+
+describe("a key without its own sound plays its partner's", () => {
+  const kit = { slots: [newSlot(38, "s1", "punch1"), newSlot(49, "s2", "crash")] };
+  it("the electric snare (40) plays the snare put on 38; the crash 2 (57) the crash's", () => {
+    expect(soundKey(kit, 38)).toBe(38);
+    expect(soundKey(kit, 40)).toBe(38);
+    expect(soundKey(kit, 57)).toBe(49);
+    expect(keyLabel(kit, 40)).toContain("punch1");
+  });
+  it("its own sound comes first; the hi-hats and unrelated keys do not borrow; a sound not loaded yet does not count", () => {
+    const both = { slots: [newSlot(38, "s1", "a"), newSlot(40, "s3", "b")] };
+    expect(soundKey(both, 40)).toBe(40);
+    const hats = { slots: [newSlot(42, "h", "hat")] };
+    expect(soundKey(hats, 46)).toBeNull();
+    expect(soundKey(hats, 44)).toBeNull();
+    expect(soundKey(kit, 36)).toBeNull();
+    expect(soundKey(kit, 40, (k) => k !== 38)).toBeNull();
   });
 });

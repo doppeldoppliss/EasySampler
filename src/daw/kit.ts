@@ -77,10 +77,35 @@ export function drumRows(kit: Kit, notes: readonly { pitch: number }[]): number[
   return [...keys].sort((a, b) => a - b);
 }
 
-/** A row's label: its GM name, and the sound on it. */
+/**
+ * Keys that are the same drum played another way (GM has two kicks, two snares — acoustic and electric — two of
+ * each tom, two crashes, two rides): a key without a sound of its own plays its partner's, so a MIDI file whose
+ * snare is on 40 sounds with the snare put on 38. The hi-hats are not here: closed, pedal and open are different.
+ */
+export const KEY_FAMILIES: readonly (readonly number[])[] = [
+  [36, 35],
+  [38, 40],
+  [41, 43],
+  [45, 47],
+  [48, 50],
+  [49, 57],
+  [51, 59],
+];
+
+/** The key whose sound a key plays: its own, else its partner's (KEY_FAMILIES), else null (the plain drum sound). */
+export function soundKey(kit: Kit, key: number, ready: (key: number) => boolean = () => true): number | null {
+  const has = (k: number) => !!slotFor(kit, k)?.sample && ready(k);
+  if (has(key)) return key;
+  const family = KEY_FAMILIES.find((f) => f.includes(key));
+  return family?.find((k) => k !== key && has(k)) ?? null;
+}
+
+/** A row's label: its GM name, and the sound on it (a partner's: said so). */
 export function keyLabel(kit: Kit, key: number): string {
-  const slot = slotFor(kit, key);
-  return slot?.sample ? `${drumName(key)}: ${slot.name}` : `${drumName(key)}(簡易)`;
+  const from = soundKey(kit, key);
+  if (from === null) return `${drumName(key)}(簡易)`;
+  const name = slotFor(kit, from)!.name;
+  return from === key ? `${drumName(key)}: ${name}` : `${drumName(key)}: ${name}(${drumName(from)}の音)`;
 }
 
 export function sanitizeKit(raw: unknown): Kit {

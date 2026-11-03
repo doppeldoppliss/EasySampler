@@ -60,7 +60,7 @@ import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 import { evenStems, renderSong, type RenderTrack } from "./daw/songRender";
 import { bandSpectrum, fitBalance, type BalanceStyle } from "./fx/balance";
 import { writeMidi } from "./daw/midiWrite";
-import { COMMON_KEYS, detectOnset, guessKey, newSlot, renderSlot, slotFor, type KitSlot } from "./daw/kit";
+import { COMMON_KEYS, detectOnset, guessKey, KEY_FAMILIES, newSlot, renderSlot, slotFor, soundKey, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
 import { MidiInput } from "./audio/midiInput";
 import { autoToSec, BACKING, beatsToSec, clipsToSeq, tempoMapSec, toSeqNotes, trimClips, withHarmony, type Tempo } from "./daw/model";
@@ -2184,6 +2184,22 @@ function kitWave(key: number, slot: KitSlot, audio: { sampleRate: number; channe
   return canvas;
 }
 
+/**
+ * What a kit row says it plays: its sound, or its partner's (an electric snare playing the snare's), or the plain
+ * drum; with how often the song strikes it, and which partners play this sound too.
+ */
+function kitSoundText(key: number, own: string | null, used: Map<number, number>): string {
+  const kit = rollPanel.kit;
+  const count = used.get(key);
+  const inSong = count ? `・曲で ${count} 回` : "";
+  if (own) {
+    const partners = (KEY_FAMILIES.find((f) => f.includes(key)) ?? []).filter((k) => k !== key && soundKey(kit, k) === key && used.has(k));
+    return `${own}${inSong}${partners.length ? `(${partners.map((k) => `${drumName(k)}の ${used.get(k)} 回`).join("・")}もこの音で鳴ります)` : ""}`;
+  }
+  const from = soundKey(kit, key);
+  return from !== null ? `${drumName(from)}の音で鳴ります${inSong}` : `簡易ドラム${inSong}`;
+}
+
 function renderKitPanel(): void {
   // (The list is drawn again after each change: the field being typed in gets the focus back.)
   const focused = document.activeElement instanceof HTMLElement && kitList.contains(document.activeElement) ? document.activeElement.dataset.kitField ?? null : null;
@@ -2192,7 +2208,9 @@ function renderKitPanel(): void {
     kitList.querySelector<HTMLElement>(`[data-kit-field="${focused}"]`)?.focus();
   });
   const kit = rollPanel.kit;
-  const keys = [...new Set([...COMMON_KEYS, ...kit.slots.map((s) => s.key)])].sort((a, b) => a - b);
+  // (The keys the song's drums use are listed too: a MIDI file's snare may be on 40, not 38.)
+  const used = rollPanel.drumKeyCounts();
+  const keys = [...new Set([...COMMON_KEYS, ...kit.slots.map((s) => s.key), ...used.keys()])].sort((a, b) => a - b);
   const ms = (v: number) => String(Math.round(v * 1000));
   const rows = keys.map((key) => {
     const slot = slotFor(kit, key);
@@ -2217,7 +2235,7 @@ function renderKitPanel(): void {
     const parts: HTMLElement[] = [
       el("span", { className: "kit-key num", textContent: `${pitchLabel(key)}` }),
       el("strong", { className: "kit-drum", textContent: drumName(key) }),
-      el("span", { className: "fine kit-name", textContent: slot?.sample ? `${slot.name}(${lengthSec.toFixed(2)} 秒)` : "簡易ドラム" }),
+      el("span", { className: "fine kit-name", textContent: kitSoundText(key, slot?.sample ? `${slot.name}(${lengthSec.toFixed(2)} 秒)` : null, used) }),
       play,
       choose,
     ];
@@ -3258,7 +3276,7 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
     const notes = range ? loopNotes(all, range.startSec, range.lengthSec) : all;
     if (t.kind === "drum") {
       // The kit: each key its sound (as the engine has it), or the plain drum sound.
-      out.push({ id: t.id, instrument: null, samples: kit.samples.map((_, key) => kitBuffers.get(key) ?? null), drumKeys: kit.keys, notes, ...mix });
+      out.push({ id: t.id, instrument: null, samples: kit.samples.map((id) => (id ? (kitBuffers.get(Number(id.slice("kit:".length))) ?? null) : null)), drumKeys: kit.keys, notes, ...mix });
       continue;
     }
     // A part on the plain backing synth (簡易シンセ), as it plays on the page.

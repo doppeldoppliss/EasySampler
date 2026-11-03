@@ -51,7 +51,7 @@ import type { MixSettings } from "../song/player";
 import type { FxSettings } from "../instrument/types";
 import { MidiParseError, parseMidi } from "../song/midi";
 import { songParts } from "../song/parts";
-import { drumRows, keyLabel, slotFor, type Kit } from "../daw/kit";
+import { drumRows, keyLabel, soundKey, type Kit } from "../daw/kit";
 import { arrange, type ArrangeKind } from "../daw/arrange";
 import { armOnce, el } from "./dom";
 import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, spreadPans } from "../daw/roles";
@@ -1885,6 +1885,13 @@ export class RollPanel {
     this.scheduleSave();
   }
 
+  /** How many notes the song's drum tracks have on each GM key. */
+  drumKeyCounts(): Map<number, number> {
+    const counts = new Map<number, number>();
+    for (const t of this.project.tracks) if (t.kind === "drum") for (const n of t.notes) counts.set(n.pitch, (counts.get(n.pitch) ?? 0) + 1);
+    return counts;
+  }
+
   /** Whether the page has a kit key's sound ready (its recording loaded); a key without one plays the plain drum. */
   kitSoundReady: (key: number) => boolean = () => true;
 
@@ -1893,10 +1900,10 @@ export class RollPanel {
     const samples: (string | null)[] = [];
     const keys: (number | null)[] = [];
     for (let key = 0; key < 128; key++) {
-      const slot = slotFor(this.project.kit, key);
-      const own = !!slot?.sample && this.kitSoundReady(key);
-      samples.push(own ? `kit:${key}` : null);
-      keys.push(own ? null : key);
+      // (A key without its own sound plays its partner's: an electric snare the snare's.)
+      const from = soundKey(this.project.kit, key, this.kitSoundReady);
+      samples.push(from !== null ? `kit:${from}` : null);
+      keys.push(from !== null ? null : key);
     }
     return { samples, keys };
   }

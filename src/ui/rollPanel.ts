@@ -776,7 +776,7 @@ export class RollPanel {
     this.longList.hidden = long.length === 0;
     this.longList.replaceChildren(
       el("span", { className: "fine", textContent: "原曲・伴奏:" }),
-      ...long.map((m) => el("span", { className: "tempo-item" }, [el("span", { className: "fine", textContent: m.name }), armOnce(button("外す", "small", () => {}, "この長い音声を曲から外します(置いたクリップは鳴らなくなり、元に戻せません)"), "もう一度押すと外す", () => this.onRemoveLongAudio(m.id))])),
+      ...long.map((m) => el("span", { className: "tempo-item" }, [el("span", { className: "fine", textContent: m.name }), armOnce(button("外す", "small", () => {}, "この長い音声をプロジェクトから外します(置いたクリップは鳴らなくなり、元に戻せません)"), "もう一度押すと外す", () => this.onRemoveLongAudio(m.id))])),
     );
   }
 
@@ -834,7 +834,7 @@ export class RollPanel {
     this.scheduleSave();
   }
 
-  /** Another material in a material's place (「この曲用に分ける」): the list, the one edited, and every track and clip that played it. */
+  /** Another material in a material's place (「このプロジェクト用に分ける」): the list, the one edited, and every track and clip that played it. */
   replaceMaterial(from: string, to: ProjectMaterial): void {
     this.project.materials = this.project.materials.map((m) => (m.id === from ? { ...m, ...to } : m));
     if (this.project.editing === from) this.project.editing = to.id;

@@ -70,7 +70,8 @@ class EngineProcessor extends AudioWorkletProcessor {
    */
   private readonly safety = (() => {
     const chain = new FxChain(sampleRate);
-    const fx = structuredClone(DEFAULT_FX);
+    // (No structuredClone here: an AudioWorklet does not have it, and the engine would not start.)
+    const fx: typeof DEFAULT_FX = JSON.parse(JSON.stringify(DEFAULT_FX));
     fx.limiter = { on: true, gainDb: 0, ceilingDb: -1, releaseMs: 80 };
     chain.set(fx);
     return chain;

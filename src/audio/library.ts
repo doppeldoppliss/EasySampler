@@ -122,7 +122,7 @@ export async function songsUsing(id: string, open?: { id: string; materials: rea
   return out;
 }
 
-/** A copy of a library material under a new id and name (for one song only, 「この曲用に分ける」). */
+/** A copy of a library material under a new id and name (for one song only, 「このプロジェクト用に分ける」). */
 export async function copyInLibrary(id: string, newId: string, name: string): Promise<boolean> {
   const audio = (await kept(`audio:${id}`)) as StoredAudio | undefined;
   const from = libraryEntry(id);

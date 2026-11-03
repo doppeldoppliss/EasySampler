@@ -341,8 +341,8 @@ function safeStorage(key: string, value?: string | null): string | null {
 const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json,.mid,.midi,.easysampler", multiple: true, className: "visually-hidden", id: "file" });
 const openButton = el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" });
 const pianoButton = button("＋ 内蔵ピアノ", "", () => void addPiano());
-const libraryButton = button("＋ ライブラリから", "", () => void openLibraryPanel());
-libraryButton.title = "ほかの曲で作った素材(サンプリング済音源の設定つき)をこの曲に加えます";
+const libraryButton = button("＋ ライブラリから", "", () => (libraryDialog.hidden ? void openLibraryPanel() : (libraryDialog.hidden = true)));
+libraryButton.title = "ほかのプロジェクトで作った素材(サンプリング済音源の設定つき)をこのプロジェクトに加えます";
 const status = el("p", { className: "status", role: "status" });
 
 // The listening volume (this browser only; the files are written as they are), kept for the next visit.
@@ -424,7 +424,7 @@ function refreshCutUsage(): void {
 const materialSelect = el("select", { ariaLabel: "編集する素材", className: "material-select" });
 materialSelect.addEventListener("change", () => switchMaterial(materialSelect.value));
 // 素材の名前: changed here, it is the material's everywhere (the library, every song's list, its saved samples).
-const materialName = el("input", { type: "text", className: "cut-name material-name", ariaLabel: "素材の名前", maxLength: 60, title: "素材の名前(素材ライブラリとすべての曲で変わります)" });
+const materialName = el("input", { type: "text", className: "cut-name material-name", ariaLabel: "素材の名前", maxLength: 60, title: "素材の名前(素材ライブラリとすべてのプロジェクトで変わります)" });
 materialName.addEventListener("change", () => {
   if (material) void renameMaterial(material.id, materialName.value);
 });
@@ -435,11 +435,11 @@ const trimUnusedButton = armedButton(
   () => void trimToCuts(),
   "素材の録音を、どの音源の範囲にも入っていない前後を捨てて短くします(元に戻せません)。音声トラックのクリップがその部分を鳴らしていれば、そこは鳴らなくなります",
 );
-const removeMaterialButton = armedButton("この素材を曲から外す", "もう一度押すと外す", "small", () => material && removeMaterial(material.id), "素材ライブラリには残り、「＋ ライブラリから」で戻せます。この素材を鳴らしているトラックは無音になります");
-// A library material shared with other songs: which ones, and 「この曲用に分ける」 to make it this song's own.
+const removeMaterialButton = armedButton("この素材をプロジェクトから外す", "もう一度押すと外す", "small", () => material && removeMaterial(material.id), "素材ライブラリには残り、「＋ ライブラリから」で戻せます。この素材を鳴らしているトラックは無音になります");
+// A library material shared with other songs: which ones, and 「このプロジェクト用に分ける」 to make it this song's own.
 const sharedNote = el("span", { className: "fine shared-note" });
-const splitButton = button("この曲用に分ける", "small", () => void splitMaterial());
-splitButton.title = "この素材をコピーして、この曲だけのものにします。ほかの曲は元の素材のまま変わらなくなります(ページを読み込み直します)";
+const splitButton = button("このプロジェクト用に分ける", "small", () => void splitMaterial());
+splitButton.title = "この素材をコピーして、このプロジェクトだけのものにします。ほかのプロジェクトは元の素材のまま変わらなくなります(ページを読み込み直します)";
 splitButton.hidden = true;
 const cutBar = el("div", { className: "cut-bar" }, [
   el("span", { className: "control-label", textContent: "サンプリング済音源" }),
@@ -536,7 +536,7 @@ const trimMaterialButton = armedButton(
   "もう一度押すと切り詰める",
   "small",
   () => selection && void trimMaterial(selection.from, selection.to),
-  "素材の録音そのものを選んだ部分だけにします(元に戻せません)。すべての音源の範囲・手直し・音声トラックのクリップは位置を合わせて残ります(ほかの曲で使っていても同じです)",
+  "素材の録音そのものを選んだ部分だけにします(元に戻せません)。すべての音源の範囲・手直し・音声トラックのクリップは位置を合わせて残ります(ほかのプロジェクトで使っていても同じです)",
 );
 const removedLabel = el("span", { className: "fine" });
 const undoRemoveButton = button("削除を 1 つ戻す", "small", () => {
@@ -1679,7 +1679,7 @@ function openFiles(files: readonly File[]): void {
 
 // ---------------------------------------------------------------- projects (several in the browser; one as a file)
 
-const projectButton = button("プロジェクト", "", () => void openProjectPanel());
+const projectButton = button("プロジェクト", "", () => (projectDialog.hidden ? void openProjectPanel() : (projectDialog.hidden = true)));
 projectButton.classList.add("project-button");
 const saveState = el("span", { className: "fine save-state", role: "status" });
 let lastSaveState: SaveState = "saved";
@@ -1828,7 +1828,17 @@ projectFileInput.addEventListener("change", () => {
   if (file) void openProjectFile(file);
 });
 
-const projectDialog = el("dialog", { className: "project-dialog" });
+// (Panels in the page, not windows over it: no pop-ups. Under the header; one at a time.)
+const projectDialog = el("section", { className: "panel project-panel", hidden: true, ariaLabel: "プロジェクト" });
+const libraryDialog = el("section", { className: "panel project-panel", hidden: true, ariaLabel: "素材ライブラリ" });
+
+/** One of the header's panels (プロジェクト, 素材ライブラリ) shown in the page, the other put away. */
+function showPanel(panel: HTMLElement): void {
+  for (const p of [projectDialog, libraryDialog]) if (p !== panel) p.hidden = true;
+  const was = panel.hidden;
+  panel.hidden = false;
+  if (was) panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
 const megabytes = (n: number) => (n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : `${Math.max(0.1, n / 1048576).toFixed(1)} MB`);
 
 /** The projects: the open one (name, file), the others (open, copy, remove), and how much room the browser gives. */
@@ -1857,7 +1867,7 @@ async function openProjectPanel(): Promise<void> {
       }
       await removeProject(p.id);
       void openProjectPanel();
-    }, `「${p.name}」の打ち込み・ドラムキットの音・原曲や伴奏の録音が消え、元に戻せません(素材は素材ライブラリに残ります)${isOpen ? "。開いている曲なので、削除後はほかの曲を開きます" : ""}`);
+    }, `「${p.name}」の打ち込み・ドラムキットの音・原曲や伴奏の録音が消え、元に戻せません(素材は素材ライブラリに残ります)${isOpen ? "。開いているプロジェクトなので、削除後はほかのプロジェクトを開きます" : ""}`);
     return el("div", { className: `project-row${isOpen ? " open" : ""}` }, [
       el("span", { className: "project-name", textContent: p.name }),
       el("span", { className: "fine num", textContent: when(p.updatedAt) }),
@@ -1872,7 +1882,7 @@ async function openProjectPanel(): Promise<void> {
     room.classList.toggle("warn", share > 0.8);
   });
   projectDialog.replaceChildren(
-    el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "プロジェクト" }), el("span", { className: "spacer" }), button("閉じる", "small", () => projectDialog.close())]),
+    el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "プロジェクト" }), el("span", { className: "spacer" }), button("閉じる", "small", () => (projectDialog.hidden = true))]),
     el("label", { className: "control" }, [el("span", { className: "control-label", textContent: "開いているプロジェクトの名前" }), nameInput]),
     el("div", { className: "row" }, [
       button("ファイルに保存(.easysampler)", "small primary", () => void saveProjectFile()),
@@ -1885,17 +1895,13 @@ async function openProjectPanel(): Promise<void> {
         await switchProject(entry.id);
       }),
     ]),
-    el("p", { className: "fine", textContent: "編集はこのブラウザに自動で保存されます。ファイルに保存すると、素材の音声・サンプリング済音源の設定・打ち込みが 1 つにまとまり、別の端末やブラウザで「ファイルから開く」で続きができます(ファイルはページにドロップしても開けます)。「新しいプロジェクト」は、今の曲の素材(サンプリング済音源つき)をそのまま使える状態で始まります。" }),
+    el("p", { className: "fine", textContent: "編集はこのブラウザに自動で保存されます。ファイルに保存すると、素材の音声・サンプリング済音源の設定・打ち込みが 1 つにまとまり、別の端末やブラウザで「ファイルから開く」で続きができます(ファイルはページにドロップしても開けます)。「新しいプロジェクト」は、今のプロジェクトの素材(サンプリング済音源つき)をそのまま使える状態で始まります。" }),
     el("div", { className: "project-list" }, rows),
     room,
     projectFileInput,
   );
-  if (!projectDialog.open) projectDialog.showModal();
+  showPanel(projectDialog);
 }
-projectDialog.addEventListener("click", (e) => {
-  // A click on the backdrop closes it.
-  if (e.target === projectDialog) projectDialog.close();
-});
 window.addEventListener("beforeunload", (e) => {
   if (lastSaveState === "saving") e.preventDefault();
 });
@@ -2054,7 +2060,7 @@ async function addLongAudio(file: File): Promise<void> {
 rollPanel.onRemoveLongAudio = (id) => {
   const entry = longAudio.get(id);
   if (!entry) return;
-  rollPanel.info.textContent = `「${entry.name}」を曲から外しました。置いてあったクリップは鳴りません。`;
+  rollPanel.info.textContent = `「${entry.name}」をプロジェクトから外しました。置いてあったクリップは鳴りません。`;
   longAudio.delete(id);
   client.setSource(null, id);
   rollPanel.removeMaterial(id);
@@ -2427,6 +2433,7 @@ document.getElementById("app")!.append(
   el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, projectButton, saveState, rePickButton, openButton, pianoButton, libraryButton])]),
   fileInput,
   projectDialog,
+  libraryDialog,
   status,
   emptyState,
   pickerPanel,
@@ -3308,7 +3315,7 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
 function songFileStamp(): string {
   const d = new Date();
   const p = (x: number) => String(x).padStart(2, "0");
-  return `${safeBaseName(currentProject()?.name ?? "曲")}_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+  return `${safeBaseName(currentProject()?.name ?? "プロジェクト")}_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
 /** The last file made, kept so a second tap can share it at once (iPhone: the share sheet needs a fresh tap). */
@@ -3725,7 +3732,7 @@ function removeMaterial(id: string): void {
   const used = rollPanel.usesMaterial(id);
   const name = entry.material.name;
   dropMaterial(id);
-  status.textContent = `「${name}」をこの曲から外しました(素材ライブラリには残り、「＋ ライブラリから」で戻せます)。${used ? "この素材を鳴らしていたトラックは無音です。" : ""}`;
+  status.textContent = `「${name}」をこのプロジェクトから外しました(素材ライブラリには残り、「＋ ライブラリから」で戻せます)。${used ? "この素材を鳴らしていたトラックは無音です。" : ""}`;
 }
 
 /** removeMaterial without asking. */
@@ -3951,7 +3958,7 @@ async function renameMaterial(id: string, raw: string): Promise<void> {
   if (material?.id === id) saveNow();
   refreshMaterialSelect();
   refreshInstruments();
-  status.textContent = `素材の名前を「${name}」にしました(素材ライブラリとほかの曲でも同じ名前になります)。`;
+  status.textContent = `素材の名前を「${name}」にしました(素材ライブラリとほかのプロジェクトでも同じ名前になります)。`;
 }
 
 /** Whether adding `seconds` of material would go past what an iPhone / iPad can hold (and says so). */
@@ -3959,7 +3966,7 @@ function overLimit(name: string, seconds: number): boolean {
   let total = seconds;
   for (const { material: m } of library.values()) total += m.channels[0].length / m.sampleRate;
   if (total <= PROJECT_AUDIO_LIMIT_SEC) return false;
-  status.textContent = `「${name}」を追加すると素材の合計が ${Math.round(total)} 秒になり、iPhone / iPad で扱える ${PROJECT_AUDIO_LIMIT_SEC} 秒を超えます。使っていない素材を「この素材を曲から外す」で外してください。`;
+  status.textContent = `「${name}」を追加すると素材の合計が ${Math.round(total)} 秒になり、iPhone / iPad で扱える ${PROJECT_AUDIO_LIMIT_SEC} 秒を超えます。使っていない素材を「この素材をプロジェクトから外す」で外してください。`;
   return true;
 }
 
@@ -3992,7 +3999,7 @@ async function addFromLibrary(id: string): Promise<boolean> {
   return true;
 }
 
-/** 「この曲用に分ける」: the material copied in the library under a new name, this song switched over to the copy. */
+/** 「このプロジェクト用に分ける」: the material copied in the library under a new name, this song switched over to the copy. */
 async function splitMaterial(): Promise<void> {
   if (!material) return;
   const from = material;
@@ -4006,7 +4013,7 @@ async function splitMaterial(): Promise<void> {
   }
   rollPanel.replaceMaterial(from.id, { id, name });
   await flushAll();
-  safeSession(NOTICE_KEY, `「${from.name}」をコピーして、この曲だけの「${name}」にしました。ほかの曲は元の素材のままです。`);
+  safeSession(NOTICE_KEY, `「${from.name}」をコピーして、このプロジェクトだけの「${name}」にしました。ほかのプロジェクトは元の素材のままです。`);
   location.reload();
 }
 
@@ -4024,15 +4031,11 @@ function refreshSharing(): void {
   void songsUsing(id, { id: open.id, materials: rollPanel.materials }).then((songs) => {
     if (ask !== sharingAsk) return;
     const others = songs.filter((p) => p.id !== open.id);
-    sharedNote.textContent = others.length ? `ほかの曲でも使用: ${others.map((p) => p.name).join("、")}(ここでの変更はそちらの音にも届きます)` : "";
+    sharedNote.textContent = others.length ? `ほかのプロジェクトでも使用: ${others.map((p) => p.name).join("、")}(ここでの変更はそちらの音にも届きます)` : "";
     splitButton.hidden = !others.length;
   });
 }
 
-const libraryDialog = el("dialog", { className: "project-dialog" });
-libraryDialog.addEventListener("click", (e) => {
-  if (e.target === libraryDialog) libraryDialog.close();
-});
 
 /** The material library: every material with the songs that use it; into this song, or removed for good. */
 async function openLibraryPanel(): Promise<void> {
@@ -4041,12 +4044,12 @@ async function openLibraryPanel(): Promise<void> {
     libraryList().map(async (entry) => {
       const songs = await songsUsing(entry.id, open);
       const here = library.has(entry.id);
-      const add = button(here ? "この曲で使用中" : "この曲に加える", `small${here ? "" : " primary"}`, async () => {
-        libraryDialog.close();
+      const add = button(here ? "このプロジェクトで使用中" : "このプロジェクトに加える", `small${here ? "" : " primary"}`, async () => {
+        libraryDialog.hidden = true;
         await addFromLibrary(entry.id);
       });
       add.disabled = here;
-      const where = songs.length ? `。使っている曲(${songs.map((p) => p.name).join("、")})でこの素材を鳴らしているトラックは無音になります` : "";
+      const where = songs.length ? `。使っているプロジェクト(${songs.map((p) => p.name).join("、")})でこの素材を鳴らしているトラックは無音になります` : "";
       const remove = armedButton(
         "削除",
         "もう一度押すと削除",
@@ -4064,23 +4067,22 @@ async function openLibraryPanel(): Promise<void> {
       // (The song's last material stays: the page always has something to play.)
       if (here && library.size < 2) {
         remove.disabled = true;
-        remove.title = "この曲の素材がこれだけなので削除できません。別の素材を加えてから削除してください";
+        remove.title = "このプロジェクトの素材がこれだけなので削除できません。別の素材を加えてから削除してください";
       }
-      const used = songs.length ? `使用: ${songs.map((p) => p.name).join("、")}` : "どの曲でも使っていません";
+      const used = songs.length ? `使用: ${songs.map((p) => p.name).join("、")}` : "どのプロジェクトでも使っていません";
       return el("div", { className: `project-row${here ? " open" : ""}` }, [
-        el("span", { className: "project-name", textContent: entry.builtin ? `${entry.name}(新しい曲はこれで始まります)` : entry.name }),
+        el("span", { className: "project-name", textContent: entry.builtin ? `${entry.name}(新しいプロジェクトはこれで始まります)` : entry.name }),
         el("span", { className: "fine", textContent: `${(entry.frames / entry.sampleRate).toFixed(1)} 秒・${used}` }),
         el("span", { className: "row tight" }, [add, remove]),
       ]);
     }),
   );
   libraryDialog.replaceChildren(
-    el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "素材ライブラリ" }), el("span", { className: "spacer" }), button("閉じる", "small", () => libraryDialog.close())]),
-    el("p", { className: "fine", textContent: "素材とそのサンプリング済音源の設定は、すべての曲で共有です。ある曲で直すと、その素材を使うほかの曲の音も変わります。曲ごとに変えたいときは、素材の欄の「この曲用に分ける」でコピーしてください。曲から外しても、ここには残ります。" }),
+    el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "素材ライブラリ" }), el("span", { className: "spacer" }), button("閉じる", "small", () => (libraryDialog.hidden = true))]),
+    el("p", { className: "fine", textContent: "素材とそのサンプリング済音源の設定は、すべてのプロジェクトで共有です。あるプロジェクトで直すと、その素材を使うほかのプロジェクトの音も変わります。プロジェクトごとに変えたいときは、素材の欄の「このプロジェクト用に分ける」でコピーしてください。プロジェクトから外しても、ここには残ります。" }),
     el("div", { className: "project-list" }, rows.length ? rows : [el("p", { className: "fine", textContent: "まだ素材がありません。" })]),
   );
-  if (!libraryDialog.isConnected) document.body.append(libraryDialog);
-  if (!libraryDialog.open) libraryDialog.showModal();
+  showPanel(libraryDialog);
 }
 
 async function openFile(file: File): Promise<void> {

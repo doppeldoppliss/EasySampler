@@ -1235,19 +1235,11 @@ body.keys-pinned {
 .save-state {
   white-space: nowrap;
 }
-.project-dialog {
-  width: min(560px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel);
-  color: var(--text);
-  padding: 16px;
+/* プロジェクト / 素材ライブラリ: panels in the page under the header (not windows over it). */
+.project-panel {
+  margin-bottom: 12px;
 }
-.project-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.35);
-}
-.project-dialog .spacer {
+.project-panel .spacer {
   flex: 1;
 }
 .project-list {

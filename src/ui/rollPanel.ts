@@ -797,6 +797,14 @@ export class RollPanel {
   /** 素材を切り詰める: the material's clips read `from` seconds earlier in its (shorter) recording. */
   trimMaterialClips(material: string, from: number): number {
     const moved = trimClips(this.project.tracks, material, from);
+    // (The undo history too: a step back must not bring clips back to where the cut-away audio was.)
+    const shift = (json: string) => {
+      const state = JSON.parse(json) as { tracks?: unknown };
+      return trimClips(state.tracks, material, from) ? JSON.stringify(state) : json;
+    };
+    this.undoStack = this.undoStack.map(shift);
+    this.redoStack = this.redoStack.map(shift);
+    this.lastState = shift(this.lastState);
     if (moved) {
       this.reload();
       this.scheduleSave();
@@ -933,6 +941,12 @@ export class RollPanel {
     this.stop();
     const { kit, materials, editing, loop } = this.project;
     this.project = { ...sanitizeProject({ ...JSON.parse(json), kit, materials, editing, loop }), kit, materials, editing, loop };
+    // (A material taken out of the song since: its tracks play nothing, as they did when it went.)
+    const present = new Set(materials.map((m) => m.id));
+    for (const t of this.project.tracks) {
+      if (t.instrument?.includes("/") && !present.has(t.instrument.split("/")[0])) t.instrument = null;
+      else if (t.kind === "audio" && t.instrument && !present.has(t.instrument)) t.instrument = null;
+    }
     this.lastState = this.state();
     this.applyProject();
     this.reload();
@@ -1484,6 +1498,7 @@ export class RollPanel {
       named++;
     });
     this.renderTracks();
+    this.onTrackChange();
     this.scheduleSave();
     this.commit();
     this.info.textContent = named ? `${named} 本のトラックに名前を付けました。「元に戻す」で戻せます。` : "名前のないトラック(「MIDI Out #3」のような名前)はありませんでした。";
@@ -1625,6 +1640,9 @@ export class RollPanel {
         t.name = name.value.trim() || `トラック ${i + 1}`;
         this.scheduleSave();
         this.commit();
+        // (The ミックス strips, the effects panel's label and the sidechain's choices name it too.)
+        this.renderMix();
+        this.onTrackChange();
       });
       const instrument: HTMLElement =
         t.kind === "drum"

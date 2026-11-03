@@ -59,6 +59,11 @@ export interface SongRenderInput {
   window?: { fromSec: number; lengthSec: number };
   /** A stem: left at its level (no gain against clipping) and untrimmed, so the stems can be brought to one gain and one length. */
   raw?: boolean;
+  /**
+   * The song's beat at the render's time 0 (the effects that keep to the bars — gate, stutter, the beat-led ducking —
+   * follow it): for a loop range rendered twice from its start, the loop's start less its length in beats.
+   */
+  beatOffset?: number;
   /** 書き出す音量: brought to this loudness (LUFS) under a true-peak ceiling (dBTP), instead of only kept under full scale. */
   loudness?: { targetLufs: number; ceilingDb: number };
 }
@@ -140,6 +145,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
   player.setTempo(input.bpm);
   player.setMasterAuto(input.masterAuto ?? []);
   player.setTempoMap(input.tempoMap ?? []);
+  player.beatOffset = input.beatOffset ?? 0;
   player.play(0, 0);
   const master = new FxChain(sr);
   if (input.masterFx) master.set(input.masterFx);

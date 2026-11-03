@@ -119,3 +119,12 @@ describe("ハモリ", () => {
     expect(estimateKey(scale(9, [0, 2, 3, 5, 7, 8, 10, 0, 3, 7]))).toEqual({ key: 9, minor: true });
   });
 });
+
+describe("ハモリ: no pitch twice", () => {
+  it("leaves out an added note on a pitch already sounding (written, or added for another note of the chord)", () => {
+    const chord = [60, 64, 67].map((p, i) => ({ id: i, start: 0, length: 1, pitch: p, velocity: 0.8 }));
+    const out = withHarmony(chord, { on: true, key: 0, minor: false, voices: [2], level: 0.8 });
+    // C→E (written already), E→G (written), G→B (new): only B is added.
+    expect(out.map((n) => n.pitch).sort((a, b) => a - b)).toEqual([60, 64, 67, 71]);
+  });
+});

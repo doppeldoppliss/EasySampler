@@ -1753,6 +1753,20 @@ async function saveProjectFile(): Promise<void> {
   status.textContent = `「${fileName}」に保存しました(${size})。`;
 }
 
+/** Whether two settings files (as kept) say the same, whenever they were saved. */
+function sameSettings(a: unknown, b: unknown): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return a === b;
+  try {
+    const x = JSON.parse(a) as Record<string, unknown>;
+    const y = JSON.parse(b) as Record<string, unknown>;
+    delete x.savedAt;
+    delete y.savedAt;
+    return JSON.stringify(x) === JSON.stringify(y);
+  } catch {
+    return a === b;
+  }
+}
+
 /** Whether a library material's samples are exactly these. */
 async function sameAudio(id: string, channels: readonly Float32Array[]): Promise<boolean> {
   const audio = (await kept(`audio:${id}`)) as StoredAudio | undefined;
@@ -1782,7 +1796,8 @@ async function openProjectFile(file: File): Promise<void> {
       if (same && (await sameAudio(same.id, m.channels))) {
         const theirs = await kept(`settings:${same.id}`);
         // (Settings that differ: the file's come in as another material, so the song sounds as it was saved.)
-        if (theirs === m.settings) {
+        // (Compared without the time they were saved at: every save writes a new one.)
+        if (sameSettings(theirs, m.settings)) {
           map.set(m.id, same.id);
           continue;
         }
@@ -3199,13 +3214,25 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
   rebuildKit();
   const kit = rollPanel.kitSpec();
   const out: RenderTrack[] = [];
+  // A stem: its track, and (unheard) the tracks its sidechain listens to, and theirs in turn — so it ducks as in the mix.
+  const keys = new Set<string>();
+  if (only !== null) {
+    const follow = (id: string) => {
+      const src = project.tracks.find((x) => x.id === id)?.fx.duck;
+      if (src?.on && src.source !== "beat" && !keys.has(src.source)) {
+        keys.add(src.source);
+        follow(src.source);
+      }
+    };
+    follow(only);
+  }
   for (const t of project.tracks) {
-    if (only !== null && t.id !== only) continue;
+    if (only !== null && t.id !== only && !keys.has(t.id)) continue;
     const mix = {
       fx: t.fx,
       gain: t.gain,
       pan: t.pan,
-      mute: only === null ? t.mute : false,
+      mute: only === null ? t.mute : t.id !== only,
       solo: only === null ? t.solo : false,
       volumeAuto: renderLine(t.volumeAuto, project, range),
       panAuto: renderLine(t.panAuto, project, range),
@@ -3285,6 +3312,8 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
   const stamp = songFileStamp() + (range ? "_loop" : "");
   const songInfo = { ISFT: "EasySampler" };
   const window = range ? { fromSec: range.lengthSec, lengthSec: range.lengthSec } : undefined;
+  // (The kept second pass starts on the loop's start in the song's beats: the patterns line up as they play.)
+  const beatOffset = loopRange ? loopRange.start - (loopRange.end - loopRange.start) : 0;
   const loudness = kind === "wav" ? rollPanel.exportLoudness : null;
   const key = JSON.stringify([kind, range, loudness, project, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
   let built = songBuilt?.key === key ? songBuilt : null;
@@ -3304,7 +3333,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
         say("作成中…");
         await yieldToScreen();
         const song = await renderSong(
-          { sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, range), tempoMap, window, loudness: loudness ? { targetLufs: loudness.targetLufs, ceilingDb: -1 } : undefined },
+          { sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, range), tempoMap, window, beatOffset, loudness: loudness ? { targetLufs: loudness.targetLufs, ceilingDb: -1 } : undefined },
           async (share) => {
             await progress(share);
             if (share >= 1 && loudness) say("音量を合わせています…");
@@ -3323,14 +3352,17 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
         // Every stem from 0, at one gain and one length: laid side by side they add up to the mix (without the master).
         const rendered: { name: string; channels: [Float32Array, Float32Array] }[] = [];
         const used = new Set<string>();
-        const withNotes = project.tracks.filter((t) => t.notes.length);
+        // (A track the mix silences — muted, or another soloed — is left out, as it is left out of the song.)
+        const soloing = project.tracks.some((t) => t.solo);
+        const withNotes = project.tracks.filter((t) => t.notes.length && !t.mute && (!soloing || t.solo));
+        const silenced = project.tracks.filter((t) => t.notes.length).length - withNotes.length;
         for (let i = 0; i < withNotes.length; i++) {
           const t = withNotes[i];
           const tracks = songTracks(project, t.id, range);
           if (!tracks.length) continue;
           say(`作成中… ${i + 1} / ${withNotes.length}(${t.name})`);
           await yieldToScreen();
-          const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null, tempoMap, window, raw: true });
+          const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null, tempoMap, window, beatOffset, raw: true });
           let name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}.wav`;
           for (let k = 2; used.has(name); k++) name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}_${k}.wav`;
           used.add(name);
@@ -3339,7 +3371,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
         const even = evenStems(rendered.map((r) => r.channels));
         const entries: ZipEntry[] = rendered.map((r, i) => ({ name: `${stamp}/${r.name}`, data: new Uint8Array(encodeWavBytes(even.stems[i], rate, songInfo, undefined, { bits: 24 })) }));
         const lowered = even.gain < 1 ? `。音割れしないよう全部を同じだけ ${(20 * Math.log10(even.gain)).toFixed(1)} dB 下げました` : "";
-        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `${stamp}_トラック別.zip`, summary: `WAV ${rendered.length} 本(24bit、同じ長さ、各トラックのエフェクト込み・マスターなし)${lowered}` };
+        built = { key, blob: new Blob([zipStore(entries)], { type: "application/zip" }), fileName: `${stamp}_トラック別.zip`, summary: `WAV ${rendered.length} 本(24bit、同じ長さ、各トラックのエフェクト込み・マスターなし)${lowered}${silenced ? `。ミュート(またはソロの外)のトラック ${silenced} 本は入れていません` : ""}` };
       }
       songBuilt = built;
     } catch (error) {

@@ -106,6 +106,32 @@ describe("renderSong", () => {
     expect(at(0.9)).toBeCloseTo(0.3, 2);
   });
 
+  it("a loop range exported keeps the song's beats: a gate opens where it does in the song", async () => {
+    // A pad through a gate open on the first beat of each 4-beat pattern only (sixteenths 0–3); the loop is beats 2–6.
+    const pad = Float32Array.from({ length: SR * 4 }, () => 0.3);
+    const gate = { ...structuredClone(DEFAULT_FX), gate: { ...DEFAULT_FX.gate, on: true, smoothMs: 2, steps: Array.from({ length: 16 }, (_, i) => i < 4) } };
+    const tracks = [{ id: "pad", instrument: null, samples: [[pad]], notes: [{ start: 0, end: 4, note: 0, velocity: 1, drum: false }], ...plain, fx: gate }];
+    // (At 120 BPM a beat is 0.5 s: the loop is 1–3 s of the song, rendered twice from 0 and the second pass kept.)
+    const song = await renderSong({ sampleRate: SR, bpm: 120, masterFx: null, tracks, window: { fromSec: 2, lengthSec: 2 }, beatOffset: 2 - 4 });
+    const level = (from: number, to: number) => Math.max(...Array.from(song.channels[0].subarray(Math.round(from * SR), Math.round(to * SR))).map(Math.abs));
+    // Song beats 2–4 are closed; beat 4 (1 s into the loop) opens.
+    expect(level(0.05, 0.9)).toBeLessThan(0.01);
+    expect(level(1.05, 1.4)).toBeGreaterThan(0.25);
+  });
+
+  it("sidechains in a chain work in any track order (A ducks to B, B to C)", async () => {
+    const pad = Float32Array.from({ length: SR }, () => 0.3);
+    const duckTo = (source: string) => ({ ...structuredClone(DEFAULT_FX), duck: { ...DEFAULT_FX.duck, on: true, source, depthDb: -12, releaseMs: 50, thresholdDb: -24 } });
+    const tracks = [
+      { id: "A", instrument: null, samples: [[pad]], notes: [{ start: 0, end: 1, note: 0, velocity: 1, drum: false }], ...plain, fx: duckTo("B") },
+      { id: "B", instrument: null, samples: [[pad]], notes: [{ start: 0, end: 1, note: 0, velocity: 1, drum: false }], ...plain, mute: true, fx: duckTo("C") },
+      { id: "C", instrument: null, samples: [[pad]], notes: [], ...plain, mute: true },
+    ];
+    const song = await renderSong({ sampleRate: SR, bpm: 120, masterFx: null, tracks });
+    // Only A is heard; B (loud, its own key C silent) holds A down.
+    expect(20 * Math.log10(Math.abs(song.channels[0][Math.round(0.5 * SR)]) / 0.3)).toBeLessThan(-10);
+  });
+
   it("書き出す音量: brings the song to the target loudness under -1 dBTP, quiet or loud", async () => {
     const tone = (amp: number) => Float32Array.from({ length: SR * 3 }, (_, i) => amp * Math.sin((2 * Math.PI * 440 * i) / SR));
     for (const amp of [0.05, 0.9]) {

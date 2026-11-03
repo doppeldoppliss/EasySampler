@@ -91,8 +91,14 @@ export function harmonizePitch(pitch: number, steps: number, key: number, minor:
 export function withHarmony(notes: readonly Note[], harmony: Harmony | undefined, glide = 0): Note[] {
   if (!harmony?.on || !harmony.voices.length || glide > 0) return [...notes];
   const added: Note[] = [];
+  // (A voice landing on a pitch already sounding then — written, or added for another note of a chord — is left
+  // out: two notes on one pitch would double it and cut each other off.)
+  const sounding = (pitch: number, n: Note) => [...notes, ...added].some((m) => m.pitch === pitch && m.start < n.start + n.length && m.start + m.length > n.start);
   for (const n of notes) {
-    for (const steps of harmony.voices) added.push({ ...n, pitch: harmonizePitch(n.pitch, steps, harmony.key, harmony.minor), velocity: Math.max(0.01, Math.min(1, n.velocity * harmony.level)) });
+    for (const steps of harmony.voices) {
+      const pitch = harmonizePitch(n.pitch, steps, harmony.key, harmony.minor);
+      if (!sounding(pitch, n)) added.push({ ...n, pitch, velocity: Math.max(0.01, Math.min(1, n.velocity * harmony.level)) });
+    }
   }
   return [...notes, ...added];
 }

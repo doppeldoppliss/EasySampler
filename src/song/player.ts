@@ -274,7 +274,15 @@ export class SongPlayer {
    * (which are overwritten).
    */
   /** The song's beat at a context frame (null while stopped): the effects that keep to the bars (gate, stutter) follow it. */
+  /** Added to every beat beatAtFrame gives: the song's beat where this player's time 0 is (an export of the loop range starts there). */
+  beatOffset = 0;
+
   beatAtFrame(contextFrame: number): number | null {
+    const beat = this.timeBeatAt(contextFrame);
+    return beat === null ? null : beat + this.beatOffset;
+  }
+
+  private timeBeatAt(contextFrame: number): number | null {
     const sec = this.songSecAt(contextFrame);
     if (sec === null) return null;
     const map = this.tempoMap;
@@ -368,7 +376,15 @@ export class SongPlayer {
       if (key) keys.add(key);
       lane.keyLive = false;
     }
-    const order = keys.size ? [...this.lanes].sort((a, b) => Number(keyOf(a) !== null) - Number(keyOf(b) !== null)) : this.lanes;
+    // (A chain — A ducks to B, B to C — in order: by how many keys deep each lane is; a loop of keys is cut.)
+    const depthOf = (lane: Lane, seen = new Set<Lane>()): number => {
+      const key = keyOf(lane);
+      if (!key || seen.has(lane)) return 0;
+      seen.add(lane);
+      const source = this.lanes.find((x) => x.id === key);
+      return source ? 1 + depthOf(source, seen) : 1;
+    };
+    const order = keys.size ? [...this.lanes].map((lane) => ({ lane, depth: depthOf(lane) })).sort((a, b) => a.depth - b.depth).map((x) => x.lane) : this.lanes;
     for (const lane of order) {
       const { gain, mute, solo } = lane.mix;
       // (Muted, or another track soloed: down to 0, ramped like any change.)

@@ -3691,7 +3691,9 @@ async function diagnoseMix(): Promise<void> {
     if (lead !== null) {
       for (const [i, l] of lufsOf) {
         const t = project.tracks[i];
-        if (roles[i] !== "lead" && roles[i] !== "audio" && roles[i] !== "drum" && l > lead + 1) points.push(`「${t.name}」(${ROLE_NAMES[roles[i]]})がメロディより ${(l - lead).toFixed(1)} dB 大きく、メロディを隠しがちです。`);
+        // (The bass may sit over the lead by what ベースの強さ asks for.)
+        const allowed = lead + 1 + (roles[i] === "bass" ? project.bassLevelDb : 0);
+        if (roles[i] !== "lead" && roles[i] !== "audio" && roles[i] !== "drum" && l > allowed) points.push(`「${t.name}」(${ROLE_NAMES[roles[i]]})がメロディより ${(l - lead).toFixed(1)} dB 大きく、メロディを隠しがちです。`);
         if (l < lead - 24) points.push(`「${t.name}」はメロディより ${(lead - l).toFixed(0)} dB 小さく、ほとんど聞こえません(要らなければミュート、要るなら音量を上げる)。`);
       }
     } else points.push("メロディのトラックがありません。ミックスの列で役割を「メロディ」にすると、自動の音量・EQ の基準になります。");

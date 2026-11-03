@@ -349,8 +349,6 @@ export class RollPanel {
   private readonly loopBarButton = button("この小節", "small", () => this.loopAround("bar"), "再生位置のある小節をループします");
   private readonly loopSelectionButton = button("選んだ音符", "small", () => this.loopAround("selection"), "選んでいる音符を含む小節をループします");
   private readonly loopMarkerButton = button("マーカーの間", "small", () => this.loopAround("marker"), "再生位置の前のマーカーから次のマーカーまで(Aメロ、サビ…)をループします");
-  private readonly loopDoubleButton = button("長さ ×2", "small", () => this.loopAround("double"), "ループの長さを 2 倍にします(始まりはそのまま)");
-  private readonly loopHalfButton = button("長さ ½", "small", () => this.loopAround("half"), "ループの長さを半分にします(始まりはそのまま)");
   /** What follows the page's scroll: play, record, the metronome, the loop switch, the position and the seek bar (placed by the page). */
   readonly transport: HTMLElement;
   /** The tempo changes after the start: each its bar and beat, its tempo, and ×. */
@@ -493,8 +491,6 @@ export class RollPanel {
         this.loopBarButton,
         this.loopSelectionButton,
         this.loopMarkerButton,
-        this.loopDoubleButton,
-        this.loopHalfButton,
       ]),
       this.tempoList,
       this.markerList,
@@ -1868,13 +1864,12 @@ export class RollPanel {
     this.setLoopRange((from - 1) * bpb, to * bpb);
   }
 
-  /** The quick loop buttons: this bar, the selected notes' bars, between markers, twice or half as long. */
-  private loopAround(kind: "bar" | "selection" | "marker" | "double" | "half"): void {
+  /** The quick loop buttons: this bar, the selected notes' bars, between markers. */
+  private loopAround(kind: "bar" | "selection" | "marker"): void {
     const bpb = this.project.beatsPerBar;
     const beat = secToBeats(this.from, this.project);
     const barStart = (b: number) => Math.floor(b / bpb + 1e-9) * bpb;
     const barEnd = (b: number) => Math.max(bpb, Math.ceil(b / bpb - 1e-9) * bpb);
-    const { loop } = this.project;
     if (kind === "bar") this.setLoopRange(barStart(beat), barStart(beat) + bpb);
     else if (kind === "selection") {
       const span = this.roll.selectionSpan;
@@ -1885,8 +1880,7 @@ export class RollPanel {
       const after = marks.find((m) => m.beat > beat + 1e-9);
       const start = before?.beat ?? 0;
       this.setLoopRange(start, after?.beat ?? Math.max(barEnd(this.lastBeat()), start + bpb));
-    } else if (kind === "double") this.setLoopRange(loop.start, loop.start + 2 * (loop.end - loop.start));
-    else this.setLoopRange(loop.start, loop.start + Math.max(1 / 16, (loop.end - loop.start) / 2));
+    }
   }
 
   private setLoopOn(on: boolean): void {

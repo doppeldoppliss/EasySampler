@@ -1855,3 +1855,20 @@ button.mix-auto {
     height: 88px;
   }
 }
+
+/* 自動ミックス: one box with the one-shot run, its settings, the single steps (folded) and what came out. */
+.automix-box {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.automix-settings {
+  margin-top: 6px;
+}
+.automix-steps {
+  margin-top: 6px;
+}
+.automix-steps > summary {
+  cursor: pointer;
+}

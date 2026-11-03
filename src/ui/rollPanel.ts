@@ -619,37 +619,39 @@ export class RollPanel {
         el("summary", { textContent: "バランスの取り方(目安)" }),
         el("p", { textContent: "1. 基準を 1 本決める(原曲・伴奏か主旋律)。そのメーターが -10 dB 前後になるよう合わせ、以後は動かさない。 2. ほかのトラックを基準より小さく足していく。マスターのピークは -6〜-3 dB に収め、「0 dB 超え」を出さない。 3. 主役・ベース・キックは中央、伴奏・ハモリ・シンバル・効果音は左右へ(パン)。 4. 中域(声の帯域)が混むときはトラックのエフェクトの EQ で少し削る。奥へ下げたい音は高域を削るかリバーブ。 5. マスターのエフェクトは控えめに(ローカット、軽いコンプ程度)。投稿先の音量合わせは書き出しの「音量」で。" }),
       ]),
-      el("div", { className: "row tight mix-tools" }, [
-        button("パンを自動で広げる", "small", () => this.spreadPans(), "ドラム・ベース・メロディは中央のまま、和音と伴奏を高さの順に左右へ振り分けます(元に戻すで戻せます)"),
-        button("トラック名を自動で付ける", "small", () => this.nameTracks(), "「MIDI Out #3」のような名前のトラックに、音符から「ベース」「メロディ」「和音」などの名前を付けます(名前のあるトラックはそのまま)"),
-      ]),
-      el("div", { className: "row tight mix-tools" }, [
-        button("まとめて自動ミックス", "small primary", () => this.onAutoMixAll(), "トラック名(名前のないものだけ)→ パン(真ん中のままのトラックだけ)→ トラックの EQ → キックに合わせて沈める → 残響 → 音量 → マスター EQ(下で選んだ目安)を、この順で続けて行い、最後に診断を出します。それぞれ「元に戻す」で 1 段ずつ戻せます"),
-        el("label", { className: "inline fine", title: "オンにすると、自分で入れたエフェクトも整えます: リバーブは量を役割の目安に(響きの質はそのまま。ベース・ドラム・速いパートは外す)、サイドチェーンは自動の目安に、EQ はつまみを残してローカットを足す(ベースは低い音を削らない位置に)、ベースのコーラス・ステレオ幅・オートパン・ディレイ・リバーブは外す、ディレイは 30% まで。コンプ・サチュレーションなど音色のエフェクトは触りません" }, [this.tidyOwnBox, " 自分で入れたエフェクトも整える"]),
-        button("ミックスを診断する", "small", () => this.onDiagnose(), "トラックを 1 本ずつと曲全体を書き出して、聞こえの大きさ・ピーク・気になる点を一覧にします(設定は変えません)"),
-      ]),
-      this.diagnosis,
-      el("div", { className: "row tight mix-tools" }, [
-        el("span", { className: "fine", textContent: "役割から自動で:" }),
-        this.bassLevelSelect,
-        button("音量を合わせる", "small", () => this.onAutoLevels(), "トラックを 1 本ずつ書き出して聞こえの大きさ(LUFS)を測り、役割ごとの目安(原曲・伴奏かメロディを基準に、ベース ±0・ドラム −1・和音 −5・伴奏 −6・ハモリ −8 dB。同じ役割が複数なら分け合う)に音量を合わせます"),
-        button("トラックの EQ", "small", () => this.onAutoEq(), "メロディ・和音・伴奏・ハモリのトラックに、低い音符の少し下からのローカットと、メロディとぶつかる帯を 2〜3 dB 削る EQ を入れます(EQ を自分で入れたトラックはそのまま)"),
-        button("キックに合わせて沈める", "small", () => this.autoDuck(), "ベース(−3 dB、16 分音符で戻る)と、1 拍以上伸ばす音が中心の和音・伴奏・ハモリ(−2 dB)に、ドラムトラックのキック(35・36 番)で沈むサイドチェーンを入れます(サイドチェーンを自分で入れたトラックはそのまま)"),
-        button("残響を付ける", "small", () => this.autoRooms(), "メロディは少し(6%)、和音・伴奏・ハモリはやや多め(11〜14%)に、テンポに合った長さのリバーブを入れます。ベース・ドラム・原曲と、16 分音符以下の短い音が中心の速いパートにはなし(リバーブを自分で入れたトラックはそのまま)"),
-      ]),
-      this.mixInfo,
       this.mixStrips,
-      el("div", { className: "balance-box" }, [
+      // 自動ミックス (design.md 37): everything the automatic mixing does in one place — the one-shot run and the
+      // diagnosis, the settings both they and the single steps use, the single steps (folded), and what came out.
+      el("div", { className: "automix-box" }, [
         el("div", { className: "row tight" }, [
-          el("span", { className: "control-label", textContent: "音域のバランス(マスター EQ)" }),
-          this.balanceSelect,
-          button("マスター EQ を目安に寄せる", "small", () => this.onBalance(this.balanceSelect.value as BalanceStyle), "曲をマスターなしで書き出して周波数の分布を測り、選んだ目安の形へ半分ほど近づくよう、マスターの EQ(ローカット・低音・中音・高音)を設定します。元に戻すで戻せます"),
+          el("span", { className: "control-label", textContent: "自動ミックス" }),
+          button("まとめて自動ミックス", "small primary", () => this.onAutoMixAll(), "トラック名(名前のないものだけ)→ パン(真ん中のままのトラックだけ)→ トラックの EQ → キックに合わせて沈める → 残響 → 音量 → マスター EQ を、この順で続けて行い、最後に診断を出します。下の設定を使います。それぞれ「元に戻す」で 1 段ずつ戻せます"),
+          button("ミックスを診断する", "small", () => this.onDiagnose(), "トラックを 1 本ずつと曲全体を書き出して、聞こえの大きさ・ピーク・気になる点を一覧にします(設定は変えません)"),
         ]),
-        el("p", { className: "fine", textContent: "仕上がった曲の平均は、低音から高音へなだらかに下がる形になります。その目安(標準 / 電子音・ボカロ系は低音と高音が多め / 生楽器系はなだらか)との差を測って、マスター EQ で半分ほど寄せます(各 ±6 dB まで)。直せるのは全体の傾きだけで、トラック同士のぶつかりは各トラックの EQ で。最後は耳で調整してください。" }),
+        el("div", { className: "row tight automix-settings" }, [
+          el("label", { className: "inline fine", title: "マスター EQ で寄せる音域の形。標準 / 電子音・ボカロ系は低音と高音が多め / 生楽器系はなだらか" }, ["音域の目安 ", this.balanceSelect]),
+          el("label", { className: "inline fine" }, [this.bassLevelSelect]),
+          el("label", { className: "inline fine", title: "オンにすると、自分で入れたエフェクトも整えます: リバーブは量を役割の目安に(響きの質はそのまま。ベース・ドラム・速いパートは外す)、サイドチェーンは自動の目安に、EQ はつまみを残してローカットを足す(ベースは低い音を削らない位置に)、ベースのコーラス・ステレオ幅・オートパン・ディレイ・リバーブは外す、ディレイは 30% まで。コンプ・サチュレーションなど音色のエフェクトは触りません" }, [this.tidyOwnBox, " 自分で入れたエフェクトも整える"]),
+        ]),
+        el("details", { className: "automix-steps" }, [
+          el("summary", { className: "fine", textContent: "1 つずつ行う(まとめて自動ミックスの中身)" }),
+          el("div", { className: "row tight mix-tools" }, [
+            button("トラック名を付ける", "small", () => this.nameTracks(), "「MIDI Out #3」のような名前のトラックに、音符から「ベース」「メロディ」「和音」などの名前を付けます(名前のあるトラックはそのまま)"),
+            button("パンを広げる", "small", () => this.spreadPans(), "ドラム・ベース・メロディは中央のまま、和音と伴奏を高さの順に左右へ振り分けます(元に戻すで戻せます)"),
+            button("トラックの EQ", "small", () => this.onAutoEq(), "メロディ・和音・伴奏・ハモリのトラックに、低い音符の少し下からのローカットと、メロディとぶつかる帯を 2〜3 dB 削る EQ を入れます(EQ を自分で入れたトラックはそのまま)"),
+            button("キックに合わせて沈める", "small", () => this.autoDuck(), "ベース(−3 dB、16 分音符で戻る)と、1 拍以上伸ばす音が中心の和音・伴奏・ハモリ(−2 dB)に、ドラムトラックのキック(35・36 番)で沈むサイドチェーンを入れます(サイドチェーンを自分で入れたトラックはそのまま)"),
+            button("残響を付ける", "small", () => this.autoRooms(), "メロディは少し(6%)、和音・伴奏・ハモリはやや多め(11〜14%)に、テンポに合った長さのリバーブを入れます。ベース・ドラム・原曲と、16 分音符以下の短い音が中心の速いパートにはなし(リバーブを自分で入れたトラックはそのまま)"),
+            button("音量を合わせる", "small", () => this.onAutoLevels(), "トラックを 1 本ずつ書き出して聞こえの大きさ(LUFS)を測り、役割ごとの目安(原曲・伴奏かメロディを基準に、ベース ±0(上の「ベースの強さ」を足す)・ドラム −1・和音 −5・伴奏 −6・ハモリ −8 dB。同じ役割が複数なら分け合う)に音量を合わせます"),
+            button("マスター EQ を目安に寄せる", "small", () => this.onBalance(this.balanceSelect.value as BalanceStyle), "曲をマスターなしで書き出して周波数の分布を測り、上の「音域の目安」の形へ半分ほど近づくよう、マスターの EQ(ローカット・低音・中音・高音)を設定します。元に戻すで戻せます"),
+          ]),
+          el("p", { className: "fine", textContent: "マスター EQ: 仕上がった曲の平均は、低音から高音へなだらかに下がる形になります。その目安との差を測って半分ほど寄せます(各 ±6 dB まで)。直せるのは全体の傾きだけで、トラック同士のぶつかりは各トラックの EQ で。最後は耳で調整してください。" }),
+        ]),
+        this.mixInfo,
         this.balanceStatus,
         this.bassFill,
         this.bassFillResult,
         this.balanceCanvas,
+        this.diagnosis,
       ]),
       el("div", { className: "spectrum-box" }, [
         el("div", { className: "row tight" }, [

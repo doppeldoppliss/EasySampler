@@ -7,7 +7,7 @@
 import type { PitchCorrection } from "../analysis/corrections";
 import { normalizeRemoved } from "../instrument/layout";
 import { clampMarkers } from "../instrument/markers";
-import { DEFAULT_EXPORT, DEFAULT_FX, DEFAULT_PARAMS, type ExportSettings, type FxBeats, type FxSettings, type InstrumentParams, type Markers } from "../instrument/types";
+import { DEFAULT_EXPORT, DEFAULT_FX, DEFAULT_PARAMS, PATTERN_STEPS, type ExportSettings, type FxBeats, type FxSettings, type InstrumentParams, type Markers, type SliceBeats, type StepBeats } from "../instrument/types";
 
 export interface CutSettings {
   /** Stable within its material: a track names the cut it plays by it. */
@@ -215,7 +215,14 @@ export function sanitizeFx(raw: unknown): FxSettings {
   const w = part("width");
   const p = part("pan");
   const l = part("limiter");
+  const g = part("gate");
+  const st = part("stutter");
+  const steps = (v: unknown, fallback: boolean[]) => (Array.isArray(v) && v.length === PATTERN_STEPS ? v.map((x) => x === true) : [...fallback]);
+  const stepBeats = (v: unknown, fallback: StepBeats): StepBeats => (v === 0.25 || v === 0.5 ? v : fallback);
+  const sliceBeats = (v: unknown): SliceBeats => (v === 0.0625 || v === 0.125 || v === 0.25 || v === 0.5 ? v : d.stutter.sliceBeats);
   return {
+    stutter: { on: on(st), steps: steps(st.steps, d.stutter.steps), stepBeats: stepBeats(st.stepBeats, d.stutter.stepBeats), sliceBeats: sliceBeats(st.sliceBeats), fade: clamp(num(st.fade, d.stutter.fade), 0, 0.9) },
+    gate: { on: on(g), steps: steps(g.steps, d.gate.steps), stepBeats: stepBeats(g.stepBeats, d.gate.stepBeats), depth: clamp(num(g.depth, d.gate.depth), 0, 1), smoothMs: clamp(num(g.smoothMs, d.gate.smoothMs), 0.5, 50) },
     transient: { on: on(t), attackDb: clamp(num(t.attackDb, d.transient.attackDb), -24, 24), sustainDb: clamp(num(t.sustainDb, d.transient.sustainDb), -24, 24) },
     compressor: {
       on: on(co),

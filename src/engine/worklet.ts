@@ -282,6 +282,7 @@ class EngineProcessor extends AudioWorkletProcessor {
     const right = output[1] ?? left;
     const frames = left.length;
     // The song's tracks, mixed.
+    const songBeat = this.song.beatAtFrame(currentFrame);
     this.song.render(currentFrame, left, right, frames);
     // The keyboard (the cut, or the kit), through its effects (a track's, in the 曲 view):
     // before the master there, past it everywhere else.
@@ -331,7 +332,10 @@ class EngineProcessor extends AudioWorkletProcessor {
       for (let i = 0; i < frames; i++) left[i] += this.kitL[i];
       if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.kitR[i];
     }
-    if (this.masterOn) this.master.process(left, right, frames);
+    if (this.masterOn) {
+      if (songBeat !== null) this.master.setBeat(songBeat);
+      this.master.process(left, right, frames);
+    }
     this.song.applyMaster(left, right, frames);
     if (!this.liveMaster && (liveOn || kitOn || this.liveFxOn)) {
       for (let i = 0; i < frames; i++) left[i] += this.liveL[i];

@@ -270,7 +270,24 @@ export class SongPlayer {
    * track's sound, its effects, volume and pan, summed into the outputs
    * (which are overwritten).
    */
+  /** The song's beat at a context frame (null while stopped): the effects that keep to the bars (gate, stutter) follow it. */
+  beatAtFrame(contextFrame: number): number | null {
+    const sec = this.songSecAt(contextFrame);
+    if (sec === null) return null;
+    const map = this.tempoMap;
+    if (!map.length) return (sec * this.bpm) / 60;
+    let beats = 0;
+    let prev = map[0];
+    for (let k = 1; k < map.length && map[k].sec < sec; k++) {
+      beats += ((map[k].sec - prev.sec) * prev.bpm) / 60;
+      prev = map[k];
+    }
+    return beats + ((sec - prev.sec) * prev.bpm) / 60;
+  }
+
   render(blockFrame: number, outL: Float32Array, outR: Float32Array, frames: number): void {
+    // (Where the block starts in the song, before a loop may wrap inside it.)
+    const startBeat = this.beatAtFrame(blockFrame);
     outL.fill(0, 0, frames);
     if (outR !== outL) outR.fill(0, 0, frames);
     for (const lane of this.lanes) {
@@ -358,7 +375,10 @@ export class SongPlayer {
       const idleLimit = Math.max(IDLE_SKIP_SEC, FxChain.tailSec(lane.fxOn ? lane.mix.fx : null, this.bpm) + 0.5) * this.sampleRate;
       if (lane.idleFrames > idleLimit && lane.done === 0) continue;
       SongPlayer.fill(lane, frames);
-      if (lane.fxOn) lane.fx.process(lane.l, lane.r, frames);
+      if (lane.fxOn) {
+        if (startBeat !== null) lane.fx.setBeat(startBeat);
+        lane.fx.process(lane.l, lane.r, frames);
+      }
       if (gl0 <= 0 && gl1 <= 0 && gr0 <= 0 && gr1 <= 0) continue;
       const l = lane.l;
       const r = lane.r;

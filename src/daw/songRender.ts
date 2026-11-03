@@ -163,8 +163,12 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
   let at = 0;
   let quietSince = -1;
   for (let block = 0; at < hardEnd; block++) {
+    const beat = player.beatAtFrame(at);
     player.render(at, l, r, BLOCK);
-    if (masterOn) master.process(l, r, BLOCK);
+    if (masterOn) {
+      if (beat !== null) master.setBeat(beat);
+      master.process(l, r, BLOCK);
+    }
     player.applyMaster(l, r, BLOCK);
     if (at + BLOCK > left.length) {
       const grow = (x: Float32Array) => {

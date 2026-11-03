@@ -32,6 +32,7 @@ import {
   oneShotParams,
   decayChoiceOf,
   DECAY_TO_SILENCE,
+  PATTERN_STEPS,
   isHeld,
   withDecayChoice,
   type DecayChoice,
@@ -1106,6 +1107,31 @@ function fxFreq(label: string, lo: number, hi: number, get: () => number, set: (
   );
 }
 
+/**
+ * A 16-step pattern (gate, stutter): a button per step (on = lit), a bar's beats marked by a gap, and quick fills.
+ */
+function fxSteps(get: () => boolean[], set: (f: FxSettings, steps: boolean[]) => void, fills: [string, (i: number) => boolean][]): HTMLElement {
+  const buttons = Array.from({ length: PATTERN_STEPS }, (_, i) => {
+    const b = el("button", { type: "button", className: `step-toggle${i % 4 === 0 ? " beat" : ""}`, ariaLabel: `${i + 1} 番目` });
+    b.addEventListener("click", () => {
+      const steps = [...get()];
+      steps[i] = !steps[i];
+      updateFx((x) => set(x, steps));
+      refresh();
+    });
+    return b;
+  });
+  const refresh = () => get().forEach((on, i) => buttons[i].classList.toggle("on", on));
+  controlsRefreshers.push(refresh);
+  const fillButtons = fills.map(([label, at]) =>
+    button(label, "small", () => {
+      updateFx((x) => set(x, Array.from({ length: PATTERN_STEPS }, (_, i) => at(i))));
+      refresh();
+    }),
+  );
+  return el("div", { className: "control step-pattern" }, [el("span", { className: "control-label", textContent: "パターン(押して切り替え)" }), el("div", { className: "steps-row" }, buttons), el("div", { className: "row tight" }, fillButtons)]);
+}
+
 function fxGroup(key: FxKey, label: string, note: string, controls: HTMLElement[]): HTMLElement {
   const summary = el("summary");
   fxSummaries.push({ key, summary, label });
@@ -1150,6 +1176,18 @@ const fxPanel = el("details", { className: "panel fx-panel" }, [
   el("summary", { className: "row" }, [el("span", { className: "control-label", textContent: "エフェクト" }), fxTrackLabel, fxActiveLine]),
   el("div", { className: "row" }, [el("span", { className: "fine", textContent: "かける先:" }), fxTrackButton, fxMasterButton, fxResetButton]),
   el("p", { className: "fine", textContent: "打ち込みで選んでいるトラック、またはマスター(曲全体)にかかります(上から順に)。曲の再生・書き出しと、曲の画面の鍵盤にかかります。素材・ドラムキットの画面の鍵盤と、書き出す単音の WAV には入りません。" }),
+  fxHead("刻む・連打する(曲の拍に合わせる)"),
+  fxGroup("stutter", "スタッター(連打)", "パターンで光らせた所で、その頭の短い切れ端を何度も繰り返します(「ぼぼぼぼ」「ドゥルルル」)。曲の拍に合わせて刻まれます。続けて光らせた所は 1 つの連打になります。", [
+    fxSteps(() => fxNow().stutter.steps, (f, v) => (f.stutter.steps = v), [
+      ["小節の終わり", (i) => i >= 12],
+      ["2 拍目と 4 拍目の裏", (i) => i === 6 || i === 7 || i === 14 || i === 15],
+      ["全部", () => true],
+      ["消す", () => false],
+    ]),
+    fxSelect("1 マスの長さ", [["0.25", "1/16 音符(1 小節 = 16 マス)"], ["0.5", "1/8 音符(2 小節 = 16 マス)"]], () => String(fxNow().stutter.stepBeats) as "0.25", (f, v) => (f.stutter.stepBeats = Number(v) as FxSettings["stutter"]["stepBeats"])),
+    fxSelect("繰り返す切れ端", [["0.0625", "1/64 音符(ブザー風)"], ["0.125", "1/32 音符"], ["0.25", "1/16 音符"], ["0.5", "1/8 音符"]], () => String(fxNow().stutter.sliceBeats) as "0.125", (f, v) => (f.stutter.sliceBeats = Number(v) as FxSettings["stutter"]["sliceBeats"])),
+    fxRange("繰り返すたびに小さく", 0, 0.9, 0.01, () => fxNow().stutter.fade, (f, v) => (f.stutter.fade = v), (v) => (v === 0 ? "なし" : pct(v))),
+  ]),
   fxHead("立ち上がり"),
   fxGroup("transient", "トランジェント(立ち上がり)", "音の頭(アタック)と、そのあとの伸び(サステイン)を別々に上げ下げします。", [
     fxRange("アタック", -12, 12, 0.5, () => fxNow().transient.attackDb, (f, v) => (f.transient.attackDb = v), db),
@@ -1199,6 +1237,17 @@ const fxPanel = el("details", { className: "panel fx-panel" }, [
     fxRange("速さ", 0.1, 5, 0.05, () => fxNow().chorus.rateHz, (f, v) => (f.chorus.rateHz = v), (v) => `${v.toFixed(2)} Hz`),
     fxRange("深さ", 0, 12, 0.1, () => fxNow().chorus.depthMs, (f, v) => (f.chorus.depthMs = v), (v) => `${v.toFixed(1)} ms`),
     fxRange("かかり具合(ミックス)", 0, 1, 0.01, () => fxNow().chorus.mix, (f, v) => (f.chorus.mix = v), pct),
+  ]),
+  fxGroup("gate", "ゲート(トランスゲート)", "パターンで光らせた所だけ音を通し、ほかを下げて、曲の拍に合わせて刻みます(伸ばした声や伴奏をズンズン刻む)。", [
+    fxSteps(() => fxNow().gate.steps, (f, v) => (f.gate.steps = v), [
+      ["16 分で交互", (i) => i % 2 === 0],
+      ["8 分", (i) => i % 4 < 2],
+      ["裏拍だけ", (i) => i % 4 === 2],
+      ["全部", () => true],
+    ]),
+    fxSelect("1 マスの長さ", [["0.25", "1/16 音符(1 小節 = 16 マス)"], ["0.5", "1/8 音符(2 小節 = 16 マス)"]], () => String(fxNow().gate.stepBeats) as "0.25", (f, v) => (f.gate.stepBeats = Number(v) as FxSettings["gate"]["stepBeats"])),
+    fxRange("下げる量", 0, 1, 0.01, () => fxNow().gate.depth, (f, v) => (f.gate.depth = v), (v) => (v >= 1 ? "無音" : pct(v))),
+    fxRange("切り替えのなめらかさ", 0.5, 50, 0.5, () => fxNow().gate.smoothMs, (f, v) => (f.gate.smoothMs = v), (v) => `${v.toFixed(1)} ms`),
   ]),
   fxHead("やまびこと響き"),
   fxGroup("delay", "ディレイ(やまびこ)", "拍に合わせて音を繰り返します。ピンポンにすると左右に跳ね返ります。", [

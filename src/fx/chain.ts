@@ -1,12 +1,13 @@
 // The effect rack (エフェクト): the kinds of plug-ins 音MAD makers reach
-// for — transient shaper, compressor, EQ, saturation, air, LFO filter, bit
-// crusher, chorus, delay, reverb, mid/side width, auto-pan, limiter —
+// for — stutter, transient shaper, compressor, EQ, saturation, air, LFO
+// filter, bit crusher, chorus, gate, delay, reverb, mid/side width, auto-pan,
+// limiter —
 // written for this app. One
 // chain, fixed order, stereo in place; the same code runs in the AudioWorklet
 // (after the voices) and in the file render, so what is heard is what is
 // written. Every effect that is off costs nothing.
 
-import type { FxBeats, FxSettings } from "../instrument/types";
+import { PATTERN_STEPS, type FxBeats, type FxSettings } from "../instrument/types";
 
 const TAU = 2 * Math.PI;
 const dbToGain = (db: number) => 10 ** (db / 20);
@@ -116,11 +117,34 @@ const CHORUS_MAX_MS = 40;
 const REVERB_LOOP_SEC = 1375 / 44100;
 /** The longest an effect tail is waited for (a delay fed back near the top). */
 const MAX_TAIL_SEC = 20;
+/** What the stutter keeps of the input (seconds): a slice of half a beat at 30 BPM. */
+const STUTTER_SEC = 1.2;
+/** The stutter's crossfade at each repeat's ends and in and out of a run (seconds), against clicks. */
+const STUTTER_FADE_SEC = 0.002;
 
 export class FxChain {
   private readonly sampleRate: number;
   private fx: FxSettings | null = null;
   private bpm = 120;
+  /**
+   * Where the song is, in beats (the gate and the stutter follow its bars). The player sets it every block; on
+   * its own (the keyboard, nothing playing) it runs on from where it was.
+   */
+  private beat = 0;
+
+  // stutter
+  private stutterBuf: [Float32Array, Float32Array] | null = null;
+  private stutterWrite = 0;
+  /** The run under way: where its slice starts in the buffer, and how far into it the output is (samples); -1: none. */
+  private stutterFrom = -1;
+  private stutterPos = 0;
+  /** Whether a run is under way (on its marked steps). */
+  private stutterRunning = false;
+  /** 0 = the input as it is … 1 = the repeats (moved smoothly). */
+  private stutterMix = 0;
+
+  // gate
+  private gateLevel = 1;
 
   // transient shaper
   /** Peak-hold level (instant attack): the waveform's envelope, smooth enough to compare. */
@@ -217,7 +241,7 @@ export class FxChain {
   get active(): boolean {
     const fx = this.fx;
     if (!fx) return false;
-    return fx.transient.on || fx.compressor.on || fx.eq.on || fx.saturation.on || fx.air.on || fx.filter.on || fx.crush.on || fx.chorus.on || fx.delay.on || fx.reverb.on || fx.width.on || fx.pan.on || fx.limiter.on;
+    return fx.stutter.on || fx.gate.on || fx.transient.on || fx.compressor.on || fx.eq.on || fx.saturation.on || fx.air.on || fx.filter.on || fx.crush.on || fx.chorus.on || fx.delay.on || fx.reverb.on || fx.width.on || fx.pan.on || fx.limiter.on;
   }
 
   /**
@@ -284,6 +308,11 @@ export class FxChain {
     if (Number.isFinite(bpm) && bpm > 0) this.bpm = bpm;
   }
 
+  /** Where the song is (beats) at the start of the next block: the gate and the stutter keep to its bars. */
+  setBeat(beat: number): void {
+    if (Number.isFinite(beat)) this.beat = beat;
+  }
+
   set(fx: FxSettings): void {
     const was = this.fx;
     this.fx = fx;
@@ -328,6 +357,12 @@ export class FxChain {
     this.panPhase = 0;
     this.clearEchoes();
     this.resetLimiter();
+    this.beat = 0;
+    if (this.stutterBuf) for (const b of this.stutterBuf) b.fill(0);
+    this.stutterFrom = -1;
+    this.stutterRunning = false;
+    this.stutterMix = 0;
+    this.gateLevel = 1;
   }
 
   private resetLimiter(): void {
@@ -380,10 +415,52 @@ export class FxChain {
     const ceiling = dbToGain(fx.limiter.ceilingDb);
     const limRelease = Math.exp(-1 / Math.max(1, (fx.limiter.releaseMs / 1000) * sr));
     const limAttack = Math.exp(-1 / Math.max(1, this.limLookahead / 3));
+    // The song's beats, sample by sample (the gate and the stutter).
+    const beatStep = this.bpm / 60 / sr;
+    let beat = this.beat;
+    const stutter = fx.stutter;
+    if (stutter.on && !this.stutterBuf) this.stutterBuf = [new Float32Array(Math.ceil(STUTTER_SEC * sr)), new Float32Array(Math.ceil(STUTTER_SEC * sr))];
+    const stutBuf = this.stutterBuf;
+    const stutLen = stutBuf ? stutBuf[0].length : 1;
+    const slice = Math.max(16, Math.min(stutLen - 2, Math.round(((stutter.sliceBeats * 60) / this.bpm) * sr)));
+    const stutFade = Math.max(1, Math.round(STUTTER_FADE_SEC * sr));
+    const stutMixStep = 1 / stutFade;
+    const stutKeep = 1 - stutter.fade;
+    const gate = fx.gate;
+    const gateCoef = Math.exp(-1 / Math.max(1, (gate.smoothMs / 1000) * sr));
 
     for (let i = 0; i < frames; i++) {
       let l = left[i];
       let r = mono ? l : right[i];
+
+      if (stutter.on && stutBuf) {
+        // The input is always kept; on a marked step the output turns to the slice that began the run, over and over.
+        const w = this.stutterWrite;
+        stutBuf[0][w] = l;
+        stutBuf[1][w] = r;
+        this.stutterWrite = (w + 1) % stutLen;
+        const step = Math.floor(beat / stutter.stepBeats + 1e-9);
+        const marked = stutter.steps[((step % PATTERN_STEPS) + PATTERN_STEPS) % PATTERN_STEPS];
+        // A run starts on a marked step (its slice is what comes in from now on: the first repeat is heard as it is
+        // written) and goes on over the marked steps that follow; after it, the repeats fade out into the input.
+        if (marked && !this.stutterRunning) {
+          this.stutterRunning = true;
+          this.stutterFrom = w;
+          this.stutterPos = 0;
+        } else if (!marked) this.stutterRunning = false;
+        this.stutterMix += Math.max(-stutMixStep, Math.min(stutMixStep, (this.stutterRunning ? 1 : 0) - this.stutterMix));
+        if (this.stutterMix > 0 && this.stutterFrom >= 0) {
+          const pos = this.stutterPos++;
+          const inSlice = pos % slice;
+          const repeat = Math.floor(pos / slice);
+          const at = (this.stutterFrom + inSlice) % stutLen;
+          // Each repeat after the first faded in and out at its ends, and quieter by `fade` than the one before.
+          const g = (repeat === 0 ? 1 : Math.min(1, (inSlice + 1) / stutFade, (slice - inSlice) / stutFade)) * stutKeep ** repeat;
+          const m = this.stutterMix;
+          l = l * (1 - m) + stutBuf[0][at] * g * m;
+          r = r * (1 - m) + stutBuf[1][at] * g * m;
+        } else if (!this.stutterRunning) this.stutterFrom = -1;
+      }
 
       if (fx.transient.on) {
         const level = Math.max(Math.abs(l), Math.abs(r));
@@ -511,6 +588,16 @@ export class FxChain {
         r = r * (1 - m * 0.5) + wetR * 0.5 * m;
       }
 
+      if (gate.on) {
+        // The pattern step under this sample: open (1) or down by the depth, the edges smoothed.
+        const step = Math.floor(beat / gate.stepBeats + 1e-9);
+        const open = gate.steps[((step % PATTERN_STEPS) + PATTERN_STEPS) % PATTERN_STEPS];
+        const target = open ? 1 : 1 - gate.depth;
+        this.gateLevel = target + (this.gateLevel - target) * gateCoef;
+        l *= this.gateLevel;
+        r *= this.gateLevel;
+      }
+
       if (fx.delay.on && delayBuf) {
         const d = fx.delay;
         const w = this.delayWrite;
@@ -617,7 +704,9 @@ export class FxChain {
 
       left[i] = mono ? (l + r) / 2 : l;
       if (!mono) right[i] = r;
+      beat += beatStep;
     }
+    this.beat = beat;
   }
 }
 

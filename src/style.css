@@ -1651,3 +1651,27 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
 .meter.vertical.tall {
   width: 14px;
 }
+
+/* Gate / stutter patterns: 16 steps, a beat's four marked off by a gap. */
+.step-pattern .steps-row {
+  display: flex;
+  gap: 3px;
+  margin: 4px 0;
+}
+.step-toggle {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  cursor: pointer;
+}
+.step-toggle.beat:not(:first-child) {
+  margin-left: 6px;
+}
+.step-toggle.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}

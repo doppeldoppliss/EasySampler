@@ -150,11 +150,23 @@ export interface InstrumentParams {
 /** LFO speeds, in beats per cycle (counted in the export BPM, or the song's while 曲で試す plays). */
 export type FxBeats = 0.25 | 0.5 | 1 | 2 | 4 | 8;
 
+/** A pattern step (gate, stutter), in beats: ¼ = a sixteenth note, ½ = an eighth. */
+export type StepBeats = 0.25 | 0.5;
+/** A stutter's slice, in beats: 1/16 = a sixty-fourth note … ½ = an eighth. */
+export type SliceBeats = 0.0625 | 0.125 | 0.25 | 0.5;
+/** Steps in a gate or stutter pattern. */
+export const PATTERN_STEPS = 16;
+
 /** Delay times, in beats (½ = an eighth note, 0.75 = a dotted eighth). */
 export type DelayBeats = 0.25 | 0.5 | 0.75 | 1 | 1.5 | 2;
 
 /** The effects, always in this order: shape → dynamics → tone → colour → movement → echoes and room → space → level. */
 export interface FxSettings {
+  /**
+   * Stutter: on the pattern's marked steps (16, each `stepBeats` long, on the song's beats) the slice of sound
+   * at the start of the run plays over and over (`sliceBeats` long), each time `fade` quieter (0 = no fade).
+   */
+  stutter: { on: boolean; steps: boolean[]; stepBeats: StepBeats; sliceBeats: SliceBeats; fade: number };
   /** Transient shaper: dB on the attack and on what follows it. */
   transient: { on: boolean; attackDb: number; sustainDb: number };
   /** Compressor: above the threshold the level rises by 1/ratio; attack / release (ms); make-up gain. */
@@ -173,6 +185,11 @@ export interface FxSettings {
   chorus: { on: boolean; rateHz: number; depthMs: number; mix: number };
   /** Mid/side: side level (1 = as is, 0 = mono, 2 = twice as wide) and mid level. */
   width: { on: boolean; side: number; midDb: number };
+  /**
+   * Gate (トランスゲート): the sound cut to a pattern on the song's beats (16 steps, each `stepBeats` long); the
+   * off steps go down by `depth` (1 = silent), each edge smoothed over `smoothMs`.
+   */
+  gate: { on: boolean; steps: boolean[]; stepBeats: StepBeats; depth: number; smoothMs: number };
   /** Auto-pan: depth 0–1. */
   pan: { on: boolean; depth: number; beats: FxBeats };
   /** Delay: time in beats, feedback 0–0.9, the repeats darkened above highCutHz, ping-pong between the sides, dry/wet. */
@@ -184,6 +201,8 @@ export interface FxSettings {
 }
 
 export const DEFAULT_FX: FxSettings = {
+  // (A fill at the end of the bar: the last four sixteenths stutter in thirty-seconds.)
+  stutter: { on: false, steps: Array.from({ length: PATTERN_STEPS }, (_, i) => i >= 12), stepBeats: 0.25, sliceBeats: 0.125, fade: 0 },
   transient: { on: false, attackDb: 0, sustainDb: 0 },
   compressor: { on: false, thresholdDb: -18, ratio: 4, attackMs: 10, releaseMs: 120, makeupDb: 4 },
   eq: { on: false, lowCutHz: 0, lowDb: 0, lowHz: 150, midDb: 0, midHz: 1500, midQ: 1, highDb: 0, highHz: 6000, highCutHz: 20000 },
@@ -193,6 +212,8 @@ export const DEFAULT_FX: FxSettings = {
   crush: { on: false, bits: 8, downsample: 4, mix: 1 },
   chorus: { on: false, rateHz: 0.8, depthMs: 4, mix: 0.4 },
   width: { on: false, side: 1.4, midDb: 0 },
+  // (Sixteenths, on and off in turn.)
+  gate: { on: false, steps: Array.from({ length: PATTERN_STEPS }, (_, i) => i % 2 === 0), stepBeats: 0.25, depth: 1, smoothMs: 4 },
   pan: { on: false, depth: 0.6, beats: 1 },
   delay: { on: false, beats: 0.5, feedback: 0.35, highCutHz: 6000, pingPong: true, mix: 0.25 },
   reverb: { on: false, size: 0.6, damping: 0.5, preDelayMs: 20, mix: 0.25 },

@@ -202,3 +202,57 @@ it("waits long enough for the reverb: every size has rung down to -60 dB within 
     }
   });
 });
+
+describe("FxChain: gate and stutter (on the song's beats)", () => {
+  // At 120 BPM a beat is 0.5 s, a sixteenth (a step of ¼ beat) 0.125 s = 6000 samples.
+  const STEP = 6000;
+
+  it("gate: the open steps pass, the closed ones go silent, smoothed at the edges", () => {
+    const x = new Float32Array(STEP * 4).fill(0.5);
+    const [l] = run(fx((f) => (f.gate = { ...f.gate, on: true, depth: 1, smoothMs: 2 })), x);
+    // The default pattern: open, closed, open, closed.
+    expect(rms(l, STEP * 0.5, STEP)).toBeCloseTo(0.5, 2);
+    expect(rms(l, STEP * 1.5, STEP * 2)).toBeLessThan(0.001);
+    expect(rms(l, STEP * 2.5, STEP * 3)).toBeCloseTo(0.5, 2);
+    // Half depth: the closed steps at half the level.
+    const [h] = run(fx((f) => (f.gate = { ...f.gate, on: true, depth: 0.5, smoothMs: 2 })), x);
+    expect(rms(h, STEP * 1.5, STEP * 2)).toBeCloseTo(0.25, 2);
+  });
+
+  it("gate: follows where the song is (setBeat), not where the chain began", () => {
+    const chain = new FxChain(SR);
+    chain.set(fx((f) => (f.gate = { ...f.gate, on: true, depth: 1, smoothMs: 1 })));
+    chain.setTempo(120);
+    // Starting on the second sixteenth (a closed step).
+    chain.setBeat(0.25);
+    const l = new Float32Array(1024).fill(0.5);
+    chain.process(l, l.slice(), 1024);
+    expect(rms(l, 512, 1024)).toBeLessThan(0.001);
+  });
+
+  it("stutter: on its steps, the slice at the start of the run repeats; elsewhere the input passes", () => {
+    // A ramp, so every sample says where it came from.
+    const x = Float32Array.from({ length: STEP * 4 }, (_, i) => (i % 100000) / 100000);
+    const [l] = run(
+      fx((f) => (f.stutter = { ...f.stutter, on: true, steps: Array.from({ length: 16 }, (_, i) => i === 1), sliceBeats: 0.0625, fade: 0 })),
+      x,
+    );
+    const slice = STEP / 4; // 1/16 beat = 1500 samples
+    // Step 0: the input as it is.
+    expect(l[100]).toBeCloseTo(x[100], 5);
+    // Step 1 (from 6000): the first slice live, then the same 1500 samples again (away from the crossfades).
+    expect(l[STEP + 500]).toBeCloseTo(x[STEP + 500], 4);
+    expect(l[STEP + slice + 500]).toBeCloseTo(x[STEP + 500], 4);
+    expect(l[STEP + 3 * slice + 500]).toBeCloseTo(x[STEP + 500], 4);
+    // Step 2: the input again.
+    expect(l[2 * STEP + 1000]).toBeCloseTo(x[2 * STEP + 1000], 4);
+  });
+
+  it("stutter: each repeat quieter by the fade", () => {
+    const x = new Float32Array(STEP * 3).fill(0.5);
+    const [l] = run(fx((f) => (f.stutter = { ...f.stutter, on: true, steps: Array.from({ length: 16 }, (_, i) => i === 1), sliceBeats: 0.0625, fade: 0.5 })), x);
+    const slice = STEP / 4;
+    expect(l[STEP + slice + 700]).toBeCloseTo(0.25, 3);
+    expect(l[STEP + 2 * slice + 700]).toBeCloseTo(0.125, 3);
+  });
+});

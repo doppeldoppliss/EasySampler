@@ -119,6 +119,8 @@ const REVERB_LOOP_SEC = 1375 / 44100;
 const MAX_TAIL_SEC = 20;
 /** What the stutter keeps of the input (seconds): a slice of half a beat at 30 BPM. */
 const STUTTER_SEC = 1.2;
+/** How long the beat-led ducking takes to go down (seconds). */
+const DUCK_ATTACK_SEC = 0.008;
 /** The stutter's crossfade at each repeat's ends and in and out of a run (seconds), against clicks. */
 const STUTTER_FADE_SEC = 0.002;
 
@@ -700,7 +702,9 @@ export class FxChain {
         let amount: number;
         if (duckByBeat) {
           const since = (((beat % duck.beats) + duck.beats) % duck.beats) * secPerBeat;
-          amount = Math.min(1, since / 0.003) * Math.max(0, 1 - since / duckReleaseSec) ** 2;
+          // (In over 8 ms on an S-curve: a deep dip taken straight in 3 ms clicked.)
+          const into = Math.min(1, since / DUCK_ATTACK_SEC);
+          amount = into * into * (3 - 2 * into) * Math.max(0, 1 - since / duckReleaseSec) ** 2;
         } else {
           const over = duckKey !== null && duckKey[i] >= duckThr ? 1 : 0;
           this.duckEnv = over > this.duckEnv ? duckAtt * this.duckEnv + (1 - duckAtt) * over : duckRel * this.duckEnv + (1 - duckRel) * over;

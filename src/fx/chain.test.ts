@@ -262,10 +262,10 @@ describe("FxChain: sidechain (ducking)", () => {
     const x = new Float32Array(SR).fill(0.5);
     const [l] = run(fx((f) => (f.duck = { ...f.duck, on: true, source: "beat", beats: 1, depthDb: -12, releaseMs: 250 })), x);
     const db = (v: number) => 20 * Math.log10(v / 0.5);
-    // Just after the beat (5 ms): nearly the full -12 dB; past the release (300 ms): back to the level; the next beat (500 ms): down again.
-    expect(db(l[Math.round(0.005 * SR)])).toBeLessThan(-10);
+    // Just after the beat (10 ms, the 8 ms dip done): nearly the full -12 dB; past the release (300 ms): back to the level; the next beat (500 ms): down again.
+    expect(db(l[Math.round(0.01 * SR)])).toBeLessThan(-10);
     expect(db(l[Math.round(0.3 * SR)])).toBeGreaterThan(-0.1);
-    expect(db(l[Math.round(0.505 * SR)])).toBeLessThan(-10);
+    expect(db(l[Math.round(0.51 * SR)])).toBeLessThan(-10);
   });
 
   it("from a key: down while the key is loud, back up after it stops", () => {

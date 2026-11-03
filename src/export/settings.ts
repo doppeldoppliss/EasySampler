@@ -232,7 +232,7 @@ export function sanitizeFx(raw: unknown): FxSettings {
       releaseMs: clamp(num(du.releaseMs, d.duck.releaseMs), 20, 1000),
       thresholdDb: clamp(num(du.thresholdDb, d.duck.thresholdDb), -60, 0),
     },
-    gate: { on: on(g), steps: steps(g.steps, d.gate.steps), stepBeats: stepBeats(g.stepBeats, d.gate.stepBeats), depth: clamp(num(g.depth, d.gate.depth), 0, 1), smoothMs: clamp(num(g.smoothMs, d.gate.smoothMs), 0.5, 50) },
+    gate: { on: on(g), steps: steps(g.steps, d.gate.steps), stepBeats: stepBeats(g.stepBeats, d.gate.stepBeats), depth: clamp(num(g.depth, d.gate.depth), 0, 1), smoothMs: clamp(num(g.smoothMs, d.gate.smoothMs), 2, 50) },
     transient: { on: on(t), attackDb: clamp(num(t.attackDb, d.transient.attackDb), -24, 24), sustainDb: clamp(num(t.sustainDb, d.transient.sustainDb), -24, 24) },
     compressor: {
       on: on(co),

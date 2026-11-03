@@ -1288,7 +1288,7 @@ const fxPanel = el("details", { className: "panel fx-panel" }, [
     ]),
     fxSelect("1 マスの長さ", [["0.25", "1/16 音符(1 小節 = 16 マス)"], ["0.5", "1/8 音符(2 小節 = 16 マス)"]], () => String(fxNow().gate.stepBeats) as "0.25", (f, v) => (f.gate.stepBeats = Number(v) as FxSettings["gate"]["stepBeats"])),
     fxRange("下げる量", 0, 1, 0.01, () => fxNow().gate.depth, (f, v) => (f.gate.depth = v), (v) => (v >= 1 ? "無音" : pct(v))),
-    fxRange("切り替えのなめらかさ", 0.5, 50, 0.5, () => fxNow().gate.smoothMs, (f, v) => (f.gate.smoothMs = v), (v) => `${v.toFixed(1)} ms`),
+    fxRange("切り替えのなめらかさ", 2, 50, 0.5, () => fxNow().gate.smoothMs, (f, v) => (f.gate.smoothMs = v), (v) => `${v.toFixed(1)} ms`),
   ]),
   fxHead("やまびこと響き"),
   fxGroup("delay", "ディレイ(やまびこ)", "拍に合わせて音を繰り返します。ピンポンにすると左右に跳ね返ります。", [

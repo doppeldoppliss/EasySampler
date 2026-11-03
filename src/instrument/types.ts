@@ -285,9 +285,14 @@ export function withMakeMode(p: InstrumentParams, mode: MakeMode): InstrumentPar
   const from = makeModeOf(p);
   if (from === mode) return p;
   const transposeOnly = mode === "transpose" || mode === "holdTranspose";
-  if (isHeld(mode)) return { ...p, sustainEnabled: true, sustainMode: isHeld(from) ? p.sustainMode : p.heldSustainMode, transposeOnly };
+  // 移調 leaves the pitch shaping out (its starting point has 平坦化 at 0%, and it is not shown there): going on to a
+  // 作り方 that shapes, a 0% would leave the cut unflattened without anyone seeing why — it comes back at 100%.
+  const fromTranspose = from === "transpose" || from === "holdTranspose";
+  const flatten = !transposeOnly && fromTranspose && p.flatten === 0 ? 1 : p.flatten;
+  if (isHeld(mode)) return { ...p, flatten, sustainEnabled: true, sustainMode: isHeld(from) ? p.sustainMode : p.heldSustainMode, transposeOnly };
   return {
     ...p,
+    flatten,
     sustainEnabled: isHeld(from) ? true : p.sustainEnabled,
     sustainMode: "none",
     heldSustainMode: p.sustainMode === "none" ? p.heldSustainMode : p.sustainMode,

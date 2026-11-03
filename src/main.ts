@@ -864,10 +864,20 @@ volumeShape.addEventListener("toggle", () => refreshFadeGrips());
 function refreshFadeGrips(): void {
   editor.setFadeGrips(volumeShape.open || params.amp.attack >= 0.02 || params.amp.fadeOut > 0);
 }
+// 伸ばす with little flattening: the held note wanders with the recording — said, with a way to 100%.
+const flattenWarn = el("p", { className: "warn fine" }, [
+  el("span"),
+  button("平坦化を 100% にする", "small", () => {
+    update((p) => (p.flatten = 1));
+    refreshControls();
+  }),
+]);
 /** The 作り方 → which settings are shown, and what the chosen ones do. */
 function refreshMakeMode(): void {
   const mode = makeModeOf(params);
   const hold = isHeld(mode);
+  flattenWarn.hidden = !(mode === "hold" && params.flatten < 0.5 && params.pitchMode !== "resample");
+  flattenWarn.firstElementChild!.textContent = `平坦化が ${Math.round(params.flatten * 100)}% なので、伸ばした音は録音の抑揚のまま揺れます(シンセ化されません)。 `;
   driftFixRow.hidden = mode !== "holdTranspose";
   sustainOnlyRow.hidden = mode !== "hold";
   for (const e of holdOnly) e.hidden = !hold;
@@ -953,6 +963,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
   pitchModeNote,
   shaping(pitchGroup([
     range("平坦化(100% で完全に平ら、0% で元の抑揚)", 0, 1, 0.01, () => params.flatten, (p, v) => (p.flatten = v), pct),
+    flattenWarn,
     range("音程を寄せる速さ(リチューン)", 0, 0.3, 0.005, () => params.tune.retuneSec, (p, v) => (p.tune.retuneSec = v), (v) => (v === 0 ? "即座" : ms(v))),
     el("p", { className: "fine help", textContent: "音程は、判定した 1 音(を鳴らす高さへ移したもの)に寄せます。これはその寄せる速さ(Auto-Tune の Retune Speed)。即座だとぴたりと、30 ms 前後だと自然に、長いとゆっくりした狂いだけが直ります。" }),
   ])),
@@ -994,10 +1005,13 @@ const pinToggle = button("", "small", () => {
   safeStorage(PIN_KEY, keysPinned ? "on" : "off");
   showPinned();
 });
+/** The view on screen has no keyboard (ミックス): nothing is pinned then. Set by setView. */
+let keysAway = false;
 function showPinned(): void {
   pinToggle.textContent = `画面下に固定: ${keysPinned ? "オン" : "オフ"}`;
   keysPanel.classList.toggle("pinned", keysPinned);
-  document.body.classList.toggle("keys-pinned", keysPinned);
+  // (The ミックス view has no keyboard: nothing pinned over its strips and the export.)
+  document.body.classList.toggle("keys-pinned", keysPinned && !keysAway);
 }
 /** The keyboard's title and note: what the keys play in the view on screen. */
 const keysTitle = el("span", { className: "control-label", textContent: "試し弾き" });
@@ -2347,6 +2361,8 @@ function setView(next: View): void {
   rollPanel.setVisible(next === "song");
   // (The song plays on in the other views — a material can be shaped against it; a recording stops: the keys belong to the view.)
   if (next !== "song" && rollPanel.isRecording) rollPanel.pause();
+  keysAway = next === "mix";
+  showPinned();
   refreshSongStops();
   // (A material preview does not follow into the other views.)
   if (next !== "material") client.stopPreview();

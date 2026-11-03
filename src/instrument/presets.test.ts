@@ -99,3 +99,15 @@ describe("音の消え方", () => {
     expect(decayChoiceOf(withDecayChoice(mine, "none"))).toBe("none");
   });
 });
+
+describe("作り方: 移調 → 伸ばす brings the flattening back", () => {
+  it("a short material started as 移調 (平坦化 0%) is flattened once it is made to hold; a 0% chosen in 伸ばす stays", () => {
+    const short = PRESETS.find((p) => p.id === "short")!.apply({ ...DEFAULT_PARAMS });
+    expect([makeModeOf(short), short.flatten]).toEqual(["transpose", 0]);
+    expect(withMakeMode(short, "hold").flatten).toBe(1);
+    expect(withMakeMode(short, "oneshot").flatten).toBe(1);
+    // Already shaping: what was chosen stays.
+    const mine = { ...DEFAULT_PARAMS, flatten: 0 };
+    expect(withMakeMode(withMakeMode(mine, "oneshot"), "hold").flatten).toBe(0);
+  });
+});

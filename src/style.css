@@ -1394,8 +1394,9 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
 .workspace[data-view="mix"] > .fx-panel {
   order: 2;
 }
+/* (No keyboard in the ミックス view: its strips and the export would sit under it.) */
 .workspace[data-view="mix"] > .keys-panel {
-  order: 3;
+  display: none;
 }
 .bar-input {
   width: 4.5em;

@@ -1,8 +1,9 @@
-// Several projects in the browser (design.md 13): an index of them and which
-// one is open. Each project's song is kept under project:<id>; its materials'
-// samples and settings under audio:<materialId> / settings:<materialId> (a
-// material belongs to one project: a copy of a project copies its materials
-// under new ids, so removing one never takes another's sound with it).
+// Several projects (songs) in the browser (design.md 13): an index of them and
+// which one is open. Each project's song is kept under project:<id>. The
+// materials it plays are in the shared library (library.ts, design.md 19) and
+// stay there when a song is copied or removed; what a song owns — its drum
+// kit's recordings and its long recordings (原曲・伴奏), under audio:<id> — is
+// copied with it under new ids and removed with it.
 // Switching projects is done by saving, choosing, and reloading the page.
 
 import { forget, keep, kept } from "./store";
@@ -87,10 +88,10 @@ export async function chooseProject(id: string): Promise<void> {
   await saveIndex();
 }
 
-/** The recordings a stored project owns: its materials, and its drum kit's sounds. */
-function materialIds(data: unknown): string[] {
+/** The recordings a stored project owns: its long recordings (原曲・伴奏), and its drum kit's sounds (not the library's materials). */
+function ownedIds(data: unknown): string[] {
   const d = data as { materials?: unknown; kit?: { slots?: unknown } } | undefined;
-  const materials = Array.isArray(d?.materials) ? d.materials.map((m) => (m as { id?: unknown })?.id) : [];
+  const materials = Array.isArray(d?.materials) ? d.materials.filter((m) => (m as { long?: unknown })?.long === true).map((m) => (m as { id?: unknown })?.id) : [];
   const kit = Array.isArray(d?.kit?.slots) ? d.kit.slots.map((s) => (s as { sample?: unknown })?.sample) : [];
   return [...new Set([...materials, ...kit].filter((id): id is string => typeof id === "string"))];
 }
@@ -121,27 +122,22 @@ export function remapMaterials(data: unknown, map: ReadonlyMap<string, string>):
 
 export const newMaterialId = () => `m${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 
-/** A copy of a project, its materials copied under new ids. */
+/** A copy of a project: what it owns copied under new ids, the library's materials shared. */
 export async function duplicateProject(id: string, name: string): Promise<ProjectEntry | null> {
   const data = await kept(projectKey(id));
   if (data === undefined) return null;
-  const map = new Map(materialIds(data).map((m) => [m, newMaterialId()]));
+  const map = new Map(ownedIds(data).map((m) => [m, newMaterialId()]));
   for (const [from, to] of map) {
     const audio = await kept(`audio:${from}`);
     if (audio !== undefined) await keep(`audio:${to}`, audio);
-    const settings = await kept(`settings:${from}`);
-    if (settings !== undefined) await keep(`settings:${to}`, settings);
   }
   return createProject(name, remapMaterials(data, map));
 }
 
-/** Removes a project and its materials. Removing the open one opens the most recent other (or a new one): the caller reloads. */
+/** Removes a project and what it owns (the library's materials stay). Removing the open one opens the most recent other (or a new one): the caller reloads. */
 export async function removeProject(id: string): Promise<void> {
   const data = await kept(projectKey(id));
-  for (const m of materialIds(data)) {
-    await forget(`audio:${m}`);
-    await forget(`settings:${m}`);
-  }
+  for (const m of ownedIds(data)) await forget(`audio:${m}`);
   await forget(projectKey(id));
   entries = entries.filter((e) => e.id !== id);
   if (currentId === id) {

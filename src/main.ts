@@ -14,13 +14,14 @@ import { EngineClient } from "./audio/engineClient";
 import { askToPersist, forget, keep, kept, onSaveState, storageEstimate, whenSaved, type SaveState } from "./audio/store";
 import { chooseProject, createProject, currentProject, duplicateProject, newMaterialId, openProjects, projectKey, projectList, remapMaterials, removeProject, renameProject, touchProject } from "./audio/projects";
 import { buildProjectFile, parseProjectFile, PROJECT_FILE_EXTENSION } from "./audio/projectFile";
+import { addToLibrary, builtinPiano, copyInLibrary, findSame, inLibrary, libraryList, openLibrary, removeFromLibrary, songsUsing } from "./audio/library";
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, resample, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
 import type { PitchTrack } from "./analysis/pyin";
 import { buildBatch, buildOne, type Built, type BuildInput } from "./export/build";
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
 import { exportFileName, safeBaseName, stripExtension } from "./export/render";
-import { newCutId, parseSettings, serializeSettings, settingsKey, type CutSettings, type SettingsFile } from "./export/settings";
+import { newCutId, parseSettings, serializeSettings, type CutSettings, type SettingsFile } from "./export/settings";
 import { hiddenPartsOf, normalizeRemoved, outputLayout, playedParts } from "./instrument/layout";
 import { clampMarkers, suggestMarkersWithin } from "./instrument/markers";
 import {
@@ -304,6 +305,8 @@ function safeStorage(key: string, value?: string | null): string | null {
 const fileInput = el("input", { type: "file", accept: "audio/*,video/*,.json,application/json,.mid,.midi,.easysampler", multiple: true, className: "visually-hidden", id: "file" });
 const openButton = el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" });
 const pianoButton = button("＋ 内蔵ピアノ", "", () => void addPiano());
+const libraryButton = button("＋ ライブラリから", "", () => void openLibraryPanel());
+libraryButton.title = "ほかの曲で作った素材(サンプリング済音源の設定つき)をこの曲に加えます";
 const status = el("p", { className: "status", role: "status" });
 
 // The listening volume (this browser only; the files are written as they are), kept for the next visit.
@@ -384,7 +387,12 @@ function refreshCutUsage(): void {
 }
 const materialSelect = el("select", { ariaLabel: "編集する素材", className: "material-select" });
 materialSelect.addEventListener("change", () => switchMaterial(materialSelect.value));
-const removeMaterialButton = button("この素材を外す", "small", () => material && removeMaterial(material.id));
+const removeMaterialButton = button("この素材を曲から外す", "small", () => material && removeMaterial(material.id));
+// A library material shared with other songs: which ones, and 「この曲用に分ける」 to make it this song's own.
+const sharedNote = el("span", { className: "fine shared-note" });
+const splitButton = button("この曲用に分ける", "small", () => void splitMaterial());
+splitButton.title = "この素材をコピーして、この曲だけのものにします。ほかの曲は元の素材のまま変わらなくなります(ページを読み込み直します)";
+splitButton.hidden = true;
 const cutBar = el("div", { className: "cut-bar" }, [
   el("span", { className: "control-label", textContent: "サンプリング済音源" }),
   cutSelect,
@@ -601,7 +609,7 @@ editor.onViewChange = (view) => {
 };
 
 const materialPanel = el("section", { className: "panel" }, [
-  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, removeMaterialButton]),
+  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, removeMaterialButton, splitButton, sharedNote]),
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [
@@ -1582,7 +1590,14 @@ async function saveProjectFile(): Promise<void> {
   status.textContent = `「${fileName}」に保存しました(${size})。`;
 }
 
-/** A project file becomes a new project in the browser (its materials under new ids), and opens. */
+/** Whether a library material's samples are exactly these. */
+async function sameAudio(id: string, channels: readonly Float32Array[]): Promise<boolean> {
+  const audio = (await kept(`audio:${id}`)) as StoredAudio | undefined;
+  if (!audio || audio.channels.length !== channels.length) return false;
+  return audio.channels.every((c, i) => c.length === channels[i].length && c.every((v, k) => v === channels[i][k]));
+}
+
+/** A project file becomes a new project in the browser (its materials joining the library), and opens. */
 async function openProjectFile(file: File): Promise<void> {
   let data;
   try {
@@ -1592,11 +1607,28 @@ async function openProjectFile(file: File): Promise<void> {
     return;
   }
   status.textContent = `「${data.name}」を読み込んでいます…`;
-  const map = new Map(data.materials.map((m) => [m.id, newMaterialId()]));
+  // The song's materials go to the library (the same recording already there is used, asked first if its settings differ);
+  // its long recordings and the kit's sounds are the new song's own.
+  const listed = ((data.project as { materials?: { id?: unknown; long?: unknown }[] } | null)?.materials ?? []).filter((m) => typeof m?.id === "string");
+  const shared = new Set(listed.filter((m) => m.long !== true).map((m) => m.id as string));
+  const map = new Map<string, string>();
   for (const m of data.materials) {
-    const id = map.get(m.id)!;
+    const frames = m.channels[0]?.length ?? 0;
+    if (shared.has(m.id)) {
+      const same = findSame(m.name, frames, m.sampleRate);
+      if (same && (await sameAudio(same.id, m.channels))) {
+        const theirs = await kept(`settings:${same.id}`);
+        if (theirs === m.settings || confirm(`素材ライブラリにある「${m.name}」と同じ音声ですが、サンプリング済音源などの設定が違います。ライブラリのものを使いますか?\n「キャンセル」で、ファイルの設定のまま別の素材として加えます。`)) {
+          map.set(m.id, same.id);
+          continue;
+        }
+      }
+    }
+    const id = newMaterialId();
+    map.set(m.id, id);
     await keep(`audio:${id}`, { name: m.name, sampleRate: m.sampleRate, channels: m.channels });
     if (m.settings) await keep(`settings:${id}`, m.settings);
+    if (shared.has(m.id)) await addToLibrary({ id, name: m.name, sampleRate: m.sampleRate, frames });
   }
   const names = new Set(projectList().map((p) => p.name));
   let name = data.name;
@@ -1633,7 +1665,7 @@ async function openProjectPanel(): Promise<void> {
       if (made) void openProjectPanel();
     });
     const remove = button("削除", "small", async () => {
-      if (!confirm(`「${p.name}」を削除しますか?素材の音声と打ち込みも消え、元に戻せません。${isOpen ? "(開いているプロジェクトです。削除後はほかのプロジェクトを開きます)" : ""}`)) return;
+      if (!confirm(`「${p.name}」を削除しますか?打ち込み・ドラムキットの音・原曲や伴奏の録音も消え、元に戻せません(素材は素材ライブラリに残ります)。${isOpen ? "(開いているプロジェクトです。削除後はほかのプロジェクトを開きます)" : ""}`)) return;
       if (isOpen) {
         await flushAll();
         await removeProject(p.id);
@@ -2167,7 +2199,7 @@ const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs
 setView(view);
 
 document.getElementById("app")!.append(
-  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, projectButton, saveState, rePickButton, openButton, pianoButton])]),
+  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, projectButton, saveState, rePickButton, openButton, pianoButton, libraryButton])]),
   fileInput,
   projectDialog,
   status,
@@ -2814,7 +2846,6 @@ let saveTimer = 0;
 function saveNow(): void {
   if (!material) return;
   const json = serializeSettings(settingsBody());
-  safeStorage(settingsKey(material.name, material.channels[0].length, material.sampleRate), json);
   void keep(`settings:${material.id}`, json);
   recordHistory(json);
 }
@@ -3188,19 +3219,24 @@ function switchMaterial(id: string): void {
   saveNow();
 }
 
-/** Takes a material out of the project (its samples and settings are forgotten). */
+/** Takes a material out of the song (it stays in the library, its samples and settings with it). */
 function removeMaterial(id: string): void {
   const entry = library.get(id);
   if (!entry) return;
   const used = rollPanel.usesMaterial(id);
-  if (!confirm(`「${entry.material.name}」をプロジェクトから外しますか?${used ? "この素材を鳴らしているトラックは無音になります。" : ""}`)) return;
+  if (!confirm(`「${entry.material.name}」をこの曲から外しますか?素材ライブラリには残り、「＋ ライブラリから」で戻せます。${used ? "この素材を鳴らしているトラックは無音になります。" : ""}`)) return;
+  dropMaterial(id);
+}
+
+/** removeMaterial without asking. */
+function dropMaterial(id: string): void {
+  const entry = library.get(id);
+  if (!entry) return;
   const settings = material?.id === id ? settingsBody() : entry.settings;
   for (const cut of settings?.cuts ?? []) client.dropInstrument(instrumentId(id, cut.id));
   client.setSource(null, id);
   library.delete(id);
   rollPanel.removeMaterial(id);
-  void forget(`audio:${id}`);
-  void forget(`settings:${id}`);
   if (material?.id === id) {
     material = null;
     const next = [...library.keys()].at(-1);
@@ -3238,7 +3274,8 @@ function refreshMaterialSelect(): void {
   if (material) materialSelect.value = material.id;
   // The last material stays: the page always has something to play (add another first, then take this one out).
   removeMaterialButton.disabled = library.size < 2;
-  removeMaterialButton.title = library.size < 2 ? "素材が 1 つだけのときは外せません。別の素材(＋ 素材を追加・＋ 内蔵ピアノ)を加えてから外してください" : "";
+  refreshSharing();
+  removeMaterialButton.title = library.size < 2 ? "素材が 1 つだけのときは外せません。別の素材(素材を開く・＋ 内蔵ピアノ・＋ ライブラリから)を加えてから外してください" : "";
 }
 
 /**
@@ -3247,12 +3284,13 @@ function refreshMaterialSelect(): void {
  */
 async function load(name: string, channels: Float32Array[], sampleRate: number, kept?: { id: string; settings: SettingsFile | null }): Promise<void> {
   if (!kept) {
-    let total = channels[0].length / sampleRate;
-    for (const { material: m } of library.values()) total += m.channels[0].length / m.sampleRate;
-    if (total > PROJECT_AUDIO_LIMIT_SEC) {
-      status.textContent = `「${name}」を追加すると素材の合計が ${Math.round(total)} 秒になり、iPhone / iPad で扱える ${PROJECT_AUDIO_LIMIT_SEC} 秒を超えます。使っていない素材を「この素材を外す」で外してください。`;
+    // The same recording already in the library: it can come in as it is (its サンプリング済音源 with it).
+    const same = findSame(name, channels[0].length, sampleRate);
+    if (same && confirm(`素材ライブラリに同じ素材「${name}」があります(ほかの曲で作ったサンプリング済音源つき)。それを使いますか?\n「キャンセル」で、別の素材として新しく加えます。`)) {
+      await addFromLibrary(same.id);
       return;
     }
+    if (overLimit(name, channels[0].length / sampleRate)) return;
   }
   status.textContent = `「${name}」を解析しています…`;
   stashMaterial();
@@ -3265,8 +3303,10 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
     library.set(id, { material, settings: null });
     if (!kept) {
       void keep(`audio:${id}`, { name, sampleRate, channels });
+      // (The first built-in piano is the one every song shares.)
+      void addToLibrary({ id, name, sampleRate, frames: channels[0].length, ...(name === PIANO_NAME && !builtinPiano() ? { builtin: "piano" as const } : {}) });
       askToPersist();
-    }
+    } else if (!inLibrary(id)) void addToLibrary({ id, name, sampleRate, frames: channels[0].length });
     rollPanel.addMaterial({ id, name });
     showPitchRange();
     selection = null;
@@ -3284,8 +3324,8 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
     let text =
       `「${name}」 ${seconds} 秒 — 解析 ${Math.round(elapsedMs)} ms。` +
       (root ? ` 音程 ${pitchLabel(root.midi)}(信頼度 ${Math.round(root.confidence * 100)}%)。` : " 音程が見つからなかったので、1 回鳴らしきる音として扱います。ドラムに使うなら、波形で範囲を選んで「ドラムキットへ」送ってください。");
-    // Its settings: as kept in the project, or (a file opened again) as last saved for that file.
-    const stored = kept ? (kept.settings ? serializeSettings(kept.settings) : null) : safeStorage(settingsKey(name, channels[0].length, sampleRate));
+    // Its settings, as kept in the library.
+    const stored = kept?.settings ? serializeSettings(kept.settings) : null;
     let restored = false;
     if (stored) {
       try {
@@ -3300,8 +3340,7 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
       applyCurrentCut();
     }
     const shortNote = !restored && makeModeOf(params) === "transpose" && params.pitchMode !== "resample" ? " 伸ばせる部分が短いので、作り方を「移調」(子音・息も音程に合わせる)にしました。伸ばして使うなら作り方を「伸ばす」に。" : "";
-    status.replaceChildren(text + (restored ? " 前回の設定を復元しました。" : "") + shortNote);
-    if (restored && !kept) status.append(" ", button("最初から", "small", () => resetSettingsButton.click()));
+    status.replaceChildren(text + shortNote);
     defineMaterialCuts();
     refreshMaterialSelect();
     saveNow();
@@ -3316,6 +3355,9 @@ async function loadPiano(): Promise<void> {
   pickerClip = null;
   rePickButton.hidden = true;
   pickerPanel.hidden = true;
+  // The library's built-in piano, as it was last set up (shared by every song); a new one only the first time.
+  const shared = builtinPiano();
+  if (shared && (await addFromLibrary(shared.id))) return;
   nextPresetHint = "decay";
   await load(PIANO_NAME, [synthPiano({ sampleRate: DEMO_RATE })], DEMO_RATE);
   nextPresetHint = "";
@@ -3333,6 +3375,129 @@ async function addPiano(): Promise<void> {
   await loadPiano();
   refreshInstruments();
   if (material?.name === PIANO_NAME) status.textContent = `「${PIANO_NAME}」を素材に加えました。トラックで鳴らすには、トラック一覧の音源の欄で選ぶか、「＋ トラックを追加」で新しいトラックを作ってください。`;
+}
+
+/** Whether adding `seconds` of material would go past what an iPhone / iPad can hold (and says so). */
+function overLimit(name: string, seconds: number): boolean {
+  let total = seconds;
+  for (const { material: m } of library.values()) total += m.channels[0].length / m.sampleRate;
+  if (total <= PROJECT_AUDIO_LIMIT_SEC) return false;
+  status.textContent = `「${name}」を追加すると素材の合計が ${Math.round(total)} 秒になり、iPhone / iPad で扱える ${PROJECT_AUDIO_LIMIT_SEC} 秒を超えます。使っていない素材を「この素材を曲から外す」で外してください。`;
+  return true;
+}
+
+type StoredAudio = { name: string; sampleRate: number; channels: Float32Array[] };
+
+/** A library material into the song, with its settings (shown; if the song has it already, it is just shown). */
+async function addFromLibrary(id: string): Promise<boolean> {
+  if (library.has(id)) {
+    if (material?.id !== id) switchMaterial(id);
+    refreshMaterialSelect();
+    setView("material");
+    return true;
+  }
+  const audio = (await kept(`audio:${id}`)) as StoredAudio | undefined;
+  if (!audio?.channels?.length) {
+    status.textContent = "この素材の音声が見つかりませんでした。";
+    return false;
+  }
+  if (overLimit(audio.name, audio.channels[0].length / audio.sampleRate)) return false;
+  const stored = await kept(`settings:${id}`);
+  let settings: SettingsFile | null = null;
+  try {
+    settings = typeof stored === "string" ? parseSettings(stored) : null;
+  } catch {
+    settings = null;
+  }
+  await load(audio.name, audio.channels, audio.sampleRate, { id, settings });
+  refreshInstruments();
+  setView("material");
+  return true;
+}
+
+/** 「この曲用に分ける」: the material copied in the library under a new name, this song switched over to the copy. */
+async function splitMaterial(): Promise<void> {
+  if (!material) return;
+  const from = material;
+  const song = currentProject().name;
+  if (!confirm(`「${from.name}」をコピーして、この曲(${song})だけの素材にしますか?ほかの曲は元の素材のまま、ここでの変更が届かなくなります。ページを読み込み直します。`)) return;
+  await flushAll();
+  const id = newMaterialId();
+  const name = `${from.name}(${song})`;
+  if (!(await copyInLibrary(from.id, id, name))) {
+    status.textContent = "分けられませんでした(素材の保存が見つかりません)。";
+    return;
+  }
+  rollPanel.replaceMaterial(from.id, { id, name });
+  await flushAll();
+  location.reload();
+}
+
+/** Which other songs share the material being edited (asked of the store; the newest answer wins). */
+let sharingAsk = 0;
+function refreshSharing(): void {
+  const id = material?.id;
+  const ask = ++sharingAsk;
+  if (!id) {
+    sharedNote.textContent = "";
+    splitButton.hidden = true;
+    return;
+  }
+  const open = currentProject();
+  void songsUsing(id, { id: open.id, materials: rollPanel.materials }).then((songs) => {
+    if (ask !== sharingAsk) return;
+    const others = songs.filter((p) => p.id !== open.id);
+    sharedNote.textContent = others.length ? `ほかの曲でも使用: ${others.map((p) => p.name).join("、")}(ここでの変更はそちらの音にも届きます)` : "";
+    splitButton.hidden = !others.length;
+  });
+}
+
+const libraryDialog = el("dialog", { className: "project-dialog" });
+libraryDialog.addEventListener("click", (e) => {
+  if (e.target === libraryDialog) libraryDialog.close();
+});
+
+/** The material library: every material with the songs that use it; into this song, or removed for good. */
+async function openLibraryPanel(): Promise<void> {
+  const open = { id: currentProject().id, materials: rollPanel.materials };
+  const rows = await Promise.all(
+    libraryList().map(async (entry) => {
+      const songs = await songsUsing(entry.id, open);
+      const here = library.has(entry.id);
+      const add = button(here ? "この曲で使用中" : "この曲に加える", `small${here ? "" : " primary"}`, async () => {
+        libraryDialog.close();
+        await addFromLibrary(entry.id);
+      });
+      add.disabled = here;
+      const remove = button("削除", "small", async () => {
+        const where = songs.length ? `\n使っている曲: ${songs.map((p) => p.name).join("、")}。これらの曲でこの素材を鳴らしているトラックは無音になります。` : "";
+        if (!confirm(`「${entry.name}」を素材ライブラリから削除しますか?音声とサンプリング済音源の設定が消え、元に戻せません。${where}`)) return;
+        if (here) {
+          if (library.size < 2) {
+            alert("この曲の素材がこれだけなので削除できません。別の素材を加えてから削除してください。");
+            return;
+          }
+          dropMaterial(entry.id);
+          await flushAll();
+        }
+        await removeFromLibrary(entry.id);
+        void openLibraryPanel();
+      });
+      const used = songs.length ? `使用: ${songs.map((p) => p.name).join("、")}` : "どの曲でも使っていません";
+      return el("div", { className: `project-row${here ? " open" : ""}` }, [
+        el("span", { className: "project-name", textContent: entry.builtin ? `${entry.name}(新しい曲はこれで始まります)` : entry.name }),
+        el("span", { className: "fine", textContent: `${(entry.frames / entry.sampleRate).toFixed(1)} 秒・${used}` }),
+        el("span", { className: "row tight" }, [add, remove]),
+      ]);
+    }),
+  );
+  libraryDialog.replaceChildren(
+    el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "素材ライブラリ" }), el("span", { className: "spacer" }), button("閉じる", "small", () => libraryDialog.close())]),
+    el("p", { className: "fine", textContent: "素材とそのサンプリング済音源の設定は、すべての曲で共有です。ある曲で直すと、その素材を使うほかの曲の音も変わります。曲ごとに変えたいときは、素材の欄の「この曲用に分ける」でコピーしてください。曲から外しても、ここには残ります。" }),
+    el("div", { className: "project-list" }, rows.length ? rows : [el("p", { className: "fine", textContent: "まだ素材がありません。" })]),
+  );
+  if (!libraryDialog.isConnected) document.body.append(libraryDialog);
+  if (!libraryDialog.open) libraryDialog.showModal();
 }
 
 async function openFile(file: File): Promise<void> {
@@ -3492,6 +3657,7 @@ refreshExport();
 // The project comes back: its tracks, then its materials (the one being edited last, so it is the one shown).
 void (async () => {
   const opened = await openProjects();
+  await openLibrary(PIANO_NAME);
   rollPanel.useStore(projectKey(opened.id));
   rollPanel.onSaved = touchProject;
   refreshProjectButton();
@@ -3518,6 +3684,7 @@ void (async () => {
     }
     if (m.id === project.editing || m === order.at(-1)) await load(audio.name, audio.channels, audio.sampleRate, { id: m.id, settings });
     else await loadInBackground(m.id, audio.name, audio.channels, audio.sampleRate, settings);
+    if (!inLibrary(m.id)) void addToLibrary({ id: m.id, name: audio.name, sampleRate: audio.sampleRate, frames: audio.channels[0].length });
   }
   // The material to show had no audio left (a save cut short): show another one of the project.
   if (!material && library.size > 0) {

@@ -96,11 +96,6 @@ function sanitizeRange(raw: unknown): { low: number; high: number } | undefined 
   return high > low ? { low, high } : undefined;
 }
 
-/** The storage key for a material: its name and length (the same file opened again finds its settings). */
-export function settingsKey(name: string, frames: number, sampleRate: number): string {
-  return `maddaw.settings.v1:${name}:${frames}:${sampleRate}`;
-}
-
 function sanitizeCut(raw: unknown, index: number): CutSettings | null {
   if (!isRecord(raw) || !isRecord(raw.markers)) return null;
   const m = raw.markers;

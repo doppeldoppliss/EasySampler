@@ -587,6 +587,18 @@ export class RollPanel {
     this.scheduleSave();
   }
 
+  /** Another material in a material's place (「この曲用に分ける」): the list, the one edited, and every track and clip that played it. */
+  replaceMaterial(from: string, to: ProjectMaterial): void {
+    this.project.materials = this.project.materials.map((m) => (m.id === from ? { ...m, ...to } : m));
+    if (this.project.editing === from) this.project.editing = to.id;
+    for (const t of this.project.tracks) {
+      if (t.instrument?.startsWith(`${from}/`)) t.instrument = `${to.id}/${t.instrument.slice(from.length + 1)}`;
+      else if (t.kind === "audio" && t.instrument === from) t.instrument = to.id;
+      for (const n of t.notes) if (n.clip?.material === from) n.clip = { ...n.clip, material: to.id };
+    }
+    this.scheduleSave();
+  }
+
   /** Whether a track plays a cut of this material, or has a clip of it. */
   usesMaterial(id: string): boolean {
     return this.project.tracks.some((t) => t.instrument?.startsWith(`${id}/`) || t.notes.some((n) => n.clip?.material === id));

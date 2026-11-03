@@ -35,7 +35,8 @@ export interface LevelIn {
  * first audio track (原曲・伴奏), else the lead, else the loudest. Several tracks of one part share its level
  * (four accompaniments, each 6 dB under one).
  */
-export function balanceGains(tracks: readonly LevelIn[], maxGain: number): { gains: (number | null)[]; reference: number; loweredDb: number } {
+export function balanceGains(tracks: readonly LevelIn[], maxGain: number, extraDb: Partial<Record<Role, number>> = {}): { gains: (number | null)[]; reference: number; loweredDb: number } {
+  const levelOf = (role: Role) => LEVEL_FROM_LEAD[role] + (extraDb[role] ?? 0);
   const measured = tracks.map((t, i) => ({ ...t, i })).filter((t): t is LevelIn & { i: number; lufs: number } => t.lufs !== null && Number.isFinite(t.lufs));
   if (!measured.length) return { gains: tracks.map(() => null), reference: -1, loweredDb: 0 };
   const leads = measured.filter((t) => t.role === "lead");
@@ -51,11 +52,11 @@ export function balanceGains(tracks: readonly LevelIn[], maxGain: number): { gai
   const meanWeight = new Map([...groups].map(([role, g]) => [role, g.reduce((a, t) => a + (t.weight ?? 1), 0) / g.length]));
   const tilt = (t: LevelIn) => 10 * Math.log10((t.weight ?? 1) / (meanWeight.get(t.role) ?? 1));
   // The lead's level, from the reference's (which is where its part says it is).
-  const lead = ref.lufs - LEVEL_FROM_LEAD[ref.role] + share(ref.role) - tilt(ref);
+  const lead = ref.lufs - levelOf(ref.role) + share(ref.role) - tilt(ref);
   const wanted = tracks.map(() => null as number | null);
   for (const t of measured) {
     if (t === ref) continue;
-    const want = lead + LEVEL_FROM_LEAD[t.role] - share(t.role) + tilt(t);
+    const want = lead + levelOf(t.role) - share(t.role) + tilt(t);
     wanted[t.i] = t.gain * 10 ** ((want - t.lufs) / 20);
   }
   // A track that would need more than the fader gives: everything (the reference too) comes down by the

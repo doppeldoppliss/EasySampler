@@ -3526,6 +3526,7 @@ async function autoLevels(): Promise<void> {
       // (A bass on the 簡易シンセ is the floor of the lows: it takes twice a voice bass's share.)
       project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain, notes: t.notes, weight: roles[i] === "bass" && t.instrument === BACKING ? 2 : 1 })),
       MAX_TRACK_GAIN,
+      { bass: project.bassLevelDb },
     );
     rollPanel.applyGains(gains, reference, loweredDb);
   } finally {

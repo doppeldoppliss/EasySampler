@@ -186,4 +186,16 @@ describe("自動ミックス", () => {
     const sum = 10 * Math.log10(lufs.reduce((a, l) => a + 10 ** (l / 10), 0));
     expect(sum).toBeCloseTo(-14, 1);
   });
+
+  it("ベースの強さ: +3 puts the bass 3 dB over the lead", () => {
+    const { gains } = balanceGains(
+      [
+        { role: "lead", lufs: -14, gain: 1 },
+        { role: "bass", lufs: -20, gain: 1 },
+      ],
+      4,
+      { bass: 3 },
+    );
+    expect(20 * Math.log10(gains[1]!)).toBeCloseTo(9, 5);
+  });
 });

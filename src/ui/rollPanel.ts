@@ -436,6 +436,12 @@ export class RollPanel {
     el("span", { className: "warn fine", textContent: "低音(30〜80 Hz)が目安よりかなり足りません。EQ では補えないので、ベースの音符をシンセベースで重ねるのが効果的です。" }),
     button("シンセベースを重ねる", "small", () => this.layerSynthBass(), "ベースのトラックを複製して、簡易シンセの「シンセベース」で鳴らすトラックを足します(元に戻すで戻せます)"),
   ]);
+  /** ベースの強さ: what 音量を合わせる aims the bass at (kept with the project). */
+  private readonly bassLevelSelect = el("select", { ariaLabel: "ベースの強さ", title: "「音量を合わせる」がベースをどのくらいの大きさにするか。標準はメロディと同じ聞こえの大きさ。ノート PC やスマホのスピーカーでは低音が聞こえにくいので、強めが合うこともあります" }, [
+    el("option", { value: "0", textContent: "ベース: 標準" }),
+    el("option", { value: "3", textContent: "ベース: 強め(+3 dB)" }),
+    el("option", { value: "6", textContent: "ベース: かなり強め(+6 dB)" }),
+  ]);
   /** ミックスを診断する: its table (empty until run). */
   private readonly diagnosis = el("div", { className: "diagnosis" });
   private readonly balanceCanvas = el("canvas", { className: "balance-chart", ariaLabel: "目安との差(変える前と後)" });
@@ -615,6 +621,7 @@ export class RollPanel {
       this.diagnosis,
       el("div", { className: "row tight mix-tools" }, [
         el("span", { className: "fine", textContent: "役割から自動で:" }),
+        this.bassLevelSelect,
         button("音量を合わせる", "small", () => this.onAutoLevels(), "トラックを 1 本ずつ書き出して聞こえの大きさ(LUFS)を測り、役割ごとの目安(原曲・伴奏かメロディを基準に、ベース ±0・ドラム −1・和音 −5・伴奏 −6・ハモリ −8 dB。同じ役割が複数なら分け合う)に音量を合わせます"),
         button("トラックの EQ", "small", () => this.onAutoEq(), "メロディ・和音・伴奏・ハモリのトラックに、低い音符の少し下からのローカットと、メロディとぶつかる帯を 2〜3 dB 削る EQ を入れます(EQ を自分で入れたトラックはそのまま)"),
         button("キックに合わせて沈める", "small", () => this.autoDuck(), "ベース(−3 dB、16 分音符で戻る)と、1 拍以上伸ばす音が中心の和音・伴奏・ハモリ(−2 dB)に、ドラムトラックのキック(35・36 番)で沈むサイドチェーンを入れます(サイドチェーンを自分で入れたトラックはそのまま)"),
@@ -690,6 +697,12 @@ export class RollPanel {
     this.grabLoopEnd(this.loopEndGrip, "end");
     // (One message line for the song, seen in whichever of its two views is on screen.)
     new MutationObserver(() => (this.mixInfo.textContent = this.info.textContent)).observe(this.info, { childList: true, characterData: true, subtree: true });
+    this.bassLevelSelect.addEventListener("change", () => {
+      this.project.bassLevelDb = Number(this.bassLevelSelect.value) || 0;
+      this.scheduleSave();
+      this.commit();
+      this.info.textContent = "ベースの強さを変えました。「音量を合わせる」(または「まとめて自動ミックス」)を押すと反映されます。";
+    });
     this.applyProject();
   }
 
@@ -1652,20 +1665,16 @@ export class RollPanel {
       return;
     }
     const roles = this.roles();
-    let releaseMs = 0;
     const { fxs, done, kept, removed } = this.autoEffect(
       "duck",
       (t, i) => kickDuck(roles[i], this.project.bpm, t.fx.duck, medianLength(t.notes)),
-      (t, d) => {
-        releaseMs = d.releaseMs;
-        return `「${t.name}」${d.depthDb} dB`;
-      },
+      (t, d) => `「${t.name}」${d.depthDb} dB・${d.releaseMs} ms で戻る`,
     );
     const notes = `${removed ? `前に自動で入れたサイドチェーンを ${removed} 本から外しました。` : ""}${kept ? `サイドチェーンを自分で入れていた ${kept} 本はそのままです。` : ""}`;
     this.applyTrackFx(
       fxs,
       done.length
-        ? `キックで沈むサイドチェーンを入れました: ${done.join("、")}(戻るまで ${releaseMs} ms)。${notes}「元に戻す」で戻せます。`
+        ? `キックで沈むサイドチェーンを入れました: ${done.join("、")}。${notes}「元に戻す」で戻せます。`
         : `沈めるトラック(ベースと、音を伸ばす和音・伴奏・ハモリ)がありませんでした。${notes}`,
     );
   }
@@ -3041,6 +3050,7 @@ export class RollPanel {
     this.arrangeLabel.textContent = `範囲(${range}、目盛りをドラッグで選ぶ):`;
     this.loopButton.textContent = `ループ: ${loop.on ? `オン(${range})` : "オフ"}`;
     this.loopButton.classList.toggle("on", loop.on);
+    this.bassLevelSelect.value = String(this.project.bassLevelDb);
     this.drawSeekLoop();
     // (Bars shown as numbers: a range off the bar lines shows its fraction.)
     const bars = (beats: number) => String(+(beats / this.project.beatsPerBar).toFixed(2));

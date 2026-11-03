@@ -366,12 +366,20 @@ export class RollPanel {
   private readonly seekWrap = el("div", { className: "seek-wrap" }, [this.loopBand, this.loopStartGrip, this.loopEndGrip, this.seekBar, this.seekActivity]);
   /** Each track row's lamp: lit while that track sounds (a note under the playhead, the track heard). */
   private trackLamps: HTMLElement[] = [];
-  /** Each track's meter, by track id: its bar, and the level it shows (dB, falling back slowly). */
-  private readonly trackMeters = new Map<string, { fill: HTMLElement; db: number }>();
+  /** Each track's meters (its 曲 row's and its ミックス strip's), by track id, and the level they show (dB, falling back slowly). */
+  private readonly trackMeters = new Map<string, { fills: HTMLElement[]; db: number }>();
+  /** A track's mix controls in both places (the 曲 row, the ミックス strip), by track id: a change in one shows in the other. */
+  private readonly mixLinks = new Map<string, { mutes: HTMLElement[]; solos: HTMLElement[]; volumes: HTMLInputElement[]; texts: HTMLElement[]; pans: HTMLInputElement[] }>();
   // The master meter (in the bar that follows the scroll): the output's level, its loudness, and a clip mark.
-  private readonly masterFill = el("span", { className: "meter-fill" });
-  private readonly masterText = el("span", { className: "fine num master-meter-text" });
-  private readonly clipMark = el("button", { type: "button", className: "clip-mark", textContent: "0 dB 超え", title: "どこかで 0 dB を超えました(書き出すと音割れします)。押すと消えます" });
+  // (Twice over: the bar that follows the scroll, and the ミックス view's master strip.)
+  private readonly masterFills = [0, 1].map(() => el("span", { className: "meter-fill" }));
+  private readonly masterTexts = [0, 1].map(() => el("span", { className: "fine num master-meter-text" }));
+  private readonly clipMarks = [0, 1].map(() => el("button", { type: "button", className: "clip-mark", textContent: "0 dB 超え", title: "どこかで 0 dB を超えました(書き出すと音割れします)。押すと消えます" }));
+  /** The ミックス view: a strip per track and the master's (placed by the page), with the song's export under them. */
+  readonly mixElement: HTMLElement;
+  private readonly mixStrips = el("div", { className: "mix-strips" });
+  /** The master strip's FX button: the page opens the master's effects. */
+  onOpenMasterFx: () => void = () => {};
   private masterDb = -Infinity;
   /** The loudest the output has been lately (dB), held a while so it can be read. */
   private masterHold = { db: -Infinity, at: 0 };
@@ -453,7 +461,7 @@ export class RollPanel {
       this.commit();
     });
 
-    this.transport = el("div", { className: "sticky-transport song-transport axis-song" }, [
+    this.transport = el("div", { className: "sticky-transport song-transport axis-play" }, [
       el("div", { className: "row roll-transport" }, [
         this.playButton,
         this.recordButton,
@@ -462,9 +470,9 @@ export class RollPanel {
         this.position,
         el("span", { className: "master-meter", title: "マスター(曲全体)の音の大きさ。バーと「ピーク」は瞬間の最大、「LUFS」は直近 3 秒の聞こえの大きさ(配信サイトが揃える基準と同じ物差し)" }, [
           el("span", { className: "fine", textContent: "マスター" }),
-          el("span", { className: "meter" }, [this.masterFill]),
-          this.masterText,
-          this.clipMark,
+          el("span", { className: "meter" }, [this.masterFills[0]]),
+          this.masterTexts[0],
+          this.clipMarks[0],
         ]),
       ]),
       el("div", { className: "row song-seek-row" }, [this.seekWrap]),
@@ -515,6 +523,14 @@ export class RollPanel {
       }),
       el("div", { className: "row" }, [this.clearButton]),
       this.info,
+    ]);
+    this.mixElement = el("section", { className: "panel mix-panel" }, [
+      el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "ミックス" })]),
+      el("details", { className: "fine hint" }, [
+        el("summary", { textContent: "バランスの取り方(目安)" }),
+        el("p", { textContent: "1. 基準を 1 本決める(原曲・伴奏か主旋律)。そのメーターが -10 dB 前後になるよう合わせ、以後は動かさない。 2. ほかのトラックを基準より小さく足していく。マスターのピークは -6〜-3 dB に収め、「0 dB 超え」を出さない。 3. 主役・ベース・キックは中央、伴奏・ハモリ・シンバル・効果音は左右へ(パン)。 4. 中域(声の帯域)が混むときはトラックのエフェクトの EQ で少し削る。奥へ下げたい音は高域を削るかリバーブ。 5. マスターのエフェクトは控えめに(ローカット、軽いコンプ程度)。投稿先の音量合わせは書き出しの「音量」で。" }),
+      ]),
+      this.mixStrips,
       el("div", { className: "row song-export" }, [
         el("span", { className: "control-label", textContent: "曲の書き出し" }),
         button("曲を WAV で", "small primary", () => this.onExport("wav"), "全トラックをミックスし、マスターのエフェクトをかけた 1 本の WAV"),
@@ -545,8 +561,10 @@ export class RollPanel {
     // (The strip is drawn in pixels: again when the bar changes width.)
     if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => this.drawSeekActivity()).observe(this.seekActivity);
     this.grabLoopEnd(this.loopStartGrip, "start");
-    this.clipMark.hidden = true;
-    this.clipMark.addEventListener("click", () => (this.clipMark.hidden = true));
+    for (const mark of this.clipMarks) {
+      mark.hidden = true;
+      mark.addEventListener("click", () => this.clipMarks.forEach((m) => (m.hidden = true)));
+    }
     try {
       const kept = localStorage.getItem(LOUDNESS_KEY);
       if (kept && [...this.loudnessSelect.options].some((o) => o.value === kept)) this.loudnessSelect.value = kept;
@@ -1174,6 +1192,7 @@ export class RollPanel {
     this.selected = index;
     this.showTrackInRoll();
     [...this.trackList.children].forEach((row, i) => row.classList.toggle("selected", i === index));
+    [...this.mixStrips.children].forEach((strip, i) => strip.classList.toggle("selected", i === index));
     this.renderPads();
     this.showRoot();
     this.refreshButtons();
@@ -1256,10 +1275,84 @@ export class RollPanel {
   /** Volume, pan, mute, solo of a track: heard at once, kept. */
   private mix(t: Track, change: (t: Track) => void): void {
     change(t);
+    this.syncMix(t);
     this.client.setTrackMix(t.id, this.mixOf(t));
     this.scheduleSave();
     this.commitSoon();
     this.refreshUndo();
+  }
+
+  /**
+   * A track's mute, solo, volume (dB, with its meter) and pan, for one place — its 曲 row, or (vertical) its ミックス
+   * strip — linked with the other place's (syncMix).
+   */
+  private mixControlsFor(t: Track, vertical = false) {
+    const mute = button("M", `small toggle${t.mute ? " on" : ""}`, () => this.mix(t, (x) => (x.mute = !x.mute)), "ミュート");
+    const solo = button("S", `small toggle${t.solo ? " on" : ""}`, () => this.mix(t, (x) => (x.solo = !x.solo)), "ソロ");
+    // The volume in dB (0 dB = as it is, up to +6, the bottom = silent).
+    const volume = el("input", { type: "range", min: String(FADER_FLOOR_DB), max: "6", step: "0.1", value: String(gainToDb(t.gain)), ariaLabel: `${t.name}の音量(dB)`, className: vertical ? "vertical-fader" : "" });
+    volume.addEventListener("input", () => this.mix(t, (x) => (x.gain = dbToGain(Number(volume.value)))));
+    volume.addEventListener("dblclick", () => this.mix(t, (x) => (x.gain = 1)));
+    const volumeText = el("span", { className: "fine num fader-db", textContent: dbText(gainToDb(t.gain)) });
+    const meterFill = el("span", { className: "meter-fill" });
+    const pan = el("input", { type: "range", min: "-1", max: "1", step: "0.05", value: String(t.pan), ariaLabel: `${t.name}のパン` });
+    pan.addEventListener("input", () => this.mix(t, (x) => (x.pan = Number(pan.value))));
+    pan.addEventListener("dblclick", () => this.mix(t, (x) => (x.pan = 0)));
+    const meter = this.trackMeters.get(t.id) ?? { fills: [], db: -Infinity };
+    meter.fills.push(meterFill);
+    this.trackMeters.set(t.id, meter);
+    const links = this.mixLinks.get(t.id) ?? { mutes: [], solos: [], volumes: [], texts: [], pans: [] };
+    links.mutes.push(mute);
+    links.solos.push(solo);
+    links.volumes.push(volume);
+    links.texts.push(volumeText);
+    links.pans.push(pan);
+    this.mixLinks.set(t.id, links);
+    return { mute, solo, volume, volumeText, meterFill, pan };
+  }
+
+  /** A track's mix as it now is, in every place it is shown (the one being dragged is left alone). */
+  private syncMix(t: Track): void {
+    const links = this.mixLinks.get(t.id);
+    if (!links) return;
+    for (const b of links.mutes) b.classList.toggle("on", t.mute);
+    for (const b of links.solos) b.classList.toggle("on", t.solo);
+    const db = gainToDb(t.gain);
+    for (const v of links.volumes) if (document.activeElement !== v || Math.abs(Number(v.value) - db) > 0.05) v.value = String(db);
+    for (const x of links.texts) x.textContent = dbText(db);
+    for (const p of links.pans) if (document.activeElement !== p || Math.abs(Number(p.value) - t.pan) > 0.01) p.value = String(t.pan);
+  }
+
+  /** The ミックス view's strips: per track its name, mute / solo, pan, fader with meter, dB and effects; then the master's. */
+  private renderMix(): void {
+    const strips = this.project.tracks.map((t, i) => {
+      const c = this.mixControlsFor(t, true);
+      const fxOn = Object.values(t.fx).some((g) => (g as { on?: boolean }).on);
+      const fx = button("FX", `small toggle${fxOn ? " on" : ""}`, () => {
+        this.selectTrack(i);
+        this.onOpenFx();
+      }, fxOn ? "このトラックにエフェクトがかかっています(押すとエフェクトを開きます)" : "このトラックのエフェクトを開きます");
+      const strip = el("div", { className: `mix-strip${i === this.selected ? " selected" : ""}` }, [
+        el("span", { className: "mix-name", textContent: t.name, title: t.name }),
+        el("span", { className: "row tight mix-ms" }, [c.mute, c.solo]),
+        el("label", { className: "mix-pan fine" }, ["パン", c.pan]),
+        el("span", { className: "mix-fader" }, [c.volume, el("span", { className: "meter vertical" }, [c.meterFill])]),
+        c.volumeText,
+        fx,
+      ]);
+      strip.addEventListener("pointerdown", (e) => {
+        if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement)) this.selectTrack(i);
+      });
+      return strip;
+    });
+    const master = el("div", { className: "mix-strip master" }, [
+      el("span", { className: "mix-name", textContent: "マスター" }),
+      el("span", { className: "mix-fader" }, [el("span", { className: "meter vertical tall" }, [this.masterFills[1]])]),
+      this.masterTexts[1],
+      this.clipMarks[1],
+      button("FX", "small", () => this.onOpenMasterFx(), "マスター(曲全体)のエフェクトを開きます"),
+    ]);
+    this.mixStrips.replaceChildren(...strips, master);
   }
 
   /** The folded panel's line: how big the song is, and whether it plays. */
@@ -1277,9 +1370,10 @@ export class RollPanel {
 
   private renderTracks(): void {
     this.summarize();
-    // (The lamps and meters come back with the rows below.)
+    // (The lamps, meters and linked mix controls come back with the rows and strips below.)
     this.trackLamps = [];
     this.trackMeters.clear();
+    this.mixLinks.clear();
     this.drawSeekActivity();
     this.refreshTrackOps();
     this.renderLongList();
@@ -1319,36 +1413,7 @@ export class RollPanel {
           this.renderTracks();
         });
       }
-      const mute = button("M", `small toggle${t.mute ? " on" : ""}`, () => {
-        this.mix(t, (x) => (x.mute = !x.mute));
-        mute.classList.toggle("on", t.mute);
-      }, "ミュート");
-      const solo = button("S", `small toggle${t.solo ? " on" : ""}`, () => {
-        this.mix(t, (x) => (x.solo = !x.solo));
-        solo.classList.toggle("on", t.solo);
-      }, "ソロ");
-      // The volume in dB (0 dB = as it is, up to +6, the bottom = silent), with the track's meter under it.
-      const volume = el("input", { type: "range", min: String(FADER_FLOOR_DB), max: "6", step: "0.1", value: String(gainToDb(t.gain)), ariaLabel: "音量(dB)" });
-      const volumeText = el("span", { className: "fine num fader-db" });
-      const showVolume = () => (volumeText.textContent = dbText(gainToDb(t.gain)));
-      showVolume();
-      volume.addEventListener("input", () => {
-        this.mix(t, (x) => (x.gain = dbToGain(Number(volume.value))));
-        showVolume();
-      });
-      volume.addEventListener("dblclick", () => {
-        volume.value = "0";
-        this.mix(t, (x) => (x.gain = 1));
-        showVolume();
-      });
-      const meterFill = el("span", { className: "meter-fill" });
-      this.trackMeters.set(t.id, { fill: meterFill, db: -Infinity });
-      const pan = el("input", { type: "range", min: "-1", max: "1", step: "0.05", value: String(t.pan), ariaLabel: "パン" });
-      pan.addEventListener("input", () => this.mix(t, (x) => (x.pan = Number(pan.value))));
-      pan.addEventListener("dblclick", () => {
-        pan.value = "0";
-        this.mix(t, (x) => (x.pan = 0));
-      });
+      const { mute, solo, volume, volumeText, meterFill, pan } = this.mixControlsFor(t);
       const remove = button("×", "small", () => this.removeTrack(i), "このトラックを消す");
       // A melodic track with no cut plays nothing: it says so. Effects on: an FX mark that opens them.
       const silent =
@@ -1397,6 +1462,7 @@ export class RollPanel {
       return row;
     });
     this.trackList.replaceChildren(...rows);
+    this.renderMix();
     this.renderPads();
   }
 
@@ -2136,10 +2202,12 @@ export class RollPanel {
   showMeters(m: { tracks: [string, number][]; peakL: number; peakR: number; shortTerm: number }): void {
     const fall = 1.3;
     const toDb = (p: number) => (p > 1e-6 ? 20 * Math.log10(p) : -Infinity);
-    const bar = (fill: HTMLElement, db: number) => {
-      // (−48 dB at the left to 0 dB at the right; red past 0.)
-      fill.style.width = `${Math.max(0, Math.min(1, (db + 48) / 48)) * 100}%`;
-      fill.classList.toggle("over", db > 0);
+    const bar = (fills: HTMLElement[], db: number) => {
+      // (−48 dB at the bottom / left to 0 dB at the top / right; red past 0. The CSS takes the level as a width or a height.)
+      for (const fill of fills) {
+        fill.style.setProperty("--level", String(Math.max(0, Math.min(1, (db + 48) / 48))));
+        fill.classList.toggle("over", db > 0);
+      }
     };
     const seen = new Set<string>();
     for (const [id, peak] of m.tracks) {
@@ -2147,21 +2215,21 @@ export class RollPanel {
       if (!meter) continue;
       seen.add(id);
       meter.db = Math.max(toDb(peak), meter.db - fall);
-      bar(meter.fill, meter.db);
+      bar(meter.fills, meter.db);
     }
     for (const [id, meter] of this.trackMeters) {
       if (seen.has(id)) continue;
       meter.db -= fall;
-      bar(meter.fill, meter.db);
+      bar(meter.fills, meter.db);
     }
     const peakDb = toDb(Math.max(m.peakL, m.peakR));
     this.masterDb = Math.max(peakDb, this.masterDb - fall);
-    bar(this.masterFill, this.masterDb);
+    bar(this.masterFills, this.masterDb);
     const now = performance.now();
     if (peakDb >= this.masterHold.db || now - this.masterHold.at > 2000) this.masterHold = { db: peakDb, at: now };
-    if (peakDb > 0) this.clipMark.hidden = false;
+    if (peakDb > 0) for (const mark of this.clipMarks) mark.hidden = false;
     const lufs = Number.isFinite(m.shortTerm) && m.shortTerm > -70 ? `${m.shortTerm.toFixed(1)} LUFS` : "— LUFS";
-    this.masterText.textContent = `ピーク ${Number.isFinite(this.masterHold.db) ? this.masterHold.db.toFixed(1) : "−∞"} dB・${lufs}`;
+    for (const text of this.masterTexts) text.textContent = `ピーク ${Number.isFinite(this.masterHold.db) ? this.masterHold.db.toFixed(1) : "−∞"} dB・${lufs}`;
   }
 
   /** The seek bar's thumb is this wide: its track runs from half of it in to half of it short of the end. */

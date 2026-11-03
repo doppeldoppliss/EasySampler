@@ -1212,8 +1212,12 @@ body.keys-pinned {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workspace[data-view="song"] > .axis-material,
-.workspace[data-view="material"] > .axis-song {
+/* Each view shows its own panels: 素材 (axis-material), ドラムキット (axis-kit), 曲 (axis-song), ミックス (axis-mix);
+   the song's play bar (axis-play) in 曲 and ミックス. */
+.workspace[data-view="material"] > :is(.axis-song, .axis-kit, .axis-mix, .axis-play),
+.workspace[data-view="kit"] > :is(.axis-material, .axis-song, .axis-mix, .axis-play),
+.workspace[data-view="song"] > :is(.axis-material, .axis-kit, .axis-mix),
+.workspace[data-view="mix"] > :is(.axis-material, .axis-kit, .axis-song) {
   display: none;
 }
 
@@ -1313,12 +1317,7 @@ body.keys-pinned {
 .kit-ms {
   width: 5em;
 }
-.workspace[data-view="song"] > .axis-kit,
-.workspace[data-view="material"] > .axis-kit,
-.workspace[data-view="kit"] > .axis-material,
-.workspace[data-view="kit"] > .axis-song {
-  display: none;
-}
+
 
 /* A kit sound's waveform: drag for where it starts (and ends). */
 .kit-wave {
@@ -1388,8 +1387,15 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
     top: calc(48px + env(safe-area-inset-top, 0px));
   }
 }
-.workspace[data-view="song"] > .song-transport {
+.workspace:is([data-view="song"], [data-view="mix"]) > .song-transport,
+.workspace[data-view="mix"] > .mix-panel {
   order: 1;
+}
+.workspace[data-view="mix"] > .fx-panel {
+  order: 2;
+}
+.workspace[data-view="mix"] > .keys-panel {
+  order: 3;
 }
 .bar-input {
   width: 4.5em;
@@ -1509,8 +1515,19 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
   left: 0;
   top: 0;
   bottom: 0;
-  width: 0;
+  width: calc(var(--level, 0) * 100%);
   background: #2ecc71;
+}
+/* Upright: from the bottom. */
+.meter.vertical {
+  width: 8px;
+  height: 150px;
+}
+.meter.vertical .meter-fill {
+  top: auto;
+  right: 0;
+  width: auto;
+  height: calc(var(--level, 0) * 100%);
 }
 .meter-fill.over {
   background: #e5484d;
@@ -1564,4 +1581,73 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
     min-width: 0;
     font-size: 11px;
   }
+}
+
+/* ミックス: a strip per track (and the master's), side by side; across a phone's width they scroll sideways. */
+.mix-strips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0 10px;
+}
+.mix-strip {
+  flex: none;
+  width: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.mix-strip.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.mix-strip.master {
+  width: 110px;
+  margin-left: 6px;
+}
+.mix-name {
+  width: 100%;
+  font-size: 13px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mix-pan {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.mix-pan input {
+  width: 72px;
+}
+.mix-fader {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  height: 150px;
+}
+.vertical-fader {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 24px;
+  height: 150px;
+  margin: 0;
+}
+.mix-strip .fader-db {
+  min-width: 0;
+  text-align: center;
+}
+.mix-strip .master-meter-text {
+  min-width: 0;
+  text-align: center;
+  font-size: 11px;
+}
+.meter.vertical.tall {
+  width: 14px;
 }

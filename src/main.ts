@@ -185,7 +185,7 @@ const songStops = [0, 1].map(() => button("■ 曲を止める", "small song-sto
 for (const b of songStops) b.title = "曲の再生を止めます(位置はそのまま。曲の画面で続きから再生できます)";
 const kitTransport = el("div", { className: "sticky-transport kit-transport axis-kit" }, [el("div", { className: "row tight transport" }, [songStops[1]])]);
 function refreshSongStops(): void {
-  const on = rollPanel.playing && view !== "song";
+  const on = rollPanel.playing && (view === "material" || view === "kit");
   for (const b of songStops) b.hidden = !on;
   kitTransport.hidden = !on;
 }
@@ -1815,11 +1815,11 @@ function rebuildKit(force = false): void {
  * through the track's effects and the master, as it sounds in the song.
  */
 function routeKeyboard(): void {
-  keysTitle.textContent = view === "song" ? `鍵盤(「${rollPanel.trackName}」をエフェクト込みで)` : view === "kit" ? "鍵盤(ドラムキット)" : "試し弾き";
+  keysTitle.textContent = songSide() ? `鍵盤(「${rollPanel.trackName}」をエフェクト込みで)` : view === "kit" ? "鍵盤(ドラムキット)" : "試し弾き";
   keysNote.hidden = view !== "material";
   const editing = material && cuts[current] ? instrumentId(material.id, cuts[current].id) : null;
   const spec = rollPanel.kitSpec();
-  if (view === "song") {
+  if (songSide()) {
     const target = rollPanel.liveTarget();
     client.setLive(target.instrument ?? editing, target.fx, true);
     client.setLiveKit(target.drum, spec.samples, spec.keys);
@@ -2186,12 +2186,16 @@ rollPanel.onEditCut = (instrument) => {
   if (index >= 0 && index !== current) selectCut(index);
   setView("material");
 };
-rollPanel.onOpenFx = () => {
-  fxTarget = "track";
+// The effects are in the ミックス view: a track's (or the master's) FX button opens them there.
+function openFx(target: "track" | "master"): void {
+  if (view !== "mix") setView("mix");
+  fxTarget = target;
   showFxTarget();
   fxPanel.open = true;
   fxPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-};
+}
+rollPanel.onOpenFx = () => openFx("track");
+rollPanel.onOpenMasterFx = () => openFx("master");
 
 // ---------------------------------------------------------------- the two views: 素材 (the sound) and 曲 (the song)
 
@@ -2201,12 +2205,15 @@ rollPanel.onOpenFx = () => {
  * the keyboard is in both (trying a sound, step input). Space and Ctrl+Z
  * belong to the view on screen.
  */
-type View = "material" | "kit" | "song";
+type View = "material" | "kit" | "song" | "mix";
+/** The song's views (打ち込み, ミックス): Space, Ctrl+Z and the keyboard work on the song there. */
+const songSide = () => view === "song" || view === "mix";
 const VIEW_KEY = "easysampler.view";
 const storedView = safeStorage(VIEW_KEY);
-let view: View = storedView === "song" || storedView === "kit" ? storedView : "material";
+let view: View = storedView === "song" || storedView === "kit" || storedView === "mix" ? storedView : "material";
 for (const panel of [guide, materialPanel, tunePanel, exportPanel, detailsPanel]) panel.classList.add("axis-material");
-for (const panel of [rollPanel.element, fxPanel]) panel.classList.add("axis-song");
+rollPanel.element.classList.add("axis-song");
+for (const panel of [rollPanel.mixElement, fxPanel]) panel.classList.add("axis-mix");
 kitPanel.classList.add("axis-kit");
 const materialTab = el("button", { type: "button", className: "view-tab", role: "tab" }, [el("span", { className: "view-tab-title", textContent: "素材(音を作る)" }), materialTabInfo()]);
 const kitTab = el("button", { type: "button", className: "view-tab", role: "tab" }, [el("span", { className: "view-tab-title", textContent: "ドラムキット" }), kitTabInfo]);
@@ -2214,7 +2221,9 @@ const songTab = el("button", { type: "button", className: "view-tab", role: "tab
 kitTab.addEventListener("click", () => setView("kit"));
 materialTab.addEventListener("click", () => setView("material"));
 songTab.addEventListener("click", () => setView("song"));
-const viewTabs = el("nav", { className: "view-tabs", role: "tablist", ariaLabel: "表示" }, [materialTab, kitTab, songTab]);
+const mixTab = el("button", { type: "button", className: "view-tab", role: "tab" }, [el("span", { className: "view-tab-title", textContent: "ミックス" }), el("span", { className: "fine view-tab-info", textContent: "音量・パン・エフェクト・書き出し" })]);
+mixTab.addEventListener("click", () => setView("mix"));
+const viewTabs = el("nav", { className: "view-tabs", role: "tablist", ariaLabel: "表示" }, [materialTab, kitTab, songTab, mixTab]);
 
 /** The 素材 tab's line: the material being edited and how many there are. */
 function materialTabInfo(): HTMLElement {
@@ -2231,7 +2240,7 @@ function setView(next: View): void {
   view = next;
   safeStorage(VIEW_KEY, next);
   workspace.dataset.view = next;
-  for (const [tab, name] of [[materialTab, "material"], [kitTab, "kit"], [songTab, "song"]] as const) {
+  for (const [tab, name] of [[materialTab, "material"], [kitTab, "kit"], [songTab, "song"], [mixTab, "mix"]] as const) {
     tab.classList.toggle("on", next === name);
     tab.setAttribute("aria-selected", String(next === name));
   }
@@ -2267,7 +2276,7 @@ function setView(next: View): void {
 
 // The play controls follow the page's scroll (in the 素材 view: ▶, 元の音 | 仕上がり, the time; in the 曲 view: the song's).
 const materialTransport = el("div", { className: "sticky-transport material-transport axis-material" }, [el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, songStops[0]])]);
-const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs, guide, materialTransport, materialPanel, tunePanel, kitTransport, kitPanel, keysPanel, rollPanel.transport, rollPanel.element, fxPanel, exportPanel, detailsPanel]);
+const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs, guide, materialTransport, materialPanel, tunePanel, kitTransport, kitPanel, keysPanel, rollPanel.transport, rollPanel.element, rollPanel.mixElement, fxPanel, exportPanel, detailsPanel]);
 setView(view);
 
 document.getElementById("app")!.append(
@@ -2748,7 +2757,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (view === "kit") return;
   // (The song plays with no material open too.)
-  if (view === "song" || rollPanel.playing) {
+  if (songSide() || rollPanel.playing) {
     event.preventDefault();
     rollPanel.toggle();
     return;
@@ -2906,11 +2915,11 @@ window.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   if (key === "z" && !event.shiftKey) {
     event.preventDefault();
-    if (view === "song") rollPanel.undo();
+    if (songSide()) rollPanel.undo();
     else undo();
   } else if (key === "y" || (key === "z" && event.shiftKey)) {
     event.preventDefault();
-    if (view === "song") rollPanel.redo();
+    if (songSide()) rollPanel.redo();
     else redo();
   }
 });

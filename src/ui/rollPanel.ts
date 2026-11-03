@@ -54,6 +54,7 @@ import { songParts } from "../song/parts";
 import { drumRows, keyLabel, slotFor, type Kit } from "../daw/kit";
 import { arrange, type ArrangeKind } from "../daw/arrange";
 import { armOnce, el } from "./dom";
+import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, spreadPans } from "../daw/roles";
 import { PianoRoll } from "./pianoRoll";
 
 /** Where the song is kept until the page says which project is open (useStore). */
@@ -408,6 +409,10 @@ export class RollPanel {
   /** The ミックス view: a strip per track and the master's (placed by the page), with the song's export under them. */
   readonly mixElement: HTMLElement;
   private readonly mixStrips = el("div", { className: "mix-strips" });
+  // The spectrum of what plays (the ミックス view), drawn while that view is on screen.
+  private readonly spectrumCanvas = el("canvas", { className: "spectrum", ariaLabel: "周波数の分布" });
+  private spectrumFrame = 0;
+  private spectrumHold: Float32Array | null = null;
   /** The master strip's FX button: the page opens the master's effects. */
   onOpenMasterFx: () => void = () => {};
   private masterDb = -Infinity;
@@ -568,7 +573,18 @@ export class RollPanel {
         el("summary", { textContent: "バランスの取り方(目安)" }),
         el("p", { textContent: "1. 基準を 1 本決める(原曲・伴奏か主旋律)。そのメーターが -10 dB 前後になるよう合わせ、以後は動かさない。 2. ほかのトラックを基準より小さく足していく。マスターのピークは -6〜-3 dB に収め、「0 dB 超え」を出さない。 3. 主役・ベース・キックは中央、伴奏・ハモリ・シンバル・効果音は左右へ(パン)。 4. 中域(声の帯域)が混むときはトラックのエフェクトの EQ で少し削る。奥へ下げたい音は高域を削るかリバーブ。 5. マスターのエフェクトは控えめに(ローカット、軽いコンプ程度)。投稿先の音量合わせは書き出しの「音量」で。" }),
       ]),
+      el("div", { className: "row tight mix-tools" }, [
+        button("パンを自動で広げる", "small", () => this.spreadPans(), "ドラム・ベース・メロディは中央のまま、和音と伴奏を高さの順に左右へ振り分けます(元に戻すで戻せます)"),
+        button("トラック名を自動で付ける", "small", () => this.nameTracks(), "「MIDI Out #3」のような名前のトラックに、音符から「ベース」「メロディ」「和音」などの名前を付けます(名前のあるトラックはそのまま)"),
+      ]),
       this.mixStrips,
+      el("div", { className: "spectrum-box" }, [
+        el("div", { className: "row tight" }, [
+          el("span", { className: "control-label", textContent: "周波数の分布(いま鳴っている音)" }),
+          el("span", { className: "fine", textContent: "左が低い音、右が高い音。山が 250 Hz〜1 kHz に固まっていればこもり気味、4 kHz より右が極端に低ければ抜けが悪い目安です。" }),
+        ]),
+        this.spectrumCanvas,
+      ]),
       el("div", { className: "row song-export" }, [
         el("span", { className: "control-label", textContent: "曲の書き出し" }),
         button("曲を WAV で", "small primary", () => this.onExport("wav"), "全トラックをミックスし、マスターのエフェクトをかけた 1 本の WAV"),
@@ -981,6 +997,11 @@ export class RollPanel {
       if (part === lead) leadTrack = t;
       added.push(t);
     }
+    // Parts the file left nameless ("MIDI Out #3"): named by what they play (their GM instrument, or their role).
+    const programs = parts.map((part) => song.tracks.find((t) => part.id === `t${t.index}` || part.id.startsWith(`t${t.index}c`) || part.id === `t${t.index}d`)?.program ?? null);
+    autoNames(added, programs).forEach((name, i) => {
+      if (name) added[i].name = name;
+    });
     this.project.tracks = [...this.project.tracks.filter((t) => t.notes.length > 0), ...added];
     // (Kept to 0.001 BPM: a rounded tempo drifts from the file over a song — a video timed to the MIDI would too.)
     const exact = (bpm: number) => Math.round(bpm * 1000) / 1000;
@@ -1406,6 +1427,132 @@ export class RollPanel {
     for (const p of links.pans) if (document.activeElement !== p || Math.abs(Number(p.value) - t.pan) > 0.01) p.value = String(t.pan);
   }
 
+  /** What a track plays, in a few words (under its name in the ミックス view). */
+  private playsLabel(t: Track): string {
+    if (t.kind === "drum") return "ドラムキット";
+    if (t.kind === "audio") return "音声";
+    if (t.instrument === BACKING) return "簡易シンセ";
+    return this.options.find((o) => o.id === t.instrument)?.label ?? "(音源なし)";
+  }
+
+  /**
+   * A track playing a cut far from where it was recorded (崩れ・こもり): what to say, or null. Far down a voice turns
+   * muddy and breaks up, far up it turns thin; a lower material, the plain synth, or the track an octave over helps.
+   */
+  private farWarning(t: Track): string | null {
+    if (t.kind !== "melodic" || !t.instrument || t.instrument === BACKING || !t.notes.length) return null;
+    const root = this.options.find((o) => o.id === t.instrument)?.note;
+    if (root === undefined) return null;
+    const { below, above } = rangeFromRoot(t.notes, root);
+    if (below >= FAR_BELOW) return `音符が音源の録音した高さより最大 ${below} 半音(約 ${(below / 12).toFixed(1)} オクターブ)下まであります。声などをここまで下げると、こもったり崩れたりします。低い声・音の素材にするか、音源を「簡易シンセ」にするか、「選んだトラックを」の「1 オクターブ上へ」を試してください。`;
+    if (above >= FAR_ABOVE) return `音符が音源の録音した高さより最大 ${above} 半音(約 ${(above / 12).toFixed(1)} オクターブ)上まであります。ここまで上げると細く、キンキンしやすくなります。高い声・音の素材にするか、「1 オクターブ下へ」を試してください。`;
+    return null;
+  }
+
+  /** パンを自動で広げる: the chords and accompaniment out to the sides, the rest in the middle (tracks with a pan line left alone). */
+  private spreadPans(): void {
+    const pans = spreadPans(this.project.tracks);
+    let moved = 0;
+    this.project.tracks.forEach((t, i) => {
+      const p = pans[i];
+      if (p === null || t.panAuto.length || Math.abs(t.pan - p) < 1e-6) return;
+      t.pan = p;
+      this.syncMix(t);
+      this.client.setTrackMix(t.id, this.mixOf(t));
+      moved++;
+    });
+    this.scheduleSave();
+    this.commit();
+    this.info.textContent = moved
+      ? `${moved} 本のトラックのパンを動かしました(ドラム・ベース・メロディは中央、和音と伴奏を左右へ)。「元に戻す」(Ctrl + Z)で戻せます。`
+      : "動かすトラックはありませんでした(左右に振る和音・伴奏のトラックがないか、すでにその位置です)。";
+  }
+
+  /** トラック名を自動で付ける: the nameless tracks named by what they play. */
+  private nameTracks(): void {
+    const names = autoNames(this.project.tracks);
+    let named = 0;
+    this.project.tracks.forEach((t, i) => {
+      const n = names[i];
+      if (!n) return;
+      t.name = n;
+      named++;
+    });
+    this.renderTracks();
+    this.scheduleSave();
+    this.commit();
+    this.info.textContent = named ? `${named} 本のトラックに名前を付けました。「元に戻す」で戻せます。` : "名前のないトラック(「MIDI Out #3」のような名前)はありませんでした。";
+  }
+
+  /** The ミックス view on screen or not: the spectrum is drawn only while it is. */
+  setMixVisible(on: boolean): void {
+    cancelAnimationFrame(this.spectrumFrame);
+    if (!on) return;
+    const tick = () => {
+      this.drawSpectrum();
+      this.spectrumFrame = requestAnimationFrame(tick);
+    };
+    this.spectrumFrame = requestAnimationFrame(tick);
+  }
+
+  /** Third-octave bands from 25 Hz to 16 kHz, as bars, with where each band was loudest lately (a falling line). */
+  private drawSpectrum(): void {
+    const canvas = this.spectrumCanvas;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (!width || !height) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(width * dpr)) canvas.width = Math.round(width * dpr);
+    if (canvas.height !== Math.round(height * dpr)) canvas.height = Math.round(height * dpr);
+    const g = canvas.getContext("2d");
+    if (!g) return;
+    const css = getComputedStyle(canvas);
+    g.clearRect(0, 0, canvas.width, canvas.height);
+    const spectrum = this.client.spectrum();
+    const centres: number[] = [];
+    for (let c = 25; c <= 16000; c *= 2 ** (1 / 3)) centres.push(c);
+    const levels = new Float32Array(centres.length).fill(-120);
+    if (spectrum) {
+      const binHz = spectrum.sampleRate / 2 / spectrum.db.length;
+      centres.forEach((c, j) => {
+        const lo = Math.max(1, Math.floor(c / 2 ** (1 / 6) / binHz));
+        const hi = Math.max(lo + 1, Math.ceil((c * 2 ** (1 / 6)) / binHz));
+        let p = 0;
+        for (let b = lo; b < hi && b < spectrum.db.length; b++) p += 10 ** (spectrum.db[b] / 10);
+        levels[j] = p > 0 ? 10 * Math.log10(p) : -120;
+      });
+    }
+    if (!this.spectrumHold || this.spectrumHold.length !== levels.length) this.spectrumHold = new Float32Array(levels.length).fill(-120);
+    const hold = this.spectrumHold;
+    // (-90 dB at the bottom, -10 dB at the top.)
+    const y = (db: number) => canvas.height * (1 - Math.max(0, Math.min(1, (db + 90) / 80)));
+    const barW = canvas.width / levels.length;
+    // The usual regions behind the bars: low / low-mid (where mud gathers) / mid / high.
+    const region = (from: number, to: number, label: string) => {
+      const a = (Math.log(from / 25) / Math.log(16000 / 25)) * canvas.width;
+      const b = (Math.log(to / 25) / Math.log(16000 / 25)) * canvas.width;
+      g.fillStyle = css.getPropertyValue("--line");
+      g.globalAlpha = 0.25;
+      g.fillRect(a, 0, 1 * dpr, canvas.height);
+      g.globalAlpha = 1;
+      g.fillStyle = css.color;
+      g.font = `${10 * dpr}px system-ui, sans-serif`;
+      g.fillText(label, a + 3 * dpr, 12 * dpr);
+      return b;
+    };
+    region(25, 250, "低域");
+    region(250, 1000, "中低域");
+    region(1000, 4000, "中域");
+    region(4000, 16000, "高域");
+    levels.forEach((db, j) => {
+      hold[j] = Math.max(db, hold[j] - 0.4);
+      g.fillStyle = css.getPropertyValue("--accent") || "#7c5cff";
+      g.fillRect(j * barW + 1 * dpr, y(db), barW - 2 * dpr, canvas.height - y(db));
+      g.fillStyle = css.color;
+      g.fillRect(j * barW + 1 * dpr, y(hold[j]), barW - 2 * dpr, 1.5 * dpr);
+    });
+  }
+
   /** The ミックス view's strips: per track its name, mute / solo, pan, fader with meter, dB and effects; then the master's. */
   private renderMix(): void {
     const strips = this.project.tracks.map((t, i) => {
@@ -1415,8 +1562,12 @@ export class RollPanel {
         this.selectTrack(i);
         this.onOpenFx();
       }, fxOn ? "このトラックにエフェクトがかかっています(押すとエフェクトを開きます)" : "このトラックのエフェクトを開きます");
+      const plays = this.playsLabel(t);
+      const far = this.farWarning(t);
       const strip = el("div", { className: `mix-strip${i === this.selected ? " selected" : ""}` }, [
         el("span", { className: "mix-name", textContent: t.name, title: t.name }),
+        el("span", { className: "fine mix-plays", textContent: plays, title: plays }),
+        far ? el("span", { className: "warn fine mix-far", textContent: "⚠ 音域", title: far }) : el("span", { className: "mix-far" }),
         el("span", { className: "row tight mix-ms" }, [c.mute, c.solo]),
         el("label", { className: "mix-pan fine" }, ["パン", c.pan]),
         el("span", { className: "mix-fader" }, [c.volume, el("span", { className: "meter vertical" }, [c.meterFill])]),
@@ -1499,12 +1650,15 @@ export class RollPanel {
       const { mute, solo, volume, volumeText, meterFill, pan } = this.mixControlsFor(t);
       const remove = button("×", "small", () => this.removeTrack(i), "このトラックを消す");
       // A melodic track with no cut plays nothing: it says so. Effects on: an FX mark that opens them.
+      const far = this.farWarning(t);
       const silent =
         t.kind === "melodic" && !t.instrument
           ? el("span", { className: "warn fine track-note", textContent: "音源を選ぶと鳴ります" })
           : t.kind === "audio" && !t.notes.length
             ? el("span", { className: "fine track-note", textContent: "ピアノロールをタップで素材を置きます" })
-            : null;
+            : far
+              ? el("span", { className: "warn fine track-note", textContent: "⚠ 音源の高さから離れすぎ", title: far })
+              : null;
       const fxOn = Object.values(t.fx).some((g) => (g as { on?: boolean }).on);
       const fxMark = fxOn
         ? button("FX", "small toggle on fx-mark track-fx", () => {

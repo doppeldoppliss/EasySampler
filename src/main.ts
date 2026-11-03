@@ -2362,6 +2362,7 @@ function setView(next: View): void {
   // (The song plays on in the other views — a material can be shaped against it; a recording stops: the keys belong to the view.)
   if (next !== "song" && rollPanel.isRecording) rollPanel.pause();
   keysAway = next === "mix";
+  rollPanel.setMixVisible(next === "mix");
   showPinned();
   refreshSongStops();
   // (A material preview does not follow into the other views.)

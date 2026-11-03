@@ -25,6 +25,9 @@ type AudioSessionNavigator = Navigator & { audioSession?: { type: string } };
 export class EngineClient {
   private context: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
+  /** The engine's output, analysed on its way to the speakers (before the listening volume): the ミックス spectrum. */
+  private analyser: AnalyserNode | null = null;
+  private spectrumDb = new Float32Array(0);
   /** Messages sent before the worklet was up, replayed once it is. */
   private pending: ToEngine[] = [];
   /** The sources sent, by material id (for re-preparing at the real rate). */
@@ -102,6 +105,15 @@ export class EngineClient {
     return this.output;
   }
 
+  /** The output's spectrum just now (dB per bin, smoothed a little), or null before the sound is set up. */
+  spectrum(): { db: Float32Array; sampleRate: number } | null {
+    const a = this.analyser;
+    if (!a || !this.context) return null;
+    if (this.spectrumDb.length !== a.frequencyBinCount) this.spectrumDb = new Float32Array(a.frequencyBinCount);
+    a.getFloatFrequencyData(this.spectrumDb);
+    return { db: this.spectrumDb, sampleRate: this.context.sampleRate };
+  }
+
   /** Call from inside a user gesture: creates or resumes the audio. */
   unlock(): void {
     if (!this.context) {
@@ -118,7 +130,12 @@ export class EngineClient {
       if (event.data.type === "status") this.onStatus(event.data.voices);
       else if (event.data.type === "meters") this.onMeters(event.data);
     };
-    node.connect(this.out(context));
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 8192;
+    analyser.smoothingTimeConstant = 0.8;
+    node.connect(analyser);
+    analyser.connect(this.out(context));
+    this.analyser = analyser;
     this.node = node;
     for (const message of this.pending) this.post(message);
     this.pending = [];

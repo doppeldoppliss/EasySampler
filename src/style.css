@@ -1676,3 +1676,33 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
   background: var(--accent);
   border-color: var(--accent);
 }
+
+/* ミックス: what a strip plays, its range warning; the tools; the spectrum. */
+.mix-plays {
+  width: 100%;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+.mix-far {
+  min-height: 1.2em;
+  font-size: 11px;
+  cursor: help;
+}
+.mix-tools {
+  margin: 6px 0;
+}
+.spectrum-box {
+  margin: 8px 0;
+}
+.spectrum {
+  display: block;
+  width: 100%;
+  height: 140px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-dim, var(--fine, #888));
+}

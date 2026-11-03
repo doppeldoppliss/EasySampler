@@ -1145,7 +1145,6 @@ export class RollPanel {
   private removeTrack(index: number): void {
     if (this.project.tracks.length < 2) return;
     const t = this.project.tracks[index];
-    if (!window.confirm(`トラック「${t.name}」${t.notes.length ? `と音符 ${t.notes.length} 個` : ""}を消しますか?(「元に戻す」で戻せます)`)) return;
     this.project.tracks.splice(index, 1);
     this.selected = Math.min(this.selected > index ? this.selected - 1 : this.selected, this.project.tracks.length - 1);
     this.showTrackInRoll();
@@ -1155,6 +1154,8 @@ export class RollPanel {
     this.onTrackChange();
     this.scheduleSave();
     this.commit();
+    // (No question first: it is one step to undo, and the message says so.)
+    this.info.textContent = `トラック「${t.name}」${t.notes.length ? `(音符 ${t.notes.length} 個)` : ""}を消しました。「元に戻す」(Ctrl + Z)で戻せます。`;
   }
 
   /** Volume, pan, mute, solo of a track: heard at once, kept. */

@@ -3523,7 +3523,8 @@ async function autoLevels(): Promise<void> {
       lufs[i] = Number.isFinite(l) && l > -70 ? l : null;
     }
     const { gains, reference, loweredDb } = balanceGains(
-      project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain, notes: t.notes })),
+      // (A bass on the 簡易シンセ is the floor of the lows: it takes twice a voice bass's share.)
+      project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain, notes: t.notes, weight: roles[i] === "bass" && t.instrument === BACKING ? 2 : 1 })),
       MAX_TRACK_GAIN,
     );
     rollPanel.applyGains(gains, reference, loweredDb);

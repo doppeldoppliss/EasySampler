@@ -19,6 +19,11 @@ export interface LevelIn {
   role: Role;
   /** Its notes: tracks of one part share its level only where they play together (a melody passed from track to track by section does not). */
   notes?: readonly Note[];
+  /**
+   * Its share of its part's level against the others of the part (1 when absent): a synth bass under voice basses
+   * is the floor of the lows, so it takes 2 — half the bass's power with one voice bass beside it, not a third.
+   */
+  weight?: number;
   /** Its loudness as it plays now (integrated LUFS, with its gain), null when it was not measured (silent, muted). */
   lufs: number | null;
   gain: number;
@@ -41,12 +46,15 @@ export function balanceGains(tracks: readonly LevelIn[], maxGain: number): { gai
   for (const t of measured) groups.set(t.role, [...(groups.get(t.role) ?? []), t]);
   const at = new Map([...groups].map(([role, g]) => [role, g.every((t) => t.notes) ? together(g.map((t) => t.notes!)) : g.length]));
   const share = (role: Role) => 10 * Math.log10(at.get(role) ?? 1);
+  // (Weighted within the part: a track's dB against the part's mean weight; the powers still add up to the part's.)
+  const meanWeight = new Map([...groups].map(([role, g]) => [role, g.reduce((a, t) => a + (t.weight ?? 1), 0) / g.length]));
+  const tilt = (t: LevelIn) => 10 * Math.log10((t.weight ?? 1) / (meanWeight.get(t.role) ?? 1));
   // The lead's level, from the reference's (which is where its part says it is).
-  const lead = ref.lufs - LEVEL_FROM_LEAD[ref.role] + share(ref.role);
+  const lead = ref.lufs - LEVEL_FROM_LEAD[ref.role] + share(ref.role) - tilt(ref);
   const wanted = tracks.map(() => null as number | null);
   for (const t of measured) {
     if (t === ref) continue;
-    const want = lead + LEVEL_FROM_LEAD[t.role] - share(t.role);
+    const want = lead + LEVEL_FROM_LEAD[t.role] - share(t.role) + tilt(t);
     wanted[t.i] = t.gain * 10 ** ((want - t.lufs) / 20);
   }
   // A track that would need more than the fader gives: everything (the reference too) comes down by the

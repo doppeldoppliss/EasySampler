@@ -166,4 +166,23 @@ describe("自動ミックス", () => {
     fx.duck.source = "kick";
     expect(madeByAuto(fx, "duck", 150)).toBe(true);
   });
+
+  it("a synth bass (weight 2) under two voice basses takes half the bass's power, the voices a quarter each", () => {
+    const bars = Array.from({ length: 16 }, (_, k) => note(40, k));
+    const { gains } = balanceGains(
+      [
+        { role: "lead", lufs: -14, gain: 1, notes: bars.map((n) => ({ ...n, pitch: 72 })) },
+        { role: "bass", lufs: -20, gain: 1, notes: bars, weight: 2 },
+        { role: "bass", lufs: -20, gain: 1, notes: bars },
+        { role: "bass", lufs: -20, gain: 1, notes: bars },
+      ],
+      4,
+    );
+    const lufs = gains.slice(1).map((g) => -20 + 20 * Math.log10(g!));
+    // The bass's level is the lead's −2 (−16); in power: ½, ¼, ¼ of it.
+    expect(lufs[0]).toBeCloseTo(-16 - 3.01, 1);
+    expect(lufs[1]).toBeCloseTo(-16 - 6.02, 1);
+    const sum = 10 * Math.log10(lufs.reduce((a, l) => a + 10 ** (l / 10), 0));
+    expect(sum).toBeCloseTo(-16, 1);
+  });
 });

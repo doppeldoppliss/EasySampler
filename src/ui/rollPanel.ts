@@ -1744,6 +1744,7 @@ export class RollPanel {
     // The lows still well short after the EQ (30–80 Hz, 6 dB and more under the target): the EQ cannot do it.
     const lows = BAND_HZ.map((hz, j) => (hz >= 30 && hz <= 80 ? result.after[j] : null)).filter((x): x is number => x !== null);
     const short = lows.reduce((a, b) => a + b, 0) / Math.max(1, lows.length);
+    this.lowsShortDb = short;
     this.bassFill.hidden = !(short < -6);
   }
 
@@ -1755,7 +1756,8 @@ export class RollPanel {
     if (this.roles()[i] === "bass" && t.notes.length) {
       // The lows are the bass's job: a low cut over its lowest notes, or a swaying pan, works against it.
       const lowest = 440 * 2 ** ((Math.min(...t.notes.map((n) => n.pitch)) - 69) / 12);
-      if (t.fx.eq.on && t.fx.eq.lowCutHz > lowest * 0.8) out.push(`ローカット(${Math.round(t.fx.eq.lowCutHz)} Hz)が低い音(${Math.round(lowest)} Hz)を削っている`);
+      // (Only a cut over the lowest note itself: one a little under it barely touches it.)
+      if (t.fx.eq.on && t.fx.eq.lowCutHz > lowest) out.push(`ローカット(${Math.round(t.fx.eq.lowCutHz)} Hz)が低い音(${Math.round(lowest)} Hz)を削っている`);
       if (t.fx.pan.on) out.push("オートパンで低音が左右に揺れる");
       if (t.fx.filter.on && t.fx.filter.type !== "lowpass") out.push("フィルターで低音が削れている");
     }
@@ -1775,6 +1777,9 @@ export class RollPanel {
     while (taken.has(`${base} ${k}`)) k++;
     return `${base} ${k}`;
   }
+
+  /** How far 30–80 Hz stayed under the target after the last master EQ fit (dB, mean; null before any). */
+  lowsShortDb: number | null = null;
 
   /** The style chosen for the master EQ (まとめて自動ミックス uses it too). */
   balanceStyle(): BalanceStyle {

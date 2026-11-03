@@ -432,10 +432,11 @@ export class RollPanel {
   );
   private readonly balanceStatus = el("p", { className: "fine", role: "status" });
   /** Shown when the master EQ cannot make up for missing lows: a synth bass under the bass line. */
-  private readonly bassFill = el("div", { className: "row tight", hidden: true }, [
-    el("span", { className: "warn fine", textContent: "低音(30〜80 Hz)が目安よりかなり足りません。EQ では補えないので、ベースの音符をシンセベースで重ねるのが効果的です。" }),
-    button("シンセベースを重ねる", "small", () => this.layerSynthBass(), "ベースのトラックを複製して、簡易シンセの「シンセベース」で鳴らすトラックを足します(元に戻すで戻せます)"),
-  ]);
+  // (Two ways out, by whether a synth bass is there yet: one is layered, or the bass is made stronger and refitted.)
+  private readonly bassFillText = el("span", { className: "warn fine" });
+  private readonly bassFillButton = button("シンセベースを重ねる", "small", () => this.fillLows());
+  private readonly bassFillResult = el("p", { className: "fine", role: "status" });
+  private readonly bassFill = el("div", { className: "row tight", hidden: true }, [this.bassFillText, this.bassFillButton]);
   /** ベースの強さ: what 音量を合わせる aims the bass at (kept with the project). */
   private readonly bassLevelSelect = el("select", { ariaLabel: "ベースの強さ", title: "「音量を合わせる」がベースをどのくらいの大きさにするか。標準はメロディと同じ聞こえの大きさ。ノート PC やスマホのスピーカーでは低音が聞こえにくいので、強めが合うこともあります" }, [
     el("option", { value: "0", textContent: "ベース: 標準" }),
@@ -647,6 +648,7 @@ export class RollPanel {
         el("p", { className: "fine", textContent: "仕上がった曲の平均は、低音から高音へなだらかに下がる形になります。その目安(標準 / 電子音・ボカロ系は低音と高音が多め / 生楽器系はなだらか)との差を測って、マスター EQ で半分ほど寄せます(各 ±6 dB まで)。直せるのは全体の傾きだけで、トラック同士のぶつかりは各トラックの EQ で。最後は耳で調整してください。" }),
         this.balanceStatus,
         this.bassFill,
+        this.bassFillResult,
         this.balanceCanvas,
       ]),
       el("div", { className: "spectrum-box" }, [
@@ -1816,6 +1818,8 @@ export class RollPanel {
     const short = lows.reduce((a, b) => a + b, 0) / Math.max(1, lows.length);
     this.lowsShortDb = short;
     this.bassFill.hidden = !(short < -6);
+    this.bassFillResult.textContent = "";
+    this.showBassFill();
   }
 
   /** What stands out on a track for the diagnosis: its range, a fader at the top, a heavy room set by hand. */
@@ -1851,6 +1855,13 @@ export class RollPanel {
   /** How far 30–80 Hz stayed under the target after the last master EQ fit (dB, mean; null before any). */
   lowsShortDb: number | null = null;
 
+  /** After a refit for the lows: what came of it, under the notice (which shows again if they are still short). */
+  refitDone(): void {
+    const short = this.lowsShortDb;
+    this.bassFillResult.textContent =
+      short === null ? "" : short < -6 ? `合わせ直しました。低音はまだ目安より平均 ${(-short).toFixed(1)} dB 足りません。` : `合わせ直しました。低音(30〜80 Hz)は目安の範囲に入りました(平均 ${short >= 0 ? "+" : "−"}${Math.abs(short).toFixed(1)} dB)。`;
+  }
+
   /** The style chosen for the master EQ (まとめて自動ミックス uses it too). */
   balanceStyle(): BalanceStyle {
     return this.balanceSelect.value as BalanceStyle;
@@ -1860,18 +1871,65 @@ export class RollPanel {
    * シンセベースを重ねる: the bass track (the one with the most notes among the bass parts on a material) copied onto
    * the 簡易シンセ's synth bass, right after it, with its effects and volume.
    */
+  /** Whether the song has a synth bass (the 簡易シンセ's シンセベース on a bass track) for the lows already. */
+  private hasSynthBass(): boolean {
+    const roles = this.roles();
+    return this.project.tracks.some((t, i) => roles[i] === "bass" && t.instrument === BACKING && t.synth === "bass");
+  }
+
+  /** The lows-short notice: layering a synth bass, or (one there already) making the bass stronger and fitting again. */
+  private showBassFill(): void {
+    if (!this.hasSynthBass()) {
+      this.bassFillText.textContent = "低音(30〜80 Hz)が目安よりかなり足りません。EQ では補えないので、ベースの音符をシンセベースで重ねるのが効果的です。";
+      this.bassFillButton.textContent = "シンセベースを重ねる";
+      this.bassFillButton.title = "ベース(メインがあればそれ)の音符を、簡易シンセの「シンセベース」で鳴らすトラックを足します(元に戻すで戻せます)";
+      return;
+    }
+    const next = Math.min(6, this.project.bassLevelDb + 3);
+    const can = next > this.project.bassLevelDb;
+    this.bassFillText.textContent = can
+      ? "低音(30〜80 Hz)が目安よりかなり足りません。シンセベースはあるので、ベースを強めにして音量とマスター EQ を合わせ直すのが効果的です。"
+      : "低音(30〜80 Hz)が目安よりかなり足りません。ベースの強さはもう最大です。シンセベースの音量を手で上げるか、シンセベースの音符を 1 オクターブ下げてみてください。";
+    this.bassFillButton.textContent = can ? `ベースを${next === 3 ? "強め" : "かなり強め"}にして合わせ直す` : "シンセベースを重ねる";
+    this.bassFillButton.title = can ? `「ベースの強さ」を +${next} dB にして、「音量を合わせる」と「マスター EQ を目安に寄せる」をもう一度行います(元に戻すで戻せます)` : "";
+    this.bassFillButton.disabled = !can;
+  }
+
+  /** The notice's button: a synth bass layered, or the bass made stronger and everything fitted again. */
+  private fillLows(): void {
+    if (!this.hasSynthBass()) {
+      this.layerSynthBass();
+      return;
+    }
+    const next = Math.min(6, this.project.bassLevelDb + 3);
+    if (next === this.project.bassLevelDb) return;
+    this.project.bassLevelDb = next;
+    this.bassLevelSelect.value = String(next);
+    this.scheduleSave();
+    this.commit();
+    this.bassFillResult.textContent = `ベースの強さを +${next} dB にしました。音量とマスター EQ を合わせ直しています…`;
+    this.onRefitLows();
+  }
+
+  /** The page: 音量を合わせる, then マスター EQ を目安に寄せる (they render). */
+  onRefitLows: () => void = () => {};
+
   private layerSynthBass(): void {
     const roles = this.roles();
-    if (this.project.tracks.some((t, i) => roles[i] === "bass" && t.instrument === BACKING && t.synth === "bass")) {
-      this.info.textContent = "シンセベースのトラックはもうあります。音量を上げるか、「マスター EQ を目安に寄せる」をもう一度試してください。";
+    if (this.hasSynthBass()) {
+      this.bassFillResult.textContent = "シンセベースのトラックはもうあります。";
       return;
     }
     const candidates = this.project.tracks.map((t, i) => ({ t, i })).filter(({ t, i }) => roles[i] === "bass" && t.kind === "melodic" && t.notes.length);
     if (!candidates.length) {
-      this.info.textContent = "ベースのトラックが見つかりません(ミックスの列で役割を「ベース」にすると選べます)。";
+      this.bassFillResult.textContent = "ベースのトラックが見つかりません(ミックスの列で役割を「ベース」にすると選べます)。";
       return;
     }
-    const { t, i } = candidates.reduce((a, b) => (b.t.notes.length > a.t.notes.length ? b : a));
+    // The bass it copies: the main one; else the lowest line (an octave double above it is not the bass line), then the busiest.
+    const median = (t: Track) => [...t.notes].map((n) => n.pitch).sort((a, b) => a - b)[t.notes.length >> 1];
+    const { t, i } =
+      candidates.find(({ t }) => t.main) ??
+      candidates.reduce((a, b) => (median(b.t) < median(a.t) || (median(b.t) === median(a.t) && b.t.notes.length > a.t.notes.length) ? b : a));
     // (Down by octaves until its middle is at A2 or under: a bass line written high would add nothing under 80 Hz.)
     const pitches = t.notes.map((n) => n.pitch).sort((x, y) => x - y);
     let down = 0;
@@ -1889,8 +1947,11 @@ export class RollPanel {
     this.onTrackChange();
     this.scheduleSave();
     this.commit();
-    this.bassFill.hidden = true;
-    this.info.textContent = `「${t.name}」の音符をシンセベースで重ねたトラックを足しました${down ? `(低音が出るよう ${down} オクターブ下)` : ""}。「音量を合わせる」と「マスター EQ を目安に寄せる」をもう一度押すと、足した分も含めて整います。「元に戻す」で戻せます。`;
+    const said = `「${t.name}」の音符をシンセベースで重ねたトラック「${copy.name}」を足しました${down ? `(低音が出るよう ${down} オクターブ下)` : ""}。音量とマスター EQ を合わせ直しています…`;
+    this.info.textContent = said;
+    this.bassFillResult.textContent = said;
+    // (Fitted again with it at once: the new track at the fader's 0 dB is not yet where it belongs.)
+    this.onRefitLows();
   }
 
   /** ミックスを診断する: the table of what was measured, and what stands out. */

@@ -3488,6 +3488,13 @@ async function balanceMaster(style: BalanceStyle): Promise<void> {
   }
 }
 rollPanel.onBalance = (style) => void balanceMaster(style);
+// The lows-short notice's refit: the volumes, then the master EQ, then what came of it under the notice.
+rollPanel.onRefitLows = () =>
+  void (async () => {
+    await autoLevels();
+    await balanceMaster(rollPanel.balanceStyle());
+    rollPanel.refitDone();
+  })();
 
 /** One track as the song plays it (its effects, its volume; no master), offline: what the automatic mixing measures. */
 async function renderTrackAlone(project: ReturnType<typeof rollPanel.snapshot>, id: string, say: (share: number) => void): Promise<{ channels: [Float32Array, Float32Array]; sampleRate: number }> {

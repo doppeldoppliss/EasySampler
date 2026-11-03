@@ -1813,8 +1813,10 @@ export class RollPanel {
     this.balanceStatus.textContent = `「${BALANCE_STYLES[style]}」に寄せて、マスター EQ を ローカット ${hz(e.lowCutHz)}・低音(${hz(e.lowHz)} 以下)${signed(e.lowDb)} dB・中音(${hz(e.midHz)})${signed(e.midDb)} dB・高音(${hz(e.highHz)} 以上)${signed(e.highDb)} dB にしました。「元に戻す」で戻せます。`;
     this.balanceShown = { result, style };
     this.drawBalance();
-    // The lows still well short after the EQ (30–80 Hz, 6 dB and more under the target): the EQ cannot do it.
-    const lows = BAND_HZ.map((hz, j) => (hz >= 30 && hz <= 80 ? result.after[j] : null)).filter((x): x is number => x !== null);
+    // The lows still well short after the EQ (50–100 Hz, 6 dB and more under the target): the EQ cannot do it.
+    // (Where a bass line's fundamentals are, 50–100 Hz: the deep sub under it — 25–40 Hz — most songs barely reach, and
+    // more bass would not fill it, so it is not counted.)
+    const lows = BAND_HZ.map((hz, j) => (hz >= 45 && hz <= 110 ? result.after[j] : null)).filter((x): x is number => x !== null);
     const short = lows.reduce((a, b) => a + b, 0) / Math.max(1, lows.length);
     this.lowsShortDb = short;
     this.bassFill.hidden = !(short < -6);
@@ -1852,14 +1854,14 @@ export class RollPanel {
     return `${base} ${k}`;
   }
 
-  /** How far 30–80 Hz stayed under the target after the last master EQ fit (dB, mean; null before any). */
+  /** How far 50–100 Hz stayed under the target after the last master EQ fit (dB, mean; null before any). */
   lowsShortDb: number | null = null;
 
   /** After a refit for the lows: what came of it, under the notice (which shows again if they are still short). */
   refitDone(): void {
     const short = this.lowsShortDb;
     this.bassFillResult.textContent =
-      short === null ? "" : short < -6 ? `合わせ直しました。低音はまだ目安より平均 ${(-short).toFixed(1)} dB 足りません。` : `合わせ直しました。低音(30〜80 Hz)は目安の範囲に入りました(平均 ${short >= 0 ? "+" : "−"}${Math.abs(short).toFixed(1)} dB)。`;
+      short === null ? "" : short < -6 ? `合わせ直しました。低音はまだ目安より平均 ${(-short).toFixed(1)} dB 足りません。` : `合わせ直しました。低音(50〜100 Hz)は目安の範囲に入りました(平均 ${short >= 0 ? "+" : "−"}${Math.abs(short).toFixed(1)} dB)。`;
   }
 
   /** The style chosen for the master EQ (まとめて自動ミックス uses it too). */
@@ -1880,7 +1882,7 @@ export class RollPanel {
   /** The lows-short notice: layering a synth bass, or (one there already) making the bass stronger and fitting again. */
   private showBassFill(): void {
     if (!this.hasSynthBass()) {
-      this.bassFillText.textContent = "低音(30〜80 Hz)が目安よりかなり足りません。EQ では補えないので、ベースの音符をシンセベースで重ねるのが効果的です。";
+      this.bassFillText.textContent = "低音(50〜100 Hz)が目安よりかなり足りません。EQ では補えないので、ベースの音符をシンセベースで重ねるのが効果的です。";
       this.bassFillButton.textContent = "シンセベースを重ねる";
       this.bassFillButton.title = "ベース(メインがあればそれ)の音符を、簡易シンセの「シンセベース」で鳴らすトラックを足します(元に戻すで戻せます)";
       return;
@@ -1888,8 +1890,8 @@ export class RollPanel {
     const next = Math.min(6, this.project.bassLevelDb + 3);
     const can = next > this.project.bassLevelDb;
     this.bassFillText.textContent = can
-      ? "低音(30〜80 Hz)が目安よりかなり足りません。シンセベースはあるので、ベースを強めにして音量とマスター EQ を合わせ直すのが効果的です。"
-      : "低音(30〜80 Hz)が目安よりかなり足りません。ベースの強さはもう最大です。シンセベースの音量を手で上げるか、シンセベースの音符を 1 オクターブ下げてみてください。";
+      ? "低音(50〜100 Hz)が目安よりかなり足りません。シンセベースはあるので、ベースを強めにして音量とマスター EQ を合わせ直すのが効果的です。"
+      : "低音(50〜100 Hz)が目安よりかなり足りません。ベースの強さはもう最大です。シンセベースの音量を手で上げるか、シンセベースの音符を 1 オクターブ下げてみてください。";
     this.bassFillButton.textContent = can ? `ベースを${next === 3 ? "強め" : "かなり強め"}にして合わせ直す` : "シンセベースを重ねる";
     this.bassFillButton.title = can ? `「ベースの強さ」を +${next} dB にして、「音量を合わせる」と「マスター EQ を目安に寄せる」をもう一度行います(元に戻すで戻せます)` : "";
     this.bassFillButton.disabled = !can;

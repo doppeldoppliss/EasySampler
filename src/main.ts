@@ -955,6 +955,9 @@ const tunePanel = el("section", { className: "panel tune" }, [
     ),
   ),
   held(sustainHelp),
+  // The length: how far 引き延ばし stretches the sustain (heard on the keyboard and in the preview), and how long a
+  // single note is written — with the sound, not in the folded export (design.md 37).
+  lengthBlock,
   (wavetableRow = range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`)),
   driftFixRow,
   sustainOnlyRow,
@@ -993,8 +996,11 @@ pcToggle.hidden = SMALL_SCREEN;
 const imeWarning = el("p", { className: "warn", hidden: true, textContent: "日本語入力がオンになっています。鍵盤として弾くには、半角英数に切り替えてください。" });
 
 // On phones the keyboard shows two octaves: these move them (Z / X on a PC keyboard).
-const octaveDown = button("◀ オクターブ", "small", () => shiftPiano(-12));
-const octaveUp = button("オクターブ ▶", "small", () => shiftPiano(12));
+// (Phones: arrows only, so the pinned keyboard's controls fit one line.)
+const octaveDown = button(SMALL_SCREEN ? "◀" : "◀ オクターブ", "small", () => shiftPiano(-12));
+octaveDown.title = "1 オクターブ下へ(Z)";
+const octaveUp = button(SMALL_SCREEN ? "▶" : "オクターブ ▶", "small", () => shiftPiano(12));
+octaveUp.title = "1 オクターブ上へ(X)";
 octaveDown.hidden = octaveUp.hidden = !SMALL_SCREEN;
 function shiftPiano(delta: number): void {
   const span = piano.high - piano.low;
@@ -1013,7 +1019,8 @@ const pinToggle = button("", "small", () => {
 /** The view on screen has no keyboard (ミックス): nothing is pinned then. Set by setView. */
 let keysAway = false;
 function showPinned(): void {
-  pinToggle.textContent = `画面下に固定: ${keysPinned ? "オン" : "オフ"}`;
+  pinToggle.textContent = SMALL_SCREEN ? `固定: ${keysPinned ? "オン" : "オフ"}` : `画面下に固定: ${keysPinned ? "オン" : "オフ"}`;
+  pinToggle.title = "鍵盤を画面の下に固定します(下の設定をスクロールしながら弾けます)";
   keysPanel.classList.toggle("pinned", keysPinned);
   // (The ミックス view has no keyboard: nothing pinned over its strips and the export.)
   document.body.classList.toggle("keys-pinned", keysPinned && !keysAway);
@@ -1041,7 +1048,7 @@ async function connectMidi(): Promise<void> {
 }
 
 const keysPanel = el("section", { className: "panel keys-panel" }, [
-  el("div", { className: "row" }, [keysTitle, octaveDown, octaveUp, pinToggle, pcToggle, pcState, midiButton, midiState, el("span", { className: "fine" }, ["同時発音 ", voiceCount])]),
+  el("div", { className: "row keys-controls" }, [keysTitle, octaveDown, octaveUp, pinToggle, pcToggle, pcState, midiButton, midiState, el("span", { className: "fine keys-voices" }, ["同時発音 ", voiceCount])]),
   imeWarning,
   piano.element,
   keysNote,
@@ -1410,7 +1417,8 @@ const exportStatus = el("p", { className: "fine", role: "status" });
 // Files of the cut for another DAW or sampler (the export-era tool): folded away, the song is made in the 曲 view.
 const exportPanel = el("details", { className: "panel export" }, [
   el("summary", { textContent: "単音・マルチサンプルとして書き出す(ほかの DAW やサンプラー用のファイル)" }),
-  lengthBlock,
+  // (The length is set with the sound, under 持続区間の伸ばし方: it is how 引き延ばし plays too.)
+  el("p", { className: "fine", textContent: "書き出す単音の長さは、音の設定の「長さ」(持続区間の伸ばし方の下)で決めます。" }),
   el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "読み込む先(DAW / サンプラー)" }), destinationSelect]),
   destinationHelp,
   el("label", { className: "control destination" }, [el("span", { className: "control-label", textContent: "ファイルの形式" }), formatSelect]),
@@ -3588,6 +3596,10 @@ async function autoMixAll(): Promise<void> {
   if (songBuilding) return;
   const said: string[] = [];
   const note = (label: string) => said.push(`${label}: ${rollPanel.info.textContent}`);
+  rollPanel.nameTracks();
+  note("トラック名");
+  rollPanel.spreadPans(true);
+  note("パン(真ん中のトラックだけ)");
   await autoEq();
   note("EQ");
   rollPanel.autoDuck();
@@ -3597,7 +3609,11 @@ async function autoMixAll(): Promise<void> {
   await autoLevels();
   note("音量");
   await balanceMaster(rollPanel.balanceStyle());
-  rollPanel.info.textContent = `まとめて自動ミックスをしました。${said.map((s, k) => `${k + 1}. ${s}`).join(" ")} 5. マスター EQ: 下の「音域のバランス」に結果があります。`;
+  said.push("マスター EQ: 下の「音域のバランス」に結果があります。");
+  // Last, the diagnosis of what came out (it changes nothing).
+  await diagnoseMix();
+  said.push(`診断: ${rollPanel.info.textContent}`);
+  rollPanel.info.textContent = `まとめて自動ミックスをしました。${said.map((s, k) => `${k + 1}. ${s}`).join(" ")}`;
 }
 rollPanel.onAutoMixAll = () => void autoMixAll();
 
@@ -3916,7 +3932,7 @@ async function trimMaterial(from: number, to: number): Promise<void> {
   await keep(`settings:${m.id}`, serializeSettings(settings));
   await setLibraryFrames(m.id, b - a);
   rollPanel.trimMaterialClips(m.id, fromSec);
-  await updateStoredSongs(currentProject().id, (song) => trimClips(song.tracks, m.id, fromSec) > 0);
+  await updateStoredSongs(currentProject().id, (song) => trimClips(song.tracks, m.id, fromSec, { bpm: typeof song.bpm === "number" ? song.bpm : 120, tempos: Array.isArray(song.tempos) ? song.tempos : [] } as Tempo) > 0);
   await load(m.name, channels, sr, { id: m.id, settings });
   refreshInstruments();
   selection = null;

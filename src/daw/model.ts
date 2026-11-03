@@ -524,16 +524,35 @@ export function sanitizeProject(raw: unknown): Project {
  * as kept) read `from` seconds earlier; a clip that began in the part cut away starts at the new beginning.
  * Returns how many clips were moved.
  */
-export function trimClips(tracks: unknown, material: string, from: number): number {
+export function trimClips(tracks: unknown, material: string, from: number, tempo?: Tempo): number {
   let moved = 0;
   if (!Array.isArray(tracks)) return 0;
   for (const t of tracks as { notes?: unknown }[]) {
     if (!Array.isArray(t?.notes)) continue;
-    for (const n of t.notes as { clip?: { material?: unknown; offset?: unknown } }[]) {
+    const kept: unknown[] = [];
+    for (const n of t.notes as { start?: unknown; length?: unknown; clip?: { material?: unknown; offset?: unknown } }[]) {
+      kept.push(n);
       if (n?.clip?.material !== material || typeof n.clip.offset !== "number") continue;
-      n.clip.offset = Math.max(0, n.clip.offset - from);
       moved++;
+      const gone = from - n.clip.offset;
+      // A clip that began in the part cut away: what it played there is gone, so it starts that much later (in the
+      // song's time), from the recording's new start — it stays where its sound was. Nothing left of it: it goes.
+      if (gone > 0 && tempo !== undefined && typeof n.start === "number" && typeof n.length === "number") {
+        const startSec = beatsToSec(n.start, tempo);
+        const endSec = beatsToSec(n.start + n.length, tempo);
+        if (startSec + gone >= endSec - 1e-6) {
+          kept.pop();
+          n.clip.offset = 0;
+          continue;
+        }
+        const end = n.start + n.length;
+        const start = secToBeats(startSec + gone, tempo);
+        n.start = start;
+        n.length = end - start;
+      }
+      n.clip.offset = Math.max(0, n.clip.offset - from);
     }
+    if (kept.length !== t.notes.length) t.notes = kept;
   }
   return moved;
 }

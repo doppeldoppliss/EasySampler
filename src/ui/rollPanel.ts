@@ -609,7 +609,7 @@ export class RollPanel {
         button("トラック名を自動で付ける", "small", () => this.nameTracks(), "「MIDI Out #3」のような名前のトラックに、音符から「ベース」「メロディ」「和音」などの名前を付けます(名前のあるトラックはそのまま)"),
       ]),
       el("div", { className: "row tight mix-tools" }, [
-        button("まとめて自動ミックス", "small primary", () => this.onAutoMixAll(), "トラックの EQ → キックに合わせて沈める → 残響 → 音量 → マスター EQ(下で選んだ目安)を、この順で続けて行います。それぞれ「元に戻す」で 1 段ずつ戻せます"),
+        button("まとめて自動ミックス", "small primary", () => this.onAutoMixAll(), "トラック名(名前のないものだけ)→ パン(真ん中のままのトラックだけ)→ トラックの EQ → キックに合わせて沈める → 残響 → 音量 → マスター EQ(下で選んだ目安)を、この順で続けて行い、最後に診断を出します。それぞれ「元に戻す」で 1 段ずつ戻せます"),
         button("ミックスを診断する", "small", () => this.onDiagnose(), "トラックを 1 本ずつと曲全体を書き出して、聞こえの大きさ・ピーク・気になる点を一覧にします(設定は変えません)"),
       ]),
       this.diagnosis,
@@ -848,11 +848,11 @@ export class RollPanel {
 
   /** 素材を切り詰める: the material's clips read `from` seconds earlier in its (shorter) recording. */
   trimMaterialClips(material: string, from: number): number {
-    const moved = trimClips(this.project.tracks, material, from);
+    const moved = trimClips(this.project.tracks, material, from, this.project);
     // (The undo history too: a step back must not bring clips back to where the cut-away audio was.)
     const shift = (json: string) => {
       const state = JSON.parse(json) as { tracks?: unknown };
-      return trimClips(state.tracks, material, from) ? JSON.stringify(state) : json;
+      return trimClips(state.tracks, material, from, this.project) ? JSON.stringify(state) : json;
     };
     this.undoStack = this.undoStack.map(shift);
     this.redoStack = this.redoStack.map(shift);
@@ -1688,12 +1688,13 @@ export class RollPanel {
   }
 
   /** パンを自動で広げる: the chords and accompaniment out to the sides, the rest in the middle (tracks with a pan line left alone). */
-  private spreadPans(): void {
+  /** (`centredOnly`: まとめて自動ミックス — only the tracks still in the middle move, a pan set by hand stays.) */
+  spreadPans(centredOnly = false): void {
     const pans = spreadPans(this.project.tracks);
     let moved = 0;
     this.project.tracks.forEach((t, i) => {
       const p = pans[i];
-      if (p === null || t.panAuto.length || Math.abs(t.pan - p) < 1e-6) return;
+      if (p === null || t.panAuto.length || Math.abs(t.pan - p) < 1e-6 || (centredOnly && Math.abs(t.pan) > 1e-6)) return;
       t.pan = p;
       this.syncMix(t);
       this.client.setTrackMix(t.id, this.mixOf(t));
@@ -1707,7 +1708,7 @@ export class RollPanel {
   }
 
   /** トラック名を自動で付ける: the nameless tracks named by what they play. */
-  private nameTracks(): void {
+  nameTracks(): void {
     const names = autoNames(this.project.tracks);
     let named = 0;
     this.project.tracks.forEach((t, i) => {

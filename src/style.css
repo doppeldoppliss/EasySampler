@@ -1824,3 +1824,34 @@ button.mix-auto {
   text-align: left;
   white-space: nowrap;
 }
+
+/* A phone's pinned keyboard: its controls on one line (the title cut short, the extras left out), the keys a little
+   lower — about 150 px in all instead of 270, so more of the page shows above it (design.md 37). */
+@media (max-width: 600px) {
+  .keys-panel.pinned {
+    padding-top: 8px;
+  }
+  .keys-panel.pinned .keys-controls {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+  .keys-panel.pinned .keys-controls > * {
+    flex: none;
+  }
+  .keys-panel.pinned .keys-controls > .control-label {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .keys-panel.pinned .keys-voices,
+  .keys-panel.pinned .keys-controls > .fine:empty {
+    display: none;
+  }
+  .keys-panel.pinned .piano {
+    height: 88px;
+  }
+}

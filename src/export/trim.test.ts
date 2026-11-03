@@ -28,4 +28,23 @@ describe("素材を切り詰める", () => {
     expect(trimClips(tracks, "m1", 0.8)).toBe(2);
     expect((tracks[0].notes as { clip: { offset: number } }[]).map((n) => n.clip.offset)).toEqual([expect.closeTo(1.2), 0, 2]);
   });
+
+  it("a clip that began in the cut part starts later by what was cut, so it stays where its sound was; one wholly cut goes", () => {
+    // 120 BPM: a beat is 0.5 s. Cut 1 s off the front.
+    const tracks = [
+      {
+        kind: "audio",
+        notes: [
+          { start: 4, length: 4, clip: { material: "m1", offset: 0.5 } }, // 0.5 s of it gone: starts 1 beat later
+          { start: 8, length: 1, clip: { material: "m1", offset: 0 } }, // 0.5 s long, all inside the cut: gone
+          { start: 0, length: 2, clip: { material: "m1", offset: 3 } }, // after the cut: only its offset moves
+        ],
+      },
+    ];
+    expect(trimClips(tracks, "m1", 1, 120)).toBe(3);
+    const notes = tracks[0].notes;
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toMatchObject({ start: 5, length: 3, clip: { offset: 0 } });
+    expect(notes[1]).toMatchObject({ start: 0, length: 2, clip: { offset: 2 } });
+  });
 });

@@ -349,6 +349,11 @@ export class RollPanel {
   private readonly tempoList = el("div", { className: "row tempo-list" });
   /** The seek bar: the song from its start to a little past its last note (or the loop's end), in beats. */
   private readonly seekBar = el("input", { type: "range", min: "0", max: "16", step: "any", value: "0", className: "song-seek", ariaLabel: "再生位置" });
+  // The loop range drawn on the seek bar, its two ends grabbed to set it (bars; Alt: beats). Off, it is drawn faint.
+  private readonly loopStartGrip = el("div", { className: "seek-loop-grip start", title: "ループの始まり(ドラッグで動かす。小節単位、Alt で拍単位)" });
+  private readonly loopEndGrip = el("div", { className: "seek-loop-grip end", title: "ループの終わり(ドラッグで動かす。小節単位、Alt で拍単位)" });
+  private readonly loopBand = el("div", { className: "seek-loop" });
+  private readonly seekWrap = el("div", { className: "seek-wrap" }, [this.loopBand, this.loopStartGrip, this.loopEndGrip, this.seekBar]);
   private seeking = false;
   private seekTimer = 0;
   readonly info = el("p", { className: "fine", role: "status" });
@@ -423,7 +428,7 @@ export class RollPanel {
 
     this.transport = el("div", { className: "sticky-transport song-transport axis-song" }, [
       el("div", { className: "row roll-transport" }, [this.playButton, this.recordButton, this.metronomeToggle, this.loopButton, this.position]),
-      el("div", { className: "row song-seek-row" }, [this.seekBar]),
+      el("div", { className: "row song-seek-row" }, [this.seekWrap]),
     ]);
     for (const input of [this.loopFrom, this.loopTo]) input.addEventListener("change", () => this.loopFromInputs());
     this.element = el("section", { className: "panel roll-panel" }, [
@@ -497,6 +502,8 @@ export class RollPanel {
       clearTimeout(this.seekTimer);
       if (this.playing) this.start();
     });
+    this.grabLoopEnd(this.loopStartGrip, "start");
+    this.grabLoopEnd(this.loopEndGrip, "end");
     this.applyProject();
   }
 
@@ -1973,8 +1980,66 @@ export class RollPanel {
   /** The seek bar reaches a bar past the last note (at least 4 bars, and past the loop and the position). */
   private refreshSeekRange(at = 0): void {
     const bpb = this.project.beatsPerBar;
-    const end = Math.max(this.lastBeat() + bpb, this.project.loop.on ? this.project.loop.end : 0, at, bpb * 4);
-    this.seekBar.max = String(Math.ceil(end / bpb) * bpb);
+    const end = Math.max(this.lastBeat() + bpb, this.project.loop.end, at, bpb * 4);
+    const max = String(Math.ceil(end / bpb) * bpb);
+    if (this.seekBar.max !== max) {
+      this.seekBar.max = max;
+      this.drawSeekLoop();
+    }
+  }
+
+  /** The seek bar's thumb is this wide: its track runs from half of it in to half of it short of the end. */
+  private static readonly SEEK_INSET_PX = 8;
+
+  /** The loop range over the seek bar (where the thumb's centre would stand at each end). */
+  private drawSeekLoop(): void {
+    const { loop } = this.project;
+    const max = Number(this.seekBar.max) || 1;
+    const at = (beat: number) => `calc(${RollPanel.SEEK_INSET_PX}px + (100% - ${2 * RollPanel.SEEK_INSET_PX}px) * ${Math.min(1, Math.max(0, beat / max))})`;
+    this.loopBand.style.left = at(loop.start);
+    this.loopBand.style.width = `calc(${at(loop.end)} - ${at(loop.start)})`;
+    this.loopStartGrip.style.left = at(loop.start);
+    this.loopEndGrip.style.left = at(loop.end);
+    this.seekWrap.classList.toggle("loop-on", loop.on);
+  }
+
+  /** One end of the loop dragged along the seek bar: to whole bars (beats with Alt), the loop switched on, kept at least a beat long. */
+  private grabLoopEnd(grip: HTMLElement, end: "start" | "end"): void {
+    let dragging = false;
+    const beatAt = (event: PointerEvent) => {
+      const box = this.seekBar.getBoundingClientRect();
+      const inset = RollPanel.SEEK_INSET_PX;
+      const share = Math.min(1, Math.max(0, (event.clientX - box.left - inset) / Math.max(1, box.width - 2 * inset)));
+      const step = event.altKey ? 1 : this.project.beatsPerBar;
+      return Math.round((share * Number(this.seekBar.max)) / step) * step;
+    };
+    grip.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      dragging = true;
+      grip.setPointerCapture?.(event.pointerId);
+      grip.classList.add("dragging");
+    });
+    grip.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      const beat = beatAt(event);
+      const { loop } = this.project;
+      const start = end === "start" ? Math.min(beat, loop.end - 1) : loop.start;
+      const stop = end === "end" ? Math.max(beat, loop.start + 1) : loop.end;
+      if (start === loop.start && stop === loop.end && loop.on) return;
+      this.project.loop = { start: Math.max(0, start), end: stop, on: true };
+      this.roll.setLoop(this.project.loop);
+      this.drawSeekLoop();
+      this.refreshButtons();
+    });
+    const finish = () => {
+      if (!dragging) return;
+      dragging = false;
+      grip.classList.remove("dragging");
+      this.sendLoop();
+      this.scheduleSave();
+    };
+    grip.addEventListener("pointerup", finish);
+    grip.addEventListener("pointercancel", finish);
   }
 
   private refreshButtons(): void {
@@ -1989,6 +2054,7 @@ export class RollPanel {
     this.arrangeLabel.textContent = `範囲(${range}、目盛りをドラッグで選ぶ):`;
     this.loopButton.textContent = `ループ: ${loop.on ? `オン(${range})` : "オフ"}`;
     this.loopButton.classList.toggle("on", loop.on);
+    this.drawSeekLoop();
     // (Bars shown as numbers: a range off the bar lines shows its fraction.)
     const bars = (beats: number) => String(+(beats / this.project.beatsPerBar).toFixed(2));
     if (document.activeElement !== this.loopFrom) this.loopFrom.value = bars(loop.start + this.project.beatsPerBar);

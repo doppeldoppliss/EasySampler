@@ -1408,3 +1408,55 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
     font-size: 13px;
   }
 }
+
+/* The loop range on the 曲 seek bar: a band behind the track, and a tab above each end to drag (faint while the loop is off).
+   The tabs sit above the bar, so the seek thumb stays free to grab wherever the loop is. */
+.seek-wrap {
+  position: relative;
+  width: 100%;
+  padding-top: 14px;
+}
+.seek-wrap .song-seek {
+  position: relative;
+  z-index: 1;
+  display: block;
+  background: transparent;
+}
+.seek-loop {
+  position: absolute;
+  top: 14px;
+  bottom: 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  pointer-events: none;
+}
+.seek-wrap.loop-on .seek-loop {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  border: 1px solid var(--accent);
+}
+.seek-loop-grip {
+  position: absolute;
+  top: 0;
+  width: 24px;
+  height: 16px;
+  transform: translateX(-50%);
+  z-index: 2;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.seek-loop-grip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 1px;
+  width: 10px;
+  height: 12px;
+  transform: translateX(-50%);
+  border-radius: 3px 3px 1px 1px;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.seek-wrap.loop-on .seek-loop-grip::after,
+.seek-loop-grip.dragging::after {
+  background: var(--accent);
+}

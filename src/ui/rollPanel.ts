@@ -442,6 +442,14 @@ export class RollPanel {
     el("option", { value: "3", textContent: "ベース: 強め(+3 dB)" }),
     el("option", { value: "6", textContent: "ベース: かなり強め(+6 dB)" }),
   ]);
+  /** 自分で入れたエフェクトも整える: the automatic mixing reaches the effects set by hand too (design.md 37). */
+  private readonly tidyOwnBox = el("input", { type: "checkbox", ariaLabel: "自分で入れたエフェクトも整える" });
+
+  /** Whether the automatic mixing is to tidy the effects set by hand as well. */
+  tidyOwn(): boolean {
+    return this.tidyOwnBox.checked;
+  }
+
   /** ミックスを診断する: its table (empty until run). */
   private readonly diagnosis = el("div", { className: "diagnosis" });
   private readonly balanceCanvas = el("canvas", { className: "balance-chart", ariaLabel: "目安との差(変える前と後)" });
@@ -616,6 +624,7 @@ export class RollPanel {
       ]),
       el("div", { className: "row tight mix-tools" }, [
         button("まとめて自動ミックス", "small primary", () => this.onAutoMixAll(), "トラック名(名前のないものだけ)→ パン(真ん中のままのトラックだけ)→ トラックの EQ → キックに合わせて沈める → 残響 → 音量 → マスター EQ(下で選んだ目安)を、この順で続けて行い、最後に診断を出します。それぞれ「元に戻す」で 1 段ずつ戻せます"),
+        el("label", { className: "inline fine", title: "オンにすると、自分で入れたエフェクトも整えます: リバーブは量を役割の目安に(響きの質はそのまま。ベース・ドラム・速いパートは外す)、サイドチェーンは自動の目安に、EQ はつまみを残してローカットを足す(ベースは低い音を削らない位置に)、ベースのコーラス・ステレオ幅・オートパン・ディレイ・リバーブは外す、ディレイは 30% まで。コンプ・サチュレーションなど音色のエフェクトは触りません" }, [this.tidyOwnBox, " 自分で入れたエフェクトも整える"]),
         button("ミックスを診断する", "small", () => this.onDiagnose(), "トラックを 1 本ずつと曲全体を書き出して、聞こえの大きさ・ピーク・気になる点を一覧にします(設定は変えません)"),
       ]),
       this.diagnosis,
@@ -1633,14 +1642,31 @@ export class RollPanel {
    * or where there was none); where it gives none, an earlier automatic one comes out; one set by hand is kept.
    * The new effects (null: left), and the counts.
    */
-  private autoEffect<K extends "duck" | "reverb">(kind: K, want: (t: Track, i: number) => FxSettings[K] | null, label: (t: Track, fx: FxSettings[K]) => string) {
+  /**
+   * (`own`: 自分で入れたエフェクトも整える — a hand-set one is changed too: where none is wanted it goes, otherwise
+   * `own` says what it becomes; counted in `tidied`.)
+   */
+  private autoEffect<K extends "duck" | "reverb">(
+    kind: K,
+    want: (t: Track, i: number) => FxSettings[K] | null,
+    label: (t: Track, fx: FxSettings[K]) => string,
+    own?: (t: Track, next: FxSettings[K]) => FxSettings[K],
+  ) {
     const bpm = this.project.bpm;
     let kept = 0;
     let removed = 0;
+    let tidied = 0;
     const done: string[] = [];
     const fxs = this.project.tracks.map((t, i) => {
       const next = t.notes.length ? want(t, i) : null;
       const mine = madeByAuto(t.fx, kind, bpm);
+      if (!mine && own) {
+        const fx = structuredClone(t.fx);
+        fx[kind] = next ? own(t, next) : { ...fx[kind], on: false };
+        if (JSON.stringify(fx[kind]) === JSON.stringify(t.fx[kind])) return null;
+        tidied++;
+        return fx;
+      }
       if (!mine) {
         if (next) kept++;
         return null;
@@ -1657,23 +1683,24 @@ export class RollPanel {
       removed++;
       return fx;
     });
-    return { fxs, done, kept, removed };
+    return { fxs, done, kept, removed, tidied };
   }
 
   /** キックに合わせて沈める: the bass and the held accompaniment duck to the drum tracks' kick. */
-  autoDuck(): void {
+  autoDuck(tidy = false): void {
     const hasKick = this.project.tracks.some((t) => t.kind === "drum" && t.notes.some((n) => KICK_KEYS.includes(n.pitch)));
     if (!hasKick) {
       this.info.textContent = "キック(ドラムトラックの 35・36 番の音符)がないので、沈めるきっかけがありません。";
       return;
     }
     const roles = this.roles();
-    const { fxs, done, kept, removed } = this.autoEffect(
+    const { fxs, done, kept, removed, tidied } = this.autoEffect(
       "duck",
       (t, i) => kickDuck(roles[i], this.project.bpm, t.fx.duck, medianLength(t.notes)),
       (t, d) => `「${t.name}」${d.depthDb} dB・${d.releaseMs} ms で戻る`,
+      tidy ? (_t, next) => next : undefined,
     );
-    const notes = `${removed ? `前に自動で入れたサイドチェーンを ${removed} 本から外しました。` : ""}${kept ? `サイドチェーンを自分で入れていた ${kept} 本はそのままです。` : ""}`;
+    const notes = `${removed ? `前に自動で入れたサイドチェーンを ${removed} 本から外しました。` : ""}${tidied ? `自分で入れていたサイドチェーン ${tidied} 本を整えました。` : ""}${kept ? `サイドチェーンを自分で入れていた ${kept} 本はそのままです。` : ""}`;
     this.applyTrackFx(
       fxs,
       done.length
@@ -1683,20 +1710,51 @@ export class RollPanel {
   }
 
   /** 残響を付ける: a room on each track by its part and the tempo. */
-  autoRooms(): void {
+  autoRooms(tidy = false): void {
     const roles = this.roles();
-    const { fxs, done, kept, removed } = this.autoEffect(
+    const { fxs, done, kept, removed, tidied } = this.autoEffect(
       "reverb",
       (t, i) => roomFor(roles[i], this.project.bpm, t.fx.reverb, medianLength(t.notes)),
       (t, r) => `「${t.name}」${Math.round(r.mix * 100)}%`,
+      // (A room set by hand keeps its size, darkness and pre-delay — its character — and takes the part's amount.)
+      tidy ? (t, next) => ({ ...t.fx.reverb, mix: next.mix }) : undefined,
     );
-    const notes = `${removed ? `前に自動で入れたリバーブを ${removed} 本から外しました。` : ""}${kept ? `リバーブを自分で入れていた ${kept} 本はそのままです。` : ""}`;
+    const notes = `${removed ? `前に自動で入れたリバーブを ${removed} 本から外しました。` : ""}${tidied ? `自分で入れていたリバーブ ${tidied} 本の量を整えました(要らないパートからは外しました)。` : ""}${kept ? `リバーブを自分で入れていた ${kept} 本はそのままです。` : ""}`;
     this.applyTrackFx(
       fxs,
       done.length
         ? `リバーブを入れました(かかる量): ${done.join("、")}。長さはテンポに合わせました。${notes}「元に戻す」で戻せます。`
         : `残響を付けるトラック(メロディ・和音・伴奏・ハモリのうち、16 分音符より長い音が中心のもの)がありませんでした。${notes}`,
     );
+  }
+
+  /**
+   * 自分で入れたエフェクトも整える, the rest: on a bass, what widens or smears it (chorus, stereo width, auto-pan, delay,
+   * reverb) off — the lows in the middle, mono and dry; elsewhere a delay over 30% brought to 30%.
+   */
+  tidyOwnEffects(): void {
+    const roles = this.roles();
+    const said: string[] = [];
+    const fxs = this.project.tracks.map((t, i) => {
+      const fx = structuredClone(t.fx);
+      const off: string[] = [];
+      if (roles[i] === "bass") {
+        for (const [k, name] of [["chorus", "コーラス"], ["width", "ステレオ幅"], ["pan", "オートパン"], ["delay", "ディレイ"], ["reverb", "リバーブ"]] as const) {
+          if (fx[k].on) {
+            // (In place: the group is a copy already, and TypeScript cannot pair a union key with its value.)
+            fx[k].on = false;
+            off.push(name);
+          }
+        }
+      } else if (fx.delay.on && fx.delay.mix > 0.3) {
+        fx.delay = { ...fx.delay, mix: 0.3 };
+        off.push("ディレイを 30% に");
+      }
+      if (!off.length) return null;
+      said.push(`「${t.name}」${off.join("・")}${roles[i] === "bass" ? "をオフ" : ""}`);
+      return fx;
+    });
+    this.applyTrackFx(fxs, said.length ? `エフェクトを整えました: ${said.join("、")}。「元に戻す」で戻せます。` : "ベースの広がり系エフェクトや、大きすぎるディレイはありませんでした。");
   }
 
   /** パンを自動で広げる: the chords and accompaniment out to the sides, the rest in the middle (tracks with a pan line left alone). */

@@ -3542,7 +3542,7 @@ rollPanel.onAutoLevels = () => void autoLevels();
  * by section) are strong and so are they. An EQ set by hand is kept; one the automatic mixing put in before is
  * replaced, or taken out where the track's part no longer wants one.
  */
-async function autoEq(): Promise<void> {
+async function autoEq(tidy = false): Promise<void> {
   if (songBuilding) return;
   const project = rollPanel.snapshot();
   const roles = rollPanel.roles();
@@ -3550,11 +3550,25 @@ async function autoEq(): Promise<void> {
   const wanted = new Set(["lead", "chords", "backing", "harmony"]);
   const mine = (i: number) => madeByAuto(project.tracks[i].fx, "eq", project.bpm);
   const targets = project.tracks.flatMap((t, i) => (heard.has(i) && t.kind === "melodic" && wanted.has(roles[i]) ? [i] : []));
-  const kept = targets.filter((i) => !mine(i));
+  // (Tidying: an EQ set by hand keeps its knobs and gets a low cut where it has none; a bass's cut over its lowest
+  // note comes down under it.)
+  const handTidy: (FxSettings | null)[] = project.tracks.map((t, i) => {
+    if (!tidy || !t.fx.eq.on) return null;
+    const notes = withHarmony(t.notes, t.harmony, t.glide);
+    if (targets.includes(i)) return !mine(i) && t.fx.eq.lowCutHz === 0 && notes.length ? { ...structuredClone(t.fx), eq: { ...t.fx.eq, lowCutHz: lowCutFor(notes) } } : null;
+    // (A bass's cut, set by hand or taken for an old automatic one, never over its lowest note.)
+    if (roles[i] === "bass" && notes.length) {
+      const lowest = 440 * 2 ** ((Math.min(...notes.map((n) => n.pitch)) - 69) / 12);
+      if (t.fx.eq.lowCutHz > lowest) return { ...structuredClone(t.fx), eq: { ...t.fx.eq, lowCutHz: Math.round(lowest * 0.7) } };
+    }
+    return null;
+  });
+  const tidiedEq = handTidy.filter(Boolean).length;
+  const kept = targets.filter((i) => !mine(i) && !handTidy[i]);
   const work = targets.filter(mine);
   // (An automatic EQ on a track whose part wants none now — the bass, say: taken out.)
   const off = project.tracks.flatMap((t, i) => (!targets.includes(i) && t.fx.eq.on && t.fx.eq.auto ? [i] : []));
-  if (!work.length && !off.length) {
+  if (!work.length && !off.length && !tidiedEq) {
     rollPanel.info.textContent = targets.length
       ? `EQ を入れるトラックはありませんでした(対象の ${targets.length} 本はどれも EQ を自分で入れてあります)。`
       : "EQ を入れるトラック(メロディ・和音・伴奏・ハモリ)がありませんでした。";
@@ -3598,9 +3612,12 @@ async function autoEq(): Promise<void> {
       fx.eq = { ...DEFAULT_FX.eq };
       fxs[i] = fx;
     }
+    handTidy.forEach((fx, i) => {
+      if (fx) fxs[i] = fx;
+    });
     rollPanel.applyTrackFx(
       fxs,
-      `${said.length ? `トラックの EQ を入れました: ${said.join("、")}。` : ""}${off.length ? `前に自動で入れた EQ を ${off.length} 本から外しました。` : ""}${!leads.length && dipped.length ? "メロディのトラックがないので、ぶつかりを削る EQ は入れていません。" : ""}${kept.length ? `EQ を自分で入れていた ${kept.length} 本はそのままです。` : ""}「元に戻す」で戻せます。`,
+      `${said.length ? `トラックの EQ を入れました: ${said.join("、")}。` : ""}${off.length ? `前に自動で入れた EQ を ${off.length} 本から外しました。` : ""}${!leads.length && dipped.length ? "メロディのトラックがないので、ぶつかりを削る EQ は入れていません。" : ""}${tidiedEq ? `自分で入れていた EQ ${tidiedEq} 本のローカットを整えました(つまみはそのまま)。` : ""}${kept.length ? `EQ を自分で入れていた ${kept.length} 本はそのままです。` : ""}「元に戻す」で戻せます。`,
     );
   } finally {
     songBuilding = false;
@@ -3621,12 +3638,17 @@ async function autoMixAll(): Promise<void> {
   note("トラック名");
   rollPanel.spreadPans(true);
   note("パン(真ん中のトラックだけ)");
-  await autoEq();
+  const tidy = rollPanel.tidyOwn();
+  await autoEq(tidy);
   note("EQ");
-  rollPanel.autoDuck();
+  rollPanel.autoDuck(tidy);
   note("沈め");
-  rollPanel.autoRooms();
+  rollPanel.autoRooms(tidy);
   note("残響");
+  if (tidy) {
+    rollPanel.tidyOwnEffects();
+    note("エフェクトの整理");
+  }
   await autoLevels();
   note("音量");
   await balanceMaster(rollPanel.balanceStyle());

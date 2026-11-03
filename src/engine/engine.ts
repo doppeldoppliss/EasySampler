@@ -32,7 +32,7 @@
 //
 // Nothing here allocates while rendering.
 
-import { normalizeRemoved } from "../instrument/layout";
+import { normalizeRemoved, playedParts } from "../instrument/layout";
 import type { InstrumentParams, Markers } from "../instrument/types";
 
 export interface PreparedSource {
@@ -308,12 +308,15 @@ export class Engine {
     return note + bend - params.root;
   }
 
-  /** How fast the read position moves through the material here: 1 ÷ the part's stretch factor (from the sustain on, the sustain's). */
+  /**
+   * How fast the read position moves through the material here: the head at 1 ÷ its stretch factor, the rest at
+   * the recording's pace (a "stretch" sustain at the note's). 録音の終わりまで plays the whole range at its own pace.
+   */
   private speedAt(v: Voice, position: number): number {
     const params = this.params!;
     if (params.sustainMode === "stretch" && position >= this.sustainStart && position < this.sustainEnd) return v.stretchSpeed;
-    const s = params.stretch;
-    return 1 / Math.max(0.05, position < this.sustainStart ? s.head : s.sustain);
+    if (position >= this.sustainStart || playedParts(params).tail) return 1;
+    return 1 / Math.max(0.05, params.stretch.head);
   }
 
   /**
@@ -715,12 +718,11 @@ export class Engine {
    */
   private playoutRemaining(v: Voice): number {
     const params = this.params!;
-    const s = params.stretch;
-    // From the sustain on, a one-shot plays to the end at the sustain's speed.
-    const after = (from: number) => this.playedBetween(Math.max(from, this.sustainStart), this.rangeEnd) * Math.max(0.05, s.sustain);
+    // 録音の終わりまで plays the whole range at the recording's pace; 頭部だけ, the head at its own.
+    const after = (from: number) => this.playedBetween(Math.max(from, this.sustainStart), this.rangeEnd);
     let out: number;
     if (v.phase === Phase.Head) {
-      const head = this.playedBetween(v.srcTime, this.sustainStart) * Math.max(0.05, s.head);
+      const head = this.playedBetween(v.srcTime, this.sustainStart) * (playedParts(params).tail ? 1 : Math.max(0.05, params.stretch.head));
       if (!params.sustainEnabled) out = head;
       else if (params.sustainMode === "none") out = head + after(this.sustainStart);
       else return Infinity;

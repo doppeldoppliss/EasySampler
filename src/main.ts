@@ -349,8 +349,10 @@ const guide = el("aside", { className: "steps", hidden: safeStorage(GUIDE_KEY) =
 
 // ---------------------------------------------------------------- panel 1: the material and its cuts
 
-/** The legend's 持続区間: what it does in the cut's 作り方 (gone when the sustain is off, 頭部だけ). */
-const sustainLegend = el("span", {}, [el("span", { className: "band-dot sustain" }), el("span")]);
+// The legend: the head and the sustain (伸ばす), the head only (頭部だけ), or the range alone (録音の終わりまで).
+const headLegend = el("span", {}, [el("span", { className: "band-dot head" }), "頭部 = 1 回だけ鳴る出だし　"]);
+const sustainLegend = el("span", {}, [el("span", { className: "band-dot sustain" }), "持続区間 = 押している間伸ばす部分"]);
+const rangeLegend = el("span", {}, [el("span", { className: "band-dot head" }), "鳴らす範囲 = 録音のこの部分を、そのままの長さで 1 回鳴らす"]);
 const cutSelect = el("select", { ariaLabel: "音源", className: "cut-select" });
 cutSelect.addEventListener("change", () => selectCut(Number(cutSelect.value)));
 const cutName = el("input", { type: "text", className: "cut-name", ariaLabel: "音源の名前", maxLength: 40 });
@@ -487,7 +489,7 @@ const clearRemovedButton = button("削除をすべて戻す", "small", () => {
 function afterMarkersEdited(): void {
   if (!markers) return;
   if (material && params.rootMode === "auto") {
-    const root = rootForMarkers(material.analysis.track, markers);
+    const root = rootForMarkers(material.analysis.track, markers, params);
     if (root) {
       cuts[current].detectedRoot = root.midi;
       params = { ...params, root: root.midi };
@@ -605,7 +607,7 @@ const materialPanel = el("section", { className: "panel" }, [
       el("span", { className: "fine", textContent: "判定した高さ" }),
       rootLabel,
       rootSource,
-      el("span", { className: "fine root-help", textContent: "素材はこの高さで鳴っているとみなし、弾いた鍵・音符の高さとの差だけ移調します(自動のときは持続区間に追従)。" }),
+      el("span", { className: "fine root-help", textContent: "素材はこの高さで鳴っているとみなし、弾いた鍵・音符の高さとの差だけ移調します(自動のときは範囲と持続区間に追従。録音の終わりまででは範囲全体を均等に見ます)。" }),
       el("span", { className: "row tight root-nudge" }, [rootButton("基準 −1半音", -1), rootButton("基準 −5¢", -0.05), rootButton("基準 +5¢", 0.05), rootButton("基準 +1半音", 1), detectedButton]),
     ]),
     el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, el("span", { className: "spacer" }), undoButton, redoButton, zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
@@ -621,7 +623,7 @@ const materialPanel = el("section", { className: "panel" }, [
     el("span", { className: "swatch original" }), "元のピッチ  ",
     el("span", { className: "swatch edited" }), "整えたあと(試聴の高さで鳴らしたとき)",
   ]),
-  el("p", { className: "fine band-legend" }, [el("span", { className: "band-dot head" }), "頭部 = 1 回だけ鳴る出だし　", sustainLegend]),
+  el("p", { className: "fine band-legend" }, [headLegend, sustainLegend, rangeLegend]),
   fixBar,
 ]);
 
@@ -684,7 +686,6 @@ const lengthBlock = el("div", { className: "length" }, [
 
 // Speeds (VocalShifter's TIME, as one factor per part) and the vibrato (VIB), in the open where they are reached for.
 const stretchFormat = (v: number) => `×${v.toFixed(2)}`;
-const sustainStretchRow = range("持続区間から後の長さ ×(×2 = 2 倍ゆっくり)", 0.25, 8, 0.05, () => params.stretch.sustain, (p, v) => (p.stretch.sustain = v), stretchFormat);
 const timePanel = el("details", { className: "sub" }, [
   el("summary", { textContent: "頭部の長さ(倍率。×2 = 2 倍ゆっくり)" }),
   el("p", { className: "fine", textContent: "1.00 が録音のまま。伸ばす作り方では、持続区間の長さは押している長さ(音符の長さ)で決まります。" }),
@@ -711,6 +712,8 @@ const makeSelect = el("select", { ariaLabel: "作り方" }, [
 ]);
 makeSelect.addEventListener("change", () => {
   update((p) => Object.assign(p, withMakeMode(p, makeSelect.value as MakeMode)));
+  // (録音の終わりまで weighs the range evenly: the detected root may move.)
+  afterMarkersEdited();
   refreshControls();
 });
 controlsRefreshers.push(() => (makeSelect.value = makeModeOf(params)));
@@ -725,6 +728,7 @@ const playRangeRow = select(
   () => (params.sustainEnabled ? "full" : "head"),
   (p, v) => (p.sustainEnabled = v === "full"),
 );
+playRangeRow.querySelector("select")!.addEventListener("change", () => (afterMarkersEdited(), refreshControls()));
 
 /** What the chosen 伸ばし方 does. */
 const sustainHelp = el("p", { className: "fine help" });
@@ -791,9 +795,12 @@ function refreshMakeMode(): void {
   // (A one-shot only fades where it is let go with 離したら止める.)
   releaseRow.hidden = !hold && !params.stopOnRelease;
   refreshVolumeSummary();
-  sustainStretchRow.hidden = hold || !params.sustainEnabled;
-  sustainLegend.hidden = !params.sustainEnabled;
-  sustainLegend.lastElementChild!.textContent = hold ? "持続区間 = 押している間伸ばす部分" : "持続区間 = ここから後ろが「持続区間から後の長さ」で伸び縮み";
+  // 録音の終わりまで: the range only (no head or sustain, no stretch).
+  const rangeOnly = playedParts(params).tail;
+  timePanel.hidden = rangeOnly;
+  headLegend.hidden = rangeOnly;
+  sustainLegend.hidden = !hold;
+  rangeLegend.hidden = !rangeOnly;
   const texts: Record<string, string> = {
     pool: "持続区間の安定した周期をつなぎ合わせて、押している間いくらでも伸ばします(自然)。",
     stretch: "持続区間全体を「長さ」に収まるようゆっくり鳴らします(VocalShifter の TIME のように、声の変化が残る)。長さを超えて押すと持続区間の終わりから「自然」で続きます。",
@@ -851,7 +858,6 @@ const tunePanel = el("section", { className: "panel tune" }, [
   held(sustainHelp),
   (wavetableRow = range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`)),
   oneShot(playRangeRow),
-  sustainStretchRow,
   oneShot(stopOnReleaseRow),
   pitchModeNote,
   shaping(pitchGroup([
@@ -2712,7 +2718,7 @@ async function setCorrections(corrections: PitchCorrection[]): Promise<void> {
     editor.setMaterial({ mono: target.mono, sampleRate: target.sampleRate, track: analysis.track });
     editor.setSelection(selection);
     for (const cut of cuts) {
-      const root = rootForMarkers(analysis.track, cut.markers);
+      const root = rootForMarkers(analysis.track, cut.markers, cut.params);
       cut.detectedRoot = root?.midi ?? null;
       if (cut.params.rootMode === "auto" && root) cut.params = { ...cut.params, root: root.midi };
     }
@@ -2830,7 +2836,7 @@ function applySettings(file: SettingsFile, analysed = false): void {
   const duration = material.analysis.durationSec;
   cuts = file.cuts.map((c) => {
     const m = clampMarkers({ ...c.markers, rangeEnd: Math.min(c.markers.rangeEnd, duration) });
-    const detected = rootForMarkers(material!.analysis.track, m);
+    const detected = rootForMarkers(material!.analysis.track, m, c.params);
     return { ...c, markers: m, params: { ...c.params, maxVoices: DEFAULT_PARAMS.maxVoices }, detectedRoot: detected?.midi ?? null };
   });
   current = file.currentCut;
@@ -3364,7 +3370,7 @@ editor.onMarkersChange = (next, final) => {
   markers = next;
   if (final && material && params.rootMode === "auto") {
     // The root leans on the sustain, so it follows when the sustain moves.
-    const root = rootForMarkers(material.analysis.track, next);
+    const root = rootForMarkers(material.analysis.track, next, params);
     if (root) {
       cuts[current].detectedRoot = root.midi;
       params = { ...params, root: root.midi };

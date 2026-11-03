@@ -53,7 +53,10 @@ export function hiddenParts(markers: Markers, parts: { sustain: boolean; tail: b
   return range && range.end > range.start ? [range] : [];
 }
 
-/** Which parts `params` plays: the sustain unless switched off (頭部だけ); what follows it only in a one-shot. */
+/**
+ * Which parts `params` plays: the sustain unless switched off (頭部だけ); what follows it only in a one-shot.
+ * `tail` is 録音の終わりまで: the range played through once as it is, the head and the sustain not told apart.
+ */
 export function playedParts(params: InstrumentParams): { sustain: boolean; tail: boolean } {
   return { sustain: params.sustainEnabled, tail: params.sustainEnabled && params.sustainMode === "none" };
 }
@@ -108,7 +111,8 @@ export function outputLayout(markers: Markers, params: InstrumentParams, holdSec
   const sustainSrcSec = usedBetween(markers, markers.sustainStart, markers.sustainEnd);
   const skipped = !params.sustainEnabled;
   const elastic = !skipped && params.sustainMode !== "none";
-  const headSec = headSrcSec * params.stretch.head;
+  // (録音の終わりまで plays at the recording's pace throughout.)
+  const headSec = headSrcSec * (skipped || elastic ? params.stretch.head : 1);
   let sustainSec: number;
   let tailSrcSec: number;
   let tailSec: number;
@@ -122,10 +126,10 @@ export function outputLayout(markers: Markers, params: InstrumentParams, holdSec
     tailSrcSec = 0;
     tailSec = 0;
   } else {
-    // A one-shot: from the sustain to the end, at the sustain's speed (持続区間から後の長さ).
-    sustainSec = sustainSrcSec * params.stretch.sustain;
+    // 録音の終わりまで: on to the range's end, as recorded.
+    sustainSec = sustainSrcSec;
     tailSrcSec = usedBetween(markers, markers.sustainEnd, markers.rangeEnd);
-    tailSec = tailSrcSec * params.stretch.sustain;
+    tailSec = tailSrcSec;
   }
   void resample;
   return {

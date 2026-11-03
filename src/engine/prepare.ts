@@ -6,7 +6,8 @@ import { findPitchMarks, pitchAt, type PitchMarks } from "../analysis/pitchMarks
 import { analyzePitch, type PitchTrack, type PyinOptions } from "../analysis/pyin";
 import { rootPitch, type RootPitch } from "../analysis/rootPitch";
 import { suggestMarkers } from "../instrument/markers";
-import type { Markers } from "../instrument/types";
+import { playedParts } from "../instrument/layout";
+import type { InstrumentParams, Markers } from "../instrument/types";
 import type { PreparedSource } from "./engine";
 
 export interface MaterialAnalysis {
@@ -38,12 +39,15 @@ export function analyzeMaterial(channels: readonly Float32Array[], sampleRate: n
   return { sampleRate, durationSec, track, marks, markers, root };
 }
 
-/** The root over the used range, leaning on the sustain (what the ear takes as the pitch). */
-export function rootForMarkers(track: PitchTrack, markers: Markers): RootPitch | null {
+/**
+ * The root over the used range, leaning on the sustain (what the ear takes as the pitch). With `params` set to
+ * 録音の終わりまで there is no sustain to lean on (only the range is shown and played): the range counts evenly.
+ */
+export function rootForMarkers(track: PitchTrack, markers: Markers, params?: InstrumentParams): RootPitch | null {
   return rootPitch(track, {
     from: markers.rangeStart,
     to: markers.rangeEnd,
-    emphasis: { start: markers.sustainStart, end: markers.sustainEnd, weight: 3 },
+    emphasis: params && playedParts(params).tail ? undefined : { start: markers.sustainStart, end: markers.sustainEnd, weight: 3 },
   });
 }
 

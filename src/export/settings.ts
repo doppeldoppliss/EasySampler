@@ -169,7 +169,6 @@ function readParams(raw: unknown): InstrumentParams {
     wavetableCycles: clamp(Math.round(num(raw.wavetableCycles, d.wavetableCycles)), 1, 16),
     stretch: {
       head: clamp(num(isRecord(raw.stretch) ? raw.stretch.head : undefined, d.stretch.head), 0.25, 4),
-      sustain: clamp(num(isRecord(raw.stretch) ? raw.stretch.sustain : undefined, d.stretch.sustain), 0.25, 8),
     },
     wobble: {
       vibratoCents: clamp(num(wobble.vibratoCents, d.wobble.vibratoCents), 0, 200),

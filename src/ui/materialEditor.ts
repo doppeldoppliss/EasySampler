@@ -73,11 +73,15 @@ const DOUBLE_TAP_PX = 24;
 /** The closest zoom: this many seconds across the plot. */
 const MIN_VIEW_SEC = 0.05;
 
-// (No tailStart: 語尾 was taken out; the tail's start follows the sustain's end.)
-const HANDLE_ORDER: Handle[] = ["rangeStart", "attack", "sustainStart", "sustainEnd", "rangeEnd"];
-/** The handles the user may reach: the range's end only where the cut plays on past its sustain (a one-shot), the sustain's end only where the sustain plays. */
-const HELD_HANDLES: Handle[] = HANDLE_ORDER.filter((h) => h !== "rangeEnd");
-const HEAD_HANDLES: Handle[] = HANDLE_ORDER.filter((h) => h !== "rangeEnd" && h !== "sustainEnd");
+// The handles each way of playing uses (no tailStart: 語尾 was taken out; no attack: nothing plays by it).
+/** The markers in their order in time (a moved one pushes its neighbours, shown or not). */
+const MARKER_ORDER: Handle[] = ["rangeStart", "attack", "sustainStart", "sustainEnd", "rangeEnd"];
+/** 録音の終わりまで: the range only (it plays once, at the recording's pace, from end to end). */
+const RANGE_HANDLES: Handle[] = ["rangeStart", "rangeEnd"];
+/** 伸ばす: the head and the sustain (nothing past the sustain sounds). */
+const HELD_HANDLES: Handle[] = ["rangeStart", "sustainStart", "sustainEnd"];
+/** 頭部だけ: the head only. */
+const HEAD_HANDLES: Handle[] = ["rangeStart", "sustainStart"];
 
 export class MaterialEditor {
   readonly element: HTMLElement;
@@ -398,12 +402,13 @@ export class MaterialEditor {
   }
 
   /**
-   * The handles shown and reached. A cut that holds (伸ばす) never sounds past its sustain, so its range's end does
-   * nothing; one that plays its head only (頭部だけ) has no sustain either, so the sustain's end goes too. They are not
-   * shown (they stay where they were, for the settings that use them again).
+   * The handles shown and reached. 録音の終わりまで plays the range through once, so it has the range's two ends
+   * only; a cut that holds (伸ばす) never sounds past its sustain, so its range's end does nothing; one that plays
+   * its head only (頭部だけ) has no sustain either. The others are not shown (they stay where they were, for the
+   * settings that use them again).
    */
   private handles(): Handle[] {
-    return this.parts.tail ? HANDLE_ORDER : this.parts.sustain ? HELD_HANDLES : HEAD_HANDLES;
+    return this.parts.tail ? RANGE_HANDLES : this.parts.sustain ? HELD_HANDLES : HEAD_HANDLES;
   }
 
   /** Where the cut's sound ends in the material: the range's end for a one-shot, the sustain's end when held, the head's for 頭部だけ. */
@@ -623,12 +628,12 @@ export class MaterialEditor {
 
   /** The markers with one moved; neighbours give way so the order holds. */
   private moved(handle: Handle, time: number): Markers {
-    const index = HANDLE_ORDER.indexOf(handle);
+    const index = MARKER_ORDER.indexOf(handle);
     const m = { ...this.markers!, [handle]: time };
     // Moving the sustain end drags a tail start that sat on it along (the usual case).
     if (handle === "sustainEnd") m.tailStart = time;
-    for (let i = index + 1; i < HANDLE_ORDER.length; i++) m[HANDLE_ORDER[i]] = Math.max(m[HANDLE_ORDER[i]], time);
-    for (let i = index - 1; i >= 0; i--) m[HANDLE_ORDER[i]] = Math.min(m[HANDLE_ORDER[i]], time);
+    for (let i = index + 1; i < MARKER_ORDER.length; i++) m[MARKER_ORDER[i]] = Math.max(m[MARKER_ORDER[i]], time);
+    for (let i = index - 1; i >= 0; i--) m[MARKER_ORDER[i]] = Math.min(m[MARKER_ORDER[i]], time);
     return clampMarkers(m);
   }
 
@@ -800,11 +805,14 @@ export class MaterialEditor {
     g.lineWidth = 3 * dpr;
     curve((p) => this.target + (1 - this.flatten) * (p - this.root), markers.rangeStart, this.playedEnd(markers));
 
-    // Marker strip: head / sustain / tail bands with labels.
-    const bands: [number, number, string, string][] = [
-      [markers.rangeStart, markers.sustainStart, "--band-head", "頭部"],
-      [markers.sustainStart, markers.sustainEnd, "--band-sustain", "持続区間"],
-    ].filter(([, , color]) => (color !== "--band-sustain" || this.parts.sustain) && (color !== "--band-tail" || this.parts.tail)) as [number, number, string, string][];
+    // Marker strip: the head and the sustain with labels, or (録音の終わりまで) the range as one band.
+    const bands: [number, number, string, string][] = this.parts.tail
+      ? [[markers.rangeStart, markers.rangeEnd, "--band-head", "鳴らす範囲"]]
+      : [
+          [markers.rangeStart, markers.sustainStart, "--band-head", "頭部"],
+          [markers.sustainStart, markers.sustainEnd, "--band-sustain", "持続区間"],
+        ];
+    if (!this.parts.sustain) bands.length = 1;
     g.fillStyle = cssVar("--strip");
     g.fillRect(0, plotHeight, width, strip);
     g.font = `${11 * dpr}px system-ui, sans-serif`;
@@ -863,8 +871,8 @@ export class MaterialEditor {
         [0, layout.headSec, "--band-head", `頭部 ${ratio(layout.headSec, layout.headSrcSec)}`],
         [layout.headSec, layout.headSec + layout.sustainSec, "--band-sustain", `持続区間 ${layout.elastic ? `${ratio(layout.sustainSec, layout.sustainSrcSec)}(音の長さまで伸ばす)` : ratio(layout.sustainSec, layout.sustainSrcSec)}`],
       ];
-      // A one-shot plays on past the sustain to the recording's end: one band from the head on (語尾 is no more, so no pink part).
-      if (!layout.elastic && layout.tailSec > 1e-6) parts[1] = [layout.headSec, layout.totalSec, "--band-sustain", `持続区間〜終わり ${ratio(layout.sustainSec + layout.tailSec, layout.sustainSrcSec + layout.tailSrcSec)}`];
+      // 録音の終わりまで: the range as it is, one band.
+      if (this.parts.tail) parts.splice(0, 2, [0, layout.totalSec, "--band-head", "鳴らす範囲(録音のまま)"]);
       g.font = `${11 * dpr}px system-ui, sans-serif`;
       for (const [from, to, color, text] of parts) {
         if (to - from <= 1e-6) continue;

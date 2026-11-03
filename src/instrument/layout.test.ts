@@ -52,14 +52,19 @@ describe("outputLayout", () => {
     expect(layout.totalSec).toBeCloseTo(2);
   });
 
-  it("a one-shot plays the head at its speed, and from the sustain to the end at the sustain's; the hold is ignored", () => {
-    const p: InstrumentParams = { ...DEFAULT_PARAMS, sustainMode: "none", stretch: { head: 2, sustain: 3 } };
+  it("録音の終わりまで plays the range as recorded: the head's factor and the hold are ignored", () => {
+    const p: InstrumentParams = { ...DEFAULT_PARAMS, sustainMode: "none", stretch: { head: 2 } };
     const layout = outputLayout(markers, p, 99);
-    expect(layout.headSec).toBeCloseTo(0.4);
-    expect(layout.sustainSec).toBeCloseTo(0.9);
-    expect(layout.tailSec).toBeCloseTo(1.5);
+    expect(layout.headSec).toBeCloseTo(0.2);
+    expect(layout.sustainSec).toBeCloseTo(0.3);
+    expect(layout.tailSec).toBeCloseTo(0.5);
     expect(layout.elastic).toBe(false);
-    expect(layout.totalSec).toBeCloseTo(2.8);
+    expect(layout.totalSec).toBeCloseTo(1);
+  });
+
+  it("頭部だけ plays the head at its own factor", () => {
+    const p: InstrumentParams = { ...DEFAULT_PARAMS, sustainMode: "none", sustainEnabled: false, stretch: { head: 2 } };
+    expect(outputLayout(markers, p, 99).totalSec).toBeCloseTo(0.4);
   });
 
   it("removed stretches shorten the parts they fall in", () => {
@@ -89,9 +94,9 @@ describe("engine: removals and speeds", () => {
     expect(voicedOnset(after)).toBeLessThan(0.03);
   });
 
-  it("stretches the head: at ×2 a one-shot grows by the head's length", () => {
-    const one = setup({ sustainMode: "none" });
-    const two = setup({ sustainMode: "none", stretch: { head: 2, sustain: 1 } });
+  it("stretches the head: at ×2 a 頭部だけ one-shot grows by the head's length", () => {
+    const one = setup({ sustainMode: "none", sustainEnabled: false });
+    const two = setup({ sustainMode: "none", sustainEnabled: false, stretch: { head: 2 } });
     const a = renderNote(one.source, one.markers, one.params, 62, 1).channels[0].length / SR;
     const b = renderNote(two.source, two.markers, two.params, 62, 1).channels[0].length / SR;
     const headSrc = one.markers.sustainStart - one.markers.rangeStart;
@@ -100,14 +105,12 @@ describe("engine: removals and speeds", () => {
     expect(b - a).toBeLessThan(headSrc * 1.2);
   });
 
-  it("a one-shot with 持続区間から後 at ×3 comes out longer by the stretched amount (to the end)", () => {
+  it("録音の終わりまで ignores the head's factor: the range plays as recorded", () => {
     const base = setup({ sustainMode: "none" });
-    const stretched = setup({ sustainMode: "none", stretch: { head: 1, sustain: 3 } });
+    const stretched = setup({ sustainMode: "none", stretch: { head: 2 } });
     const a = renderNote(base.source, base.markers, base.params, 62, 1).channels[0].length / SR;
     const b = renderNote(stretched.source, stretched.markers, stretched.params, 62, 1).channels[0].length / SR;
-    const sustainSrc = base.markers.rangeEnd - base.markers.sustainStart;
-    expect(b - a).toBeGreaterThan(sustainSrc * 2 * 0.8);
-    expect(b - a).toBeLessThan(sustainSrc * 2 * 1.2);
+    expect(Math.abs(b - a)).toBeLessThan(0.01);
   });
 
   it("the pool ignores marks inside a removed stretch", () => {

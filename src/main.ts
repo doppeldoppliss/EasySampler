@@ -3262,7 +3262,7 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
     }
     // A part on the plain backing synth (簡易シンセ), as it plays on the page.
     if (t.instrument === BACKING) {
-      out.push({ id: t.id, instrument: null, backing: true, notes, ...mix });
+      out.push({ id: t.id, instrument: null, backing: true, synth: t.synth, notes, ...mix });
       continue;
     }
     const found = t.instrument ? findCut(t.instrument) : null;

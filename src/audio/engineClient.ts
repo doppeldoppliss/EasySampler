@@ -217,6 +217,13 @@ export class EngineClient {
     this.post({ type: "preview", instrument, note, sec });
   }
 
+  /** A short note on the plain backing in a 音色 (a 簡易シンセ track). */
+  previewSynth(preset: string, note: number, sec = 0.25): void {
+    this.claimPlayback();
+    this.unlock();
+    this.post({ type: "previewSynth", preset, note, sec });
+  }
+
   /** The instrument the keyboard plays (曲で試す plays its material part on it too). */
   private liveInstrument: string = CURRENT_INSTRUMENT;
 

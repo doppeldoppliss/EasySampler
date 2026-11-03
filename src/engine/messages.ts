@@ -22,6 +22,8 @@ export interface TrackSpec extends MixSettings {
   drumKeys?: (number | null)[];
   /** Portamento (seconds; 0 or absent = off). */
   glide?: number;
+  /** On the plain backing: its tones' 音色 (SYNTH_PRESETS; absent = the default). */
+  synth?: string;
 }
 
 export type ToEngine =
@@ -43,6 +45,8 @@ export type ToEngine =
   | { type: "previewSample"; id: string }
   // A short note on an instrument (placing a note on a track's roll), apart from the keyboard.
   | { type: "preview"; instrument: string; note: number; sec: number }
+  // A short note on the plain backing, in a 音色 (a 簡易シンセ track: placing a note, choosing its 音色).
+  | { type: "previewSynth"; preset: string; note: number; sec: number }
   // A song: its tracks (replacing any), then play from `fromSec` at context frame `atFrame`.
   // The kit (design.md 13.2) on the keyboard: on, the keys play the kit's sounds (by sample id, per GM key) instead of the instrument.
   | { type: "liveKit"; on: boolean; samples: (string | null)[]; keys: (number | null)[] }

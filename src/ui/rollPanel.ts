@@ -56,6 +56,7 @@ import { arrange, type ArrangeKind } from "../daw/arrange";
 import { armOnce, el } from "./dom";
 import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, spreadPans } from "../daw/roles";
 import { PianoRoll } from "./pianoRoll";
+import { isSynthPreset, SYNTH_PRESETS } from "../song/backing";
 
 /** Where the song is kept until the page says which project is open (useStore). */
 const DEFAULT_STORE_KEY = "project";
@@ -1695,13 +1696,34 @@ export class RollPanel {
         t.kind === "melodic" && t.instrument && t.instrument !== BACKING
           ? button("音源を編集", "small track-edit", () => this.onEditCut(t.instrument!), "このトラックが鳴らしているサンプリング済音源を、素材の画面で開きます")
           : null;
+      // A track on the 簡易シンセ: its 音色, in the same place (choosing one plays a note of it).
+      const tone =
+        t.kind === "melodic" && t.instrument === BACKING
+          ? el(
+              "select",
+              { ariaLabel: "簡易シンセの音色", title: "簡易シンセの音色", className: "track-edit track-tone" },
+              Object.entries(SYNTH_PRESETS).map(([id, p]) => el("option", { value: id, textContent: p.label })),
+            )
+          : null;
+      if (tone) {
+        tone.value = t.synth;
+        tone.addEventListener("change", () => {
+          if (!isSynthPreset(tone.value)) return;
+          t.synth = tone.value;
+          this.reload();
+          this.scheduleSave();
+          this.commit();
+          if (!this.playing) this.client.previewSynth(t.synth, this.middleOf(t), 0.6);
+        });
+        tone.addEventListener("focus", () => this.selectTrack(i));
+      }
       const lamp = el("span", { className: "track-lamp", title: "鳴っている間、点きます" });
       const row = el("div", { className: `track-row${selected ? " selected" : ""}` }, [
         el("span", { className: "track-count fine num" }, [lamp, `${t.notes.length}`]),
         name,
         instrument,
         // (A row without one keeps its place empty: the columns line up from row to row.)
-        editCut ?? el("span", { className: "track-slot track-edit" }),
+        editCut ?? tone ?? el("span", { className: "track-slot track-edit" }),
         mute,
         solo,
         el("label", { className: "inline fine track-volume", title: "音量(dB)。ダブルクリックで 0 dB。下のバーはこのトラックの音の大きさ(赤 = 0 dB を超えている)" }, [
@@ -2096,6 +2118,7 @@ export class RollPanel {
         drumKeys: t.kind === "drum" ? kit.keys : undefined,
         notes: toSeqNotes(t.kind === "melodic" ? withHarmony(t.notes, t.harmony, t.glide) : t.notes, this.project, t.kind !== "drum" && t.glide > 0),
         glide: t.kind === "drum" ? 0 : t.glide,
+        synth: t.instrument === BACKING ? t.synth : undefined,
         ...this.mixOf(t),
         };
       });
@@ -2110,7 +2133,8 @@ export class RollPanel {
       if (key !== undefined) this.onKitHit(key);
       return;
     }
-    if (this.track.instrument && this.track.instrument !== BACKING) this.client.previewNote(this.track.instrument, pitch);
+    if (this.track.instrument === BACKING) this.client.previewSynth(this.track.synth, pitch);
+    else if (this.track.instrument) this.client.previewNote(this.track.instrument, pitch);
   }
 
   /** The loop range in song seconds, null while it is off. */
@@ -2220,6 +2244,13 @@ export class RollPanel {
 
   private currentBeat(): number {
     return secToBeats(this.currentSec(), this.project);
+  }
+
+  /** A note in the middle of a track's notes (C4 without any): what a 音色 is tried on. */
+  private middleOf(t: Track): number {
+    if (!t.notes.length) return 60;
+    const pitches = t.notes.map((n) => n.pitch).sort((a, b) => a - b);
+    return pitches[pitches.length >> 1];
   }
 
   private lastBeat(): number {

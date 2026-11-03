@@ -201,6 +201,10 @@ export class BackingSound implements TrackSound {
   constructor(sampleRate: number) {
     this.synth = new BackingSynth(sampleRate);
   }
+  /** The tones' 音色 (SYNTH_PRESETS). */
+  setPreset(id: string | undefined): void {
+    this.synth.setPreset(id);
+  }
   noteOn(note: number, velocity: number, drum: boolean): void {
     this.synth.noteOn(note, velocity, drum);
   }

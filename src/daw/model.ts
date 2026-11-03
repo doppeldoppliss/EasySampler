@@ -5,6 +5,7 @@
 import { sanitizeFx } from "../export/settings";
 import { emptyKit, sanitizeKit, type Kit } from "./kit";
 import { DEFAULT_FX, type FxSettings } from "../instrument/types";
+import { DEFAULT_SYNTH, isSynthPreset, type SynthPreset } from "../song/backing";
 import type { SeqNote } from "../song/parts";
 import type { SongNote } from "../song/midi";
 import type { AutoPoint } from "../song/player";
@@ -46,6 +47,8 @@ export interface Track {
   solo: boolean;
   /** Portamento (seconds; 0 = off): notes that touch or overlap slide from one to the next, one at a time. */
   glide: number;
+  /** On the 簡易シンセ (instrument BACKING): its 音色 (SYNTH_PRESETS). */
+  synth: SynthPreset;
   /** ハモリ (a melodic track): notes added in the key, played by the same cut. */
   harmony: Harmony;
   /** What a note placed on this track gets: its length (beats) and velocity (0–1) (Domino's default Gate / Velocity). */
@@ -210,7 +213,7 @@ export function setTimeSig(project: Project, num: number, den: number): void {
 export const BACKING = "backing";
 
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, harmony: structuredClone(DEFAULT_HARMONY), noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
+  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, synth: DEFAULT_SYNTH, harmony: structuredClone(DEFAULT_HARMONY), noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
 }
 
 /** An audio track: clips of materials on the timeline (a new clip plays `material`). */
@@ -463,6 +466,7 @@ export function sanitizeProject(raw: unknown): Project {
           mute: tr.mute === true,
           solo: tr.solo === true,
           glide: num(tr.glide, 0, 0, 2),
+          synth: isSynthPreset(tr.synth) ? tr.synth : DEFAULT_SYNTH,
           harmony: sanitizeHarmony(tr.harmony),
           noteLength: num(tr.noteLength, 1, MIN_LENGTH, 64),
           noteVelocity: num(tr.noteVelocity, DEFAULT_VELOCITY, 0.01, 1),

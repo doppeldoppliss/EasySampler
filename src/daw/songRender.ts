@@ -26,8 +26,9 @@ export interface RenderTrack {
   samples?: (Float32Array[] | null)[];
   /** A drum track: the GM key of each row on the plain drum sound (null where a one-shot plays). */
   drumKeys?: (number | null)[];
-  /** A track on the plain backing synth (簡易シンセ). */
+  /** A track on the plain backing synth (簡易シンセ), and its 音色. */
   backing?: boolean;
+  synth?: string;
   /** An audio track: note i plays clip i (a recording at this sample rate, from offsetSec in). */
   clips?: { channels: Float32Array[] | null; offsetSec: number }[];
   notes: SeqNote[];
@@ -122,7 +123,9 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
       s.chokes = true;
       sound = s;
     } else if (t.backing) {
-      sound = new BackingSound(sr);
+      const s = new BackingSound(sr);
+      s.setPreset(t.synth);
+      sound = s;
     } else if (t.clips) {
       const clips = t.clips;
       const s = new ClipSound(sr, (material) => clips[Number(material)]?.channels ?? null);

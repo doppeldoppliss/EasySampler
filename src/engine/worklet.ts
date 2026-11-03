@@ -55,6 +55,10 @@ class EngineProcessor extends AudioWorkletProcessor {
   private readonly preview = new EngineSound(sampleRate);
   private previewLeft = 0;
   private previewNote = -1;
+  /** The same for a 簡易シンセ track. */
+  private readonly synthPreview = new BackingSound(sampleRate);
+  private synthPreviewLeft = 0;
+  private synthPreviewNote = -1;
   private readonly liveFx = new FxChain(sampleRate);
   private liveFxOn = false;
   /** The keyboard through the master effects too (the 曲 view), or past them (dry). */
@@ -124,6 +128,7 @@ class EngineProcessor extends AudioWorkletProcessor {
                 ? new ClipSound(sampleRate, (material) => this.sources.get(material)?.channels ?? null)
                 : new BackingSound(sampleRate);
       if (sound instanceof ClipSound) sound.clips = t.clips ?? [];
+      if (sound instanceof BackingSound) sound.setPreset(t.synth);
       if (sound instanceof EngineSound && sound.instrument !== t.instrument) this.apply(sound, t.instrument);
       if (sound instanceof EngineSound) sound.setGlide(t.glide ?? 0);
       if (sound instanceof SampleSound) {
@@ -205,6 +210,13 @@ class EngineProcessor extends AudioWorkletProcessor {
         this.preview.noteOn(message.note, 0.8);
         this.previewNote = message.note;
         this.previewLeft = Math.round(message.sec * sampleRate);
+        break;
+      case "previewSynth":
+        if (this.synthPreviewNote >= 0) this.synthPreview.noteOff(this.synthPreviewNote, false);
+        this.synthPreview.setPreset(message.preset);
+        this.synthPreview.noteOn(message.note, 0.8, false);
+        this.synthPreviewNote = message.note;
+        this.synthPreviewLeft = Math.round(message.sec * sampleRate);
         break;
       case "hold":
         this.hold = message.sec;
@@ -329,6 +341,18 @@ class EngineProcessor extends AudioWorkletProcessor {
         }
       }
       this.preview.render(this.kitL, this.kitR, frames);
+      for (let i = 0; i < frames; i++) left[i] += this.kitL[i];
+      if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.kitR[i];
+    }
+    if (!this.synthPreview.idle()) {
+      if (this.synthPreviewNote >= 0) {
+        this.synthPreviewLeft -= frames;
+        if (this.synthPreviewLeft <= 0) {
+          this.synthPreview.noteOff(this.synthPreviewNote, false);
+          this.synthPreviewNote = -1;
+        }
+      }
+      this.synthPreview.render(this.kitL, this.kitR, frames);
       for (let i = 0; i < frames; i++) left[i] += this.kitL[i];
       if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.kitR[i];
     }

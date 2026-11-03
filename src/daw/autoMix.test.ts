@@ -23,8 +23,8 @@ describe("自動ミックス", () => {
     expect(gains[0]).toBeNull();
     expect(gains[4]).toBeNull();
     const db = (g: number | null) => 20 * Math.log10(g!);
-    // Bass: −20 → −16 (lead −2).
-    expect(db(gains[1])).toBeCloseTo(4, 5);
+    // Bass: −20 → −14 (as loud as the lead).
+    expect(db(gains[1])).toBeCloseTo(6, 5);
     // Two accompaniments: each −6 − 3 = −9 under the lead.
     expect(db(gains[2])).toBeCloseTo(-9, 1);
     expect(db(gains[3])).toBeCloseTo(-9, 1);
@@ -61,7 +61,8 @@ describe("自動ミックス", () => {
   });
 
   it("ducks the bass and the held chords to the kick, gently; not short chords, the lead or the drums", () => {
-    expect(kickDuck("bass", 120, DEFAULT_FX.duck, 0.25)).toMatchObject({ on: true, source: "kick", depthDb: -4, releaseMs: 250 });
+    expect(kickDuck("bass", 120, DEFAULT_FX.duck, 0.25)).toMatchObject({ on: true, source: "kick", depthDb: -3, releaseMs: 125 });
+    expect(kickDuck("chords", 120, DEFAULT_FX.duck, 2)?.releaseMs).toBe(250);
     expect(kickDuck("chords", 120, DEFAULT_FX.duck, 2)?.depthDb).toBe(-2);
     expect(kickDuck("chords", 120, DEFAULT_FX.duck, 0.5)).toBeNull();
     expect(kickDuck("lead", 120, DEFAULT_FX.duck, 2)).toBeNull();
@@ -179,10 +180,10 @@ describe("自動ミックス", () => {
       4,
     );
     const lufs = gains.slice(1).map((g) => -20 + 20 * Math.log10(g!));
-    // The bass's level is the lead's −2 (−16); in power: ½, ¼, ¼ of it.
-    expect(lufs[0]).toBeCloseTo(-16 - 3.01, 1);
-    expect(lufs[1]).toBeCloseTo(-16 - 6.02, 1);
+    // The bass's level is the lead's (−14); in power: ½, ¼, ¼ of it.
+    expect(lufs[0]).toBeCloseTo(-14 - 3.01, 1);
+    expect(lufs[1]).toBeCloseTo(-14 - 6.02, 1);
     const sum = 10 * Math.log10(lufs.reduce((a, l) => a + 10 ** (l / 10), 0));
-    expect(sum).toBeCloseTo(-16, 1);
+    expect(sum).toBeCloseTo(-14, 1);
   });
 });

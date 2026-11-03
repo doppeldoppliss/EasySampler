@@ -13,7 +13,8 @@ import type { Role } from "./roles";
 // ------------------------------------------------------------ volumes
 
 /** How loud each part sits against the lead (dB, LUFS): the reference (an audio track, or the lead) at 0. */
-export const LEVEL_FROM_LEAD: Record<Role, number> = { audio: 0, lead: 0, bass: -2, drum: -1, chords: -5, backing: -6, harmony: -8 };
+// (The bass as loud as the lead, as electronic music and 音MAD have it: at −2 it was heard as weak.)
+export const LEVEL_FROM_LEAD: Record<Role, number> = { audio: 0, lead: 0, bass: 0, drum: -1, chords: -5, backing: -6, harmony: -8 };
 
 export interface LevelIn {
   role: Role;
@@ -157,7 +158,7 @@ export function cleanEq(lowCutHz: number, dip: { hz: number; db: number } | null
 // ------------------------------------------------------------ ducking to the kick
 
 /** How far each part ducks to the kick (dB); the lead, the drums and the audio do not. */
-const DUCK_DB: Partial<Record<Role, number>> = { bass: -4, chords: -2, backing: -2, harmony: -2 };
+const DUCK_DB: Partial<Record<Role, number>> = { bass: -3, chords: -2, backing: -2, harmony: -2 };
 
 /** Notes at least this long (beats, the median) make a part one that is held: only those duck, besides the bass. */
 const HELD_BEATS = 1;
@@ -177,7 +178,9 @@ export function medianLength(notes: readonly Note[]): number {
 export function kickDuck(role: Role, bpm: number, duck: FxSettings["duck"], lengthBeats: number): FxSettings["duck"] | null {
   const depthDb = DUCK_DB[role];
   if (depthDb === undefined || (role !== "bass" && lengthBeats < HELD_BEATS)) return null;
-  return { ...duck, on: true, auto: true, source: "kick", depthDb, releaseMs: Math.round(Math.min(300, Math.max(80, 30000 / bpm))) };
+  // (The bass is back up within a sixteenth — down for half of each beat it lost body; the held parts take an eighth.)
+  const releaseMs = role === "bass" ? Math.round(Math.min(200, Math.max(60, 15000 / bpm))) : Math.round(Math.min(300, Math.max(80, 30000 / bpm)));
+  return { ...duck, on: true, auto: true, source: "kick", depthDb, releaseMs };
 }
 
 // ------------------------------------------------------------ octaves

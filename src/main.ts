@@ -58,6 +58,7 @@ import { clock, RangePicker } from "./ui/rangePicker";
 import { isMidiFile } from "./song/midi";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 import { evenStems, renderSong, type RenderTrack } from "./daw/songRender";
+import { bandSpectrum, fitBalance, type BalanceStyle } from "./fx/balance";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, newSlot, renderSlot, slotFor, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
@@ -3397,6 +3398,38 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
   say(`保存しました: ${built.fileName}(${built.summary})`);
 }
 rollPanel.onExport = (kind) => void exportSong(kind);
+
+/**
+ * 音域のバランス: the song rendered without the master (offline, as the WAV would be), its long-term spectrum
+ * measured, and the master EQ set toward the style's target (design.md 35).
+ */
+async function balanceMaster(style: BalanceStyle): Promise<void> {
+  if (songBuilding) return;
+  const project = rollPanel.snapshot();
+  if (!project.tracks.some((t) => t.notes.length)) {
+    rollPanel.balanceSays("測る音符がありません。");
+    return;
+  }
+  songBuilding = true;
+  try {
+    const rate = client.sampleRate;
+    const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, async (share) => {
+      rollPanel.balanceSays(`曲を測っています… ${Math.round(share * 100)}%`);
+      await yieldToScreen();
+    });
+    rollPanel.balanceSays("周波数の分布を調べています…");
+    await yieldToScreen();
+    const measured = bandSpectrum(song.channels, song.sampleRate);
+    if (!measured) {
+      rollPanel.balanceSays("曲に音がありませんでした(ミュートやソロも確かめてください)。");
+      return;
+    }
+    rollPanel.applyBalance(fitBalance(measured, style, song.sampleRate, project.masterFx.eq), style);
+  } finally {
+    songBuilding = false;
+  }
+}
+rollPanel.onBalance = (style) => void balanceMaster(style);
 client.onMeters = (meters) => rollPanel.showMeters(meters);
 
 /** The cuts of every material, for the tracks' lists. */

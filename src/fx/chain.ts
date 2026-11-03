@@ -14,6 +14,36 @@ const dbToGain = (db: number) => 10 ** (db / 20);
 
 // ------------------------------------------------------------ biquad (RBJ cookbook)
 
+/**
+ * What the EQ (FxSettings.eq, as the chain runs it) does to a sine at `hz` (dB): its five filters' responses
+ * added up (the parts left at 0 dB or out of range skipped, as the chain skips them).
+ */
+export function eqResponseDb(e: FxSettings["eq"], sampleRate: number, hz: number): number {
+  const b = new Biquad();
+  let db = 0;
+  if (e.lowCutHz > 0) {
+    b.set("highpass", Math.max(10, e.lowCutHz), 0.707, 0, sampleRate);
+    db += b.responseDb(hz, sampleRate);
+  }
+  if (e.lowDb !== 0) {
+    b.set("lowshelf", e.lowHz, 0.707, e.lowDb, sampleRate);
+    db += b.responseDb(hz, sampleRate);
+  }
+  if (e.midDb !== 0) {
+    b.set("peaking", e.midHz, e.midQ, e.midDb, sampleRate);
+    db += b.responseDb(hz, sampleRate);
+  }
+  if (e.highDb !== 0) {
+    b.set("highshelf", e.highHz, 0.707, e.highDb, sampleRate);
+    db += b.responseDb(hz, sampleRate);
+  }
+  if (e.highCutHz < 20000) {
+    b.set("lowpass", Math.min(e.highCutHz, sampleRate * 0.45), 0.707, 0, sampleRate);
+    db += b.responseDb(hz, sampleRate);
+  }
+  return db;
+}
+
 type BiquadKind = "lowpass" | "highpass" | "lowshelf" | "highshelf" | "peaking";
 
 class Biquad {
@@ -94,6 +124,20 @@ class Biquad {
     this.x2.fill(0);
     this.y1.fill(0);
     this.y2.fill(0);
+  }
+
+  /** How much it lifts or cuts a sine at `hz` (dB). */
+  responseDb(hz: number, sampleRate: number): number {
+    const w = (TAU * hz) / sampleRate;
+    const c1 = Math.cos(w);
+    const s1 = Math.sin(w);
+    const c2 = Math.cos(2 * w);
+    const s2 = Math.sin(2 * w);
+    const nr = this.b0 + this.b1 * c1 + this.b2 * c2;
+    const ni = -(this.b1 * s1 + this.b2 * s2);
+    const dr = 1 + this.a1 * c1 + this.a2 * c2;
+    const di = -(this.a1 * s1 + this.a2 * s2);
+    return 10 * Math.log10((nr * nr + ni * ni) / Math.max(1e-30, dr * dr + di * di));
   }
 
   tick(x: number, ch: number): number {

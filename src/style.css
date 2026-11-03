@@ -1746,3 +1746,16 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
     width: 64px;
   }
 }
+
+/* 音域のバランス (the ミックス view): the chart shows once something was measured. */
+.balance-box {
+  margin-top: 10px;
+}
+.balance-chart {
+  display: none;
+  width: 100%;
+  height: 140px;
+}
+.balance-chart.on {
+  display: block;
+}

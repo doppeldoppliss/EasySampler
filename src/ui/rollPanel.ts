@@ -57,6 +57,7 @@ import { armOnce, el } from "./dom";
 import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, spreadPans } from "../daw/roles";
 import { PianoRoll } from "./pianoRoll";
 import { isSynthPreset, SYNTH_PRESETS } from "../song/backing";
+import { BALANCE_STYLES, BAND_HZ, type BalanceResult, type BalanceStyle } from "../fx/balance";
 
 /** Where the song is kept until the page says which project is open (useStore). */
 const DEFAULT_STORE_KEY = "project";
@@ -202,6 +203,8 @@ export class RollPanel {
   private rowKeys: number[] = [];
   /** 書き出し: the whole song as a WAV, each track as its own WAV (zip), or the notes as MIDI. */
   onExport: (kind: "wav" | "stems" | "mid") => void = () => {};
+  /** マスター EQ を目安に寄せる: the page renders and measures the song, then calls applyBalance. */
+  onBalance: (style: BalanceStyle) => void = () => {};
   readonly exportStatus = el("p", { className: "fine", role: "status" });
 
   private project: Project = emptyProject();
@@ -412,6 +415,15 @@ export class RollPanel {
   private readonly mixStrips = el("div", { className: "mix-strips" });
   /** The 曲 view's messages, shown in the ミックス view too (spreading the pans, undo, effects reset…). */
   private readonly mixInfo = el("p", { className: "fine", role: "status" });
+  // 音域のバランス: the target style, the button, what it did, and a chart of the song against the target.
+  private readonly balanceSelect = el(
+    "select",
+    { ariaLabel: "目安にする音域のバランス" },
+    (Object.entries(BALANCE_STYLES) as [BalanceStyle, string][]).map(([id, label]) => el("option", { value: id, textContent: label })),
+  );
+  private readonly balanceStatus = el("p", { className: "fine", role: "status" });
+  private readonly balanceCanvas = el("canvas", { className: "balance-chart", ariaLabel: "目安との差(変える前と後)" });
+  private balanceShown: { result: BalanceResult; style: BalanceStyle } | null = null;
   // The spectrum of what plays (the ミックス view), drawn while that view is on screen.
   private readonly spectrumCanvas = el("canvas", { className: "spectrum", ariaLabel: "周波数の分布" });
   private spectrumFrame = 0;
@@ -582,6 +594,16 @@ export class RollPanel {
       ]),
       this.mixInfo,
       this.mixStrips,
+      el("div", { className: "balance-box" }, [
+        el("div", { className: "row tight" }, [
+          el("span", { className: "control-label", textContent: "音域のバランス(マスター EQ)" }),
+          this.balanceSelect,
+          button("マスター EQ を目安に寄せる", "small", () => this.onBalance(this.balanceSelect.value as BalanceStyle), "曲をマスターなしで書き出して周波数の分布を測り、選んだ目安の形へ半分ほど近づくよう、マスターの EQ(ローカット・低音・中音・高音)を設定します。元に戻すで戻せます"),
+        ]),
+        el("p", { className: "fine", textContent: "仕上がった曲の平均は、低音から高音へなだらかに下がる形になります。その目安(標準 / 電子音・ボカロ系は低音と高音が多め / 生楽器系はなだらか)との差を測って、マスター EQ で半分ほど寄せます(各 ±6 dB まで)。直せるのは全体の傾きだけで、トラック同士のぶつかりは各トラックの EQ で。最後は耳で調整してください。" }),
+        this.balanceStatus,
+        this.balanceCanvas,
+      ]),
       el("div", { className: "spectrum-box" }, [
         el("div", { className: "row tight" }, [
           el("span", { className: "control-label", textContent: "周波数の分布(いま鳴っている音)" }),
@@ -1505,10 +1527,76 @@ export class RollPanel {
     this.info.textContent = named ? `${named} 本のトラックに名前を付けました。「元に戻す」で戻せます。` : "名前のないトラック(「MIDI Out #3」のような名前)はありませんでした。";
   }
 
+  /** A line under the 音域のバランス button (progress, or why nothing was done). */
+  balanceSays(text: string): void {
+    this.balanceStatus.textContent = text;
+  }
+
+  /** The fitted master EQ applied (one step to undo), what it did said, and the chart drawn. */
+  applyBalance(result: BalanceResult, style: BalanceStyle): void {
+    this.updateMasterFx((fx) => {
+      fx.eq = result.eq;
+    });
+    this.onTrackChange();
+    const e = result.eq;
+    const signed = (db: number) => (db === 0 ? "±0" : `${db > 0 ? "+" : "−"}${Math.abs(db).toFixed(1)}`);
+    const hz = (v: number) => (v >= 1000 ? `${+(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz`);
+    this.balanceStatus.textContent = `「${BALANCE_STYLES[style]}」に寄せて、マスター EQ を ローカット ${hz(e.lowCutHz)}・低音(${hz(e.lowHz)} 以下)${signed(e.lowDb)} dB・中音(${hz(e.midHz)})${signed(e.midDb)} dB・高音(${hz(e.highHz)} 以上)${signed(e.highDb)} dB にしました。「元に戻す」で戻せます。`;
+    this.balanceShown = { result, style };
+    this.drawBalance();
+  }
+
+  /** The song against the target, band by band: the band around the target (±3 dB), before (thin) and after (thick). */
+  private drawBalance(): void {
+    const shown = this.balanceShown;
+    const canvas = this.balanceCanvas;
+    canvas.classList.toggle("on", !!shown);
+    if (!shown) return;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (!width || !height) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    const g = canvas.getContext("2d");
+    if (!g) return;
+    const css = getComputedStyle(canvas);
+    const { before, after } = shown.result;
+    const range = 15;
+    const x = (j: number) => ((j + 0.5) / BAND_HZ.length) * canvas.width;
+    const y = (db: number) => canvas.height * (0.5 - Math.max(-range, Math.min(range, db)) / (2 * range));
+    g.clearRect(0, 0, canvas.width, canvas.height);
+    g.fillStyle = css.getPropertyValue("--line");
+    g.globalAlpha = 0.35;
+    g.fillRect(0, y(3), canvas.width, y(-3) - y(3));
+    g.globalAlpha = 1;
+    g.fillStyle = css.color;
+    g.font = `${10 * dpr}px system-ui, sans-serif`;
+    g.fillText("目安(±3 dB)", 4 * dpr, y(3) - 3 * dpr);
+    for (const [hz, label] of [[100, "100"], [1000, "1k"], [10000, "10k"]] as const) {
+      const j = BAND_HZ.findIndex((b) => b >= hz * 0.99);
+      g.fillText(label, x(j) - 6 * dpr, canvas.height - 3 * dpr);
+    }
+    const line = (values: readonly number[], color: string, w: number) => {
+      g.strokeStyle = color;
+      g.lineWidth = w * dpr;
+      g.beginPath();
+      values.forEach((v, j) => (j ? g.lineTo(x(j), y(v)) : g.moveTo(x(j), y(v))));
+      g.stroke();
+    };
+    // (Under 30 Hz nothing is aimed at: the low cut is there.)
+    const from = BAND_HZ.findIndex((hz) => hz >= 30);
+    line(before.map((v, j) => (j < from ? before[from] : v)), css.color, 1);
+    line(after.map((v, j) => (j < from ? after[from] : v)), css.getPropertyValue("--accent") || "#7c5cff", 2.5);
+    g.fillStyle = css.color;
+    g.fillText("細線: 変える前 / 太線: 変えた後(上 = 多すぎ、下 = 足りない)", 4 * dpr, 12 * dpr);
+  }
+
   /** The ミックス view on screen or not: the spectrum is drawn only while it is. */
   setMixVisible(on: boolean): void {
     cancelAnimationFrame(this.spectrumFrame);
     if (!on) return;
+    this.drawBalance();
     const tick = () => {
       this.drawSpectrum();
       this.spectrumFrame = requestAnimationFrame(tick);

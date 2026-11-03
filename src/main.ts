@@ -57,11 +57,11 @@ import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 import { clock, RangePicker } from "./ui/rangePicker";
 import { isMidiFile } from "./song/midi";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
-import { evenStems, renderSong, type RenderTrack } from "./daw/songRender";
-import { bandSpectrum, fitBalance, type BalanceStyle } from "./fx/balance";
+import { evenStems, type RenderTrack } from "./daw/songRender";
+import { renderOff, type RenderMeasure } from "./daw/renderClient";
+import { fitBalance, type BalanceStyle } from "./fx/balance";
 import { balanceGains, cleanEq, lowCutFor, madeByAuto, maskingDip } from "./daw/autoMix";
 import { ROLE_NAMES } from "./daw/roles";
-import { integratedLoudness, truePeak } from "./audio/loudness";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, KEY_FAMILIES, newSlot, renderSlot, slotFor, soundKey, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
@@ -3391,10 +3391,12 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
       } else if (kind === "wav") {
         say("作成中…");
         await yieldToScreen();
-        const song = await renderSong(
+        // (Rendered off the page: it keeps answering while the WAV is made.)
+        const song = await renderOff(
           { sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, range), tempoMap, window, beatOffset, loudness: loudness ? { targetLufs: loudness.targetLufs, ceilingDb: -1 } : undefined },
-          async (share) => {
-            await progress(share);
+          "song",
+          (share) => {
+            void progress(share);
             if (share >= 1 && loudness) say("音量を合わせています…");
           },
         );
@@ -3420,8 +3422,9 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
           const tracks = songTracks(project, t.id, range);
           if (!tracks.length) continue;
           say(`作成中… ${i + 1} / ${withNotes.length}(${t.name})`);
-          await yieldToScreen();
-          const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null, tempoMap, window, beatOffset, raw: true });
+          const song = await renderOff({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null, tempoMap, window, beatOffset, raw: true }, "song", (share) =>
+            say(`作成中… ${i + 1} / ${withNotes.length}(${t.name})${Math.round(share * 100)}%`),
+          );
           let name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}.wav`;
           for (let k = 2; used.has(name); k++) name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}_${k}.wav`;
           used.add(name);
@@ -3471,18 +3474,15 @@ async function balanceMaster(style: BalanceStyle): Promise<void> {
   songBuilding = true;
   try {
     const rate = client.sampleRate;
-    const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, async (share) => {
-      rollPanel.balanceSays(`曲を測っています… ${Math.round(share * 100)}%`);
-      await yieldToScreen();
-    });
-    rollPanel.balanceSays("周波数の分布を調べています…");
-    await yieldToScreen();
-    const measured = bandSpectrum(song.channels, song.sampleRate);
+    const song = await renderOff({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, "measure", (share) =>
+      rollPanel.balanceSays(share >= 1 ? "周波数の分布を調べています…" : `曲を測っています… ${Math.round(share * 100)}%`),
+    );
+    const measured = song.bands;
     if (!measured) {
       rollPanel.balanceSays("曲に音がありませんでした(ミュートやソロも確かめてください)。");
       return;
     }
-    rollPanel.applyBalance(fitBalance(measured, style, song.sampleRate, project.masterFx.eq), style);
+    rollPanel.applyBalance(fitBalance(measured, style, rate, project.masterFx.eq), style);
   } finally {
     songBuilding = false;
   }
@@ -3497,11 +3497,8 @@ rollPanel.onRefitLows = () =>
   })();
 
 /** One track as the song plays it (its effects, its volume; no master), offline: what the automatic mixing measures. */
-async function renderTrackAlone(project: ReturnType<typeof rollPanel.snapshot>, id: string, say: (share: number) => void): Promise<{ channels: [Float32Array, Float32Array]; sampleRate: number }> {
-  return renderSong({ sampleRate: client.sampleRate, bpm: project.bpm, tracks: songTracks(project, id, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, async (share) => {
-    say(share);
-    await yieldToScreen();
-  });
+async function renderTrackAlone(project: ReturnType<typeof rollPanel.snapshot>, id: string, say: (share: number) => void): Promise<RenderMeasure> {
+  return renderOff({ sampleRate: client.sampleRate, bpm: project.bpm, tracks: songTracks(project, id, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, "measure", say);
 }
 
 /** The tracks the mix lets through (not muted, not outside a solo) that have notes: what the automatic mixing works on. */
@@ -3526,7 +3523,7 @@ async function autoLevels(): Promise<void> {
     for (const [k, i] of heard.entries()) {
       const t = project.tracks[i];
       const song = await renderTrackAlone(project, t.id, (share) => (rollPanel.info.textContent = `音量を測っています… ${k + 1} / ${heard.length}「${t.name}」${Math.round(share * 100)}%`));
-      const l = integratedLoudness(song.channels[0], song.channels[1], song.sampleRate);
+      const l = song.lufs;
       lufs[i] = Number.isFinite(l) && l > -70 ? l : null;
     }
     const { gains, reference, loweredDb } = balanceGains(
@@ -3588,7 +3585,7 @@ async function autoEq(tidy = false): Promise<void> {
     const measure = async (i: number, k: number, n: number) => {
       const t = project.tracks[i];
       const song = await renderTrackAlone(project, t.id, (share) => (rollPanel.info.textContent = `周波数の分布を測っています… ${k} / ${n}「${t.name}」${Math.round(share * 100)}%`));
-      return bandSpectrum(song.channels, song.sampleRate);
+      return song.bands;
     };
     const total = dipped.length ? dipped.length + leads.length : 0;
     let step = 0;
@@ -3682,12 +3679,6 @@ async function diagnoseMix(): Promise<void> {
   }
   songBuilding = true;
   try {
-    const dB = (x: number) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
-    const peakOf = (channels: Float32Array[]) => {
-      let p = 0;
-      for (const c of channels) for (let i = 0; i < c.length; i++) p = Math.max(p, Math.abs(c[i]));
-      return dB(p);
-    };
     const rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[] = [];
     const lufsOf = new Map<number, number>();
     let k = 0;
@@ -3700,18 +3691,16 @@ async function diagnoseMix(): Promise<void> {
       }
       k++;
       const song = await renderTrackAlone(project, t.id, (share) => (rollPanel.info.textContent = `診断しています… ${k} / ${heard.size + 1}「${t.name}」${Math.round(share * 100)}%`));
-      const l = integratedLoudness(song.channels[0], song.channels[1], song.sampleRate);
+      const l = song.lufs;
       if (Number.isFinite(l) && l > -70) lufsOf.set(i, l);
-      rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: lufsOf.get(i) ?? null, peakDb: peakOf(song.channels), notes });
+      rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: lufsOf.get(i) ?? null, peakDb: song.peakDb, notes });
     }
-    const whole = await renderSong(
+    const whole = await renderOff(
       { sampleRate: client.sampleRate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, null), tempoMap: tempoMapSec(project), raw: true },
-      async (share) => {
-        rollPanel.info.textContent = `診断しています… ${heard.size + 1} / ${heard.size + 1}(曲全体)${Math.round(share * 100)}%`;
-        await yieldToScreen();
-      },
+      "measure",
+      (share) => (rollPanel.info.textContent = `診断しています… ${heard.size + 1} / ${heard.size + 1}(曲全体)${Math.round(share * 100)}%`),
     );
-    const song = { lufs: integratedLoudness(whole.channels[0], whole.channels[1], whole.sampleRate), peakDb: dB(truePeak(whole.channels[0], whole.channels[1])) };
+    const song = { lufs: whole.lufs, peakDb: whole.truePeakDb };
     // What stands out.
     const points: string[] = [];
     if (song.peakDb > 0) points.push(`曲全体が 0 dB を超えます(トゥルーピーク +${song.peakDb.toFixed(1)} dB)。再生と書き出しでは抑えますが、そのぶん潰れます。全体の音量(フェーダー)かマスターのコンプのメイクアップを下げると素直な音になります。`);

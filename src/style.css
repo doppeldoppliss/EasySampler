@@ -1355,3 +1355,6 @@ body.keys-pinned {
 
 /* Recording under way. */
 button.recording { background: var(--warn); color: var(--accent-text); border-color: var(--warn); }
+
+/* A button asking "press again" (armOnce): what it would do cannot be undone. */
+.button.armed { background: var(--warn); color: var(--accent-text); border-color: var(--warn); }

@@ -46,7 +46,7 @@ import { MidiParseError, parseMidi } from "../song/midi";
 import { songParts } from "../song/parts";
 import { drumRows, keyLabel, slotFor, type Kit } from "../daw/kit";
 import { arrange, type ArrangeKind } from "../daw/arrange";
-import { el } from "./dom";
+import { armOnce, el } from "./dom";
 import { PianoRoll } from "./pianoRoll";
 
 /** Where the song is kept until the page says which project is open (useStore). */
@@ -529,7 +529,7 @@ export class RollPanel {
     this.longList.hidden = long.length === 0;
     this.longList.replaceChildren(
       el("span", { className: "fine", textContent: "原曲・伴奏:" }),
-      ...long.map((m) => el("span", { className: "tempo-item" }, [el("span", { className: "fine", textContent: m.name }), button("外す", "small", () => this.onRemoveLongAudio(m.id), "この長い音声をプロジェクトから外します(置いたクリップは鳴らなくなります)")])),
+      ...long.map((m) => el("span", { className: "tempo-item" }, [el("span", { className: "fine", textContent: m.name }), armOnce(button("外す", "small", () => {}, "この長い音声を曲から外します(置いたクリップは鳴らなくなり、元に戻せません)"), "もう一度押すと外す", () => this.onRemoveLongAudio(m.id))])),
     );
   }
 

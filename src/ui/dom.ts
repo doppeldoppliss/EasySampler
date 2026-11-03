@@ -34,3 +34,29 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
   return target instanceof HTMLInputElement && !["range", "checkbox", "radio", "button"].includes(target.type);
 }
+
+/**
+ * Asks on the button itself, not in a pop-up (for what cannot be undone): the first press turns its text into
+ * `armedText` for a few seconds, a second press then runs `onConfirm`.
+ */
+export function armOnce(b: HTMLButtonElement, armedText: string, onConfirm: () => void): HTMLButtonElement {
+  const text = b.textContent ?? "";
+  let timer = 0;
+  const disarm = () => {
+    clearTimeout(timer);
+    timer = 0;
+    b.textContent = text;
+    b.classList.remove("armed");
+  };
+  b.addEventListener("click", () => {
+    if (timer) {
+      disarm();
+      onConfirm();
+      return;
+    }
+    b.textContent = armedText;
+    b.classList.add("armed");
+    timer = window.setTimeout(disarm, 4000);
+  });
+  return b;
+}

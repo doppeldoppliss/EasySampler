@@ -46,7 +46,7 @@ import {
   type PresetId,
 } from "./instrument/types";
 import { PIANO_NAME, synthPiano } from "./testsignals/piano";
-import { cssVar, el, isTypingTarget } from "./ui/dom";
+import { armOnce, cssVar, el, isTypingTarget } from "./ui/dom";
 import { OnScreenKeyboard, PcKeyboard } from "./ui/keyboard";
 import { MaterialEditor, type TimeSelection } from "./ui/materialEditor";
 import { clock, RangePicker } from "./ui/rangePicker";
@@ -286,9 +286,26 @@ function button(text: string, className: string, onClick: () => void): HTMLButto
   return b;
 }
 
+/** A button for what cannot be undone, asked on the button itself (armOnce). `title` says what goes. */
+function armedButton(text: string, armedText: string, className: string, onConfirm: () => void, title = ""): HTMLButtonElement {
+  return armOnce(el("button", { className: `button ${className}`, textContent: text, title }), armedText, onConfirm);
+}
+
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const ms = (v: number) => (v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`);
 const semis = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`;
+
+/** A note shown after the page reloads (sessionStorage, best effort). */
+const NOTICE_KEY = "easysampler.notice";
+function safeSession(key: string, value?: string | null): string | null {
+  try {
+    if (value === null) sessionStorage.removeItem(key);
+    else if (value !== undefined) sessionStorage.setItem(key, value);
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
 
 function safeStorage(key: string, value?: string | null): string | null {
   try {
@@ -387,7 +404,7 @@ function refreshCutUsage(): void {
 }
 const materialSelect = el("select", { ariaLabel: "編集する素材", className: "material-select" });
 materialSelect.addEventListener("change", () => switchMaterial(materialSelect.value));
-const removeMaterialButton = button("この素材を曲から外す", "small", () => material && removeMaterial(material.id));
+const removeMaterialButton = armedButton("この素材を曲から外す", "もう一度押すと外す", "small", () => material && removeMaterial(material.id), "素材ライブラリには残り、「＋ ライブラリから」で戻せます。この素材を鳴らしているトラックは無音になります");
 // A library material shared with other songs: which ones, and 「この曲用に分ける」 to make it this song's own.
 const sharedNote = el("span", { className: "fine shared-note" });
 const splitButton = button("この曲用に分ける", "small", () => void splitMaterial());
@@ -1075,9 +1092,9 @@ function fxHead(text: string): HTMLElement {
 }
 
 const fxResetButton = button("エフェクトをすべてオフに", "small", () => {
-  if (!confirm(`${fxTarget === "master" ? "マスター" : `トラック「${rollPanel.trackName}」`}のエフェクトをすべてオフにして、値も初期値に戻しますか?`)) return;
   updateFx((f) => Object.assign(f, structuredClone(DEFAULT_FX)));
   refreshControls();
+  rollPanel.info.textContent = `${fxTarget === "master" ? "マスター" : `トラック「${rollPanel.trackName}」`}のエフェクトをすべてオフにしました。「元に戻す」(Ctrl + Z)で戻せます。`;
 });
 
 const fxPanel = el("details", { className: "panel fx-panel" }, [
@@ -1302,7 +1319,6 @@ async function setPitchRange(range: { low: number; high: number } | null): Promi
 }
 const resetSettingsButton = button("設定を捨てて最初から", "small", () => {
   if (!material) return;
-  if (!confirm("サンプリング済音源・マーカー・手直し・書き出し設定をすべて捨てて、解析結果から作り直します(探索範囲は残ります)。よろしいですか?(元に戻すで戻せます)")) return;
   const hadCorrections = material.corrections.length > 0;
   material.corrections = [];
   freshCuts();
@@ -1310,7 +1326,7 @@ const resetSettingsButton = button("設定を捨てて最初から", "small", ()
   applyCurrentCut();
   if (hadCorrections) void setCorrections([]);
   else refreshFixBar();
-  settingsStatus.textContent = "解析結果から設定を作り直しました。";
+  settingsStatus.textContent = "解析結果から設定を作り直しました(探索範囲は残しています)。「元に戻す」で戻せます。";
 });
 
 const benchButton = button("負荷を測る", "small", () => benchmark());
@@ -1618,7 +1634,8 @@ async function openProjectFile(file: File): Promise<void> {
       const same = findSame(m.name, frames, m.sampleRate);
       if (same && (await sameAudio(same.id, m.channels))) {
         const theirs = await kept(`settings:${same.id}`);
-        if (theirs === m.settings || confirm(`素材ライブラリにある「${m.name}」と同じ音声ですが、サンプリング済音源などの設定が違います。ライブラリのものを使いますか?\n「キャンセル」で、ファイルの設定のまま別の素材として加えます。`)) {
+        // (Settings that differ: the file's come in as another material, so the song sounds as it was saved.)
+        if (theirs === m.settings) {
           map.set(m.id, same.id);
           continue;
         }
@@ -1664,8 +1681,7 @@ async function openProjectPanel(): Promise<void> {
       const made = await duplicateProject(p.id, `${p.name} のコピー`);
       if (made) void openProjectPanel();
     });
-    const remove = button("削除", "small", async () => {
-      if (!confirm(`「${p.name}」を削除しますか?打ち込み・ドラムキットの音・原曲や伴奏の録音も消え、元に戻せません(素材は素材ライブラリに残ります)。${isOpen ? "(開いているプロジェクトです。削除後はほかのプロジェクトを開きます)" : ""}`)) return;
+    const remove = armedButton("削除", "もう一度押すと削除", "small", async () => {
       if (isOpen) {
         await flushAll();
         await removeProject(p.id);
@@ -1674,7 +1690,7 @@ async function openProjectPanel(): Promise<void> {
       }
       await removeProject(p.id);
       void openProjectPanel();
-    });
+    }, `「${p.name}」の打ち込み・ドラムキットの音・原曲や伴奏の録音が消え、元に戻せません(素材は素材ライブラリに残ります)${isOpen ? "。開いている曲なので、削除後はほかの曲を開きます" : ""}`);
     return el("div", { className: `project-row${isOpen ? " open" : ""}` }, [
       el("span", { className: "project-name", textContent: p.name }),
       el("span", { className: "fine num", textContent: when(p.updatedAt) }),
@@ -1696,11 +1712,13 @@ async function openProjectPanel(): Promise<void> {
       button("ファイルから開く", "small", () => projectFileInput.click()),
       button("新しいプロジェクト", "small", async () => {
         await flushAll();
-        const entry = await createProject(`プロジェクト ${projectList().length + 1}`);
+        // (It starts with this song's materials — shared in the library — and the one being edited: the sounds come along, the song is new.)
+        const materials = rollPanel.materials.filter((m) => !m.long).map(({ id, name }) => ({ id, name }));
+        const entry = await createProject(`プロジェクト ${projectList().length + 1}`, materials.length ? { materials, editing: material?.id ?? null } : undefined);
         await switchProject(entry.id);
       }),
     ]),
-    el("p", { className: "fine", textContent: "編集はこのブラウザに自動で保存されます。ファイルに保存すると、素材の音声・サンプリング済音源の設定・打ち込みが 1 つにまとまり、別の端末やブラウザで「ファイルから開く」で続きができます(ファイルはページにドロップしても開けます)。" }),
+    el("p", { className: "fine", textContent: "編集はこのブラウザに自動で保存されます。ファイルに保存すると、素材の音声・サンプリング済音源の設定・打ち込みが 1 つにまとまり、別の端末やブラウザで「ファイルから開く」で続きができます(ファイルはページにドロップしても開けます)。「新しいプロジェクト」は、今の曲の素材(サンプリング済音源つき)をそのまま使える状態で始まります。" }),
     el("div", { className: "project-list" }, rows),
     room,
     projectFileInput,
@@ -1868,7 +1886,8 @@ async function addLongAudio(file: File): Promise<void> {
 
 rollPanel.onRemoveLongAudio = (id) => {
   const entry = longAudio.get(id);
-  if (!entry || !confirm(`「${entry.name}」をプロジェクトから外しますか?置いたクリップは鳴らなくなります。`)) return;
+  if (!entry) return;
+  rollPanel.info.textContent = `「${entry.name}」を曲から外しました。置いてあったクリップは鳴りません。`;
   longAudio.delete(id);
   client.setSource(null, id);
   rollPanel.removeMaterial(id);
@@ -2053,14 +2072,19 @@ function renderKitPanel(): void {
         number("終わり ms", slot.end, (s, v) => (s.end = v), "どこまで鳴らすか(0 = 最後まで)"),
         number("フェード ms", slot.fade, (s, v) => (s.fade = v), "終わりを何ミリ秒かけて消すか"),
         el("label", { className: "inline fine" }, ["音量 ", gain]),
-        button("×", "small", () => {
-          if (!confirm(`${drumName(key)}の音「${slot.name}」を外しますか?(簡易ドラムに戻ります。元に戻せません)`)) return;
-          const old = slot.sample;
-          rollPanel.updateKit((k) => {
-            k.slots = k.slots.filter((x) => x.key !== key);
-          });
-          forgetKitAudioIfUnused(old);
-        }),
+        armedButton(
+          "×",
+          "もう一度押すと外す",
+          "small",
+          () => {
+            const old = slot.sample;
+            rollPanel.updateKit((k) => {
+              k.slots = k.slots.filter((x) => x.key !== key);
+            });
+            forgetKitAudioIfUnused(old);
+          },
+          `${drumName(key)}の音「${slot.name}」を外します(簡易ドラムに戻ります。元に戻せません)`,
+        ),
       );
     } else if (slot) {
       parts.push(button("×", "small", () => rollPanel.updateKit((k) => (k.slots = k.slots.filter((x) => x.key !== key)))));
@@ -2320,12 +2344,12 @@ function removeCut(): void {
   if (cuts.length < 2) return;
   const gone = cuts[current];
   const users = material && gone ? rollPanel.tracksUsing(instrumentId(material.id, gone.id)) : [];
-  if (!confirm(`音源「${gone.name}」を削除しますか?${users.length ? `\nこの音源を鳴らしているトラック(${users.join("、")})は鳴らなくなります。` : ""}`)) return;
   cuts.splice(current, 1);
   current = Math.min(current, cuts.length - 1);
   applyCurrentCut();
   if (material && gone) client.dropInstrument(instrumentId(material.id, gone.id));
   defineMaterialCuts();
+  status.textContent = `音源「${gone.name}」を削除しました。${users.length ? `鳴らしていたトラック(${users.join("、")})は鳴りません。` : ""}「元に戻す」で戻せます。`;
 }
 
 // ---------------------------------------------------------------- state → screen
@@ -3224,8 +3248,9 @@ function removeMaterial(id: string): void {
   const entry = library.get(id);
   if (!entry) return;
   const used = rollPanel.usesMaterial(id);
-  if (!confirm(`「${entry.material.name}」をこの曲から外しますか?素材ライブラリには残り、「＋ ライブラリから」で戻せます。${used ? "この素材を鳴らしているトラックは無音になります。" : ""}`)) return;
+  const name = entry.material.name;
   dropMaterial(id);
+  status.textContent = `「${name}」をこの曲から外しました(素材ライブラリには残り、「＋ ライブラリから」で戻せます)。${used ? "この素材を鳴らしていたトラックは無音です。" : ""}`;
 }
 
 /** removeMaterial without asking. */
@@ -3282,12 +3307,16 @@ function refreshMaterialSelect(): void {
  * Opens a material in the editor: a new one (it joins the project, its samples
  * are kept) or, with `kept`, one coming back from the store with its settings.
  */
-async function load(name: string, channels: Float32Array[], sampleRate: number, kept?: { id: string; settings: SettingsFile | null }): Promise<void> {
+async function load(name: string, channels: Float32Array[], sampleRate: number, kept?: { id: string; settings: SettingsFile | null }, asNew = false): Promise<void> {
   if (!kept) {
     // The same recording already in the library: it can come in as it is (its サンプリング済音源 with it).
-    const same = findSame(name, channels[0].length, sampleRate);
-    if (same && confirm(`素材ライブラリに同じ素材「${name}」があります(ほかの曲で作ったサンプリング済音源つき)。それを使いますか?\n「キャンセル」で、別の素材として新しく加えます。`)) {
+    const same = asNew ? undefined : findSame(name, channels[0].length, sampleRate);
+    if (same) {
       await addFromLibrary(same.id);
+      status.replaceChildren(
+        `素材ライブラリにある「${name}」(サンプリング済音源の設定つき)を使っています。`,
+        button("別の素材として新しく加える", "small", () => void load(name, channels, sampleRate, undefined, true)),
+      );
       return;
     }
     if (overLimit(name, channels[0].length / sampleRate)) return;
@@ -3420,7 +3449,6 @@ async function splitMaterial(): Promise<void> {
   if (!material) return;
   const from = material;
   const song = currentProject().name;
-  if (!confirm(`「${from.name}」をコピーして、この曲(${song})だけの素材にしますか?ほかの曲は元の素材のまま、ここでの変更が届かなくなります。ページを読み込み直します。`)) return;
   await flushAll();
   const id = newMaterialId();
   const name = `${from.name}(${song})`;
@@ -3430,6 +3458,7 @@ async function splitMaterial(): Promise<void> {
   }
   rollPanel.replaceMaterial(from.id, { id, name });
   await flushAll();
+  safeSession(NOTICE_KEY, `「${from.name}」をコピーして、この曲だけの「${name}」にしました。ほかの曲は元の素材のままです。`);
   location.reload();
 }
 
@@ -3469,20 +3498,26 @@ async function openLibraryPanel(): Promise<void> {
         await addFromLibrary(entry.id);
       });
       add.disabled = here;
-      const remove = button("削除", "small", async () => {
-        const where = songs.length ? `\n使っている曲: ${songs.map((p) => p.name).join("、")}。これらの曲でこの素材を鳴らしているトラックは無音になります。` : "";
-        if (!confirm(`「${entry.name}」を素材ライブラリから削除しますか?音声とサンプリング済音源の設定が消え、元に戻せません。${where}`)) return;
-        if (here) {
-          if (library.size < 2) {
-            alert("この曲の素材がこれだけなので削除できません。別の素材を加えてから削除してください。");
-            return;
+      const where = songs.length ? `。使っている曲(${songs.map((p) => p.name).join("、")})でこの素材を鳴らしているトラックは無音になります` : "";
+      const remove = armedButton(
+        "削除",
+        "もう一度押すと削除",
+        "small",
+        async () => {
+          if (here) {
+            dropMaterial(entry.id);
+            await flushAll();
           }
-          dropMaterial(entry.id);
-          await flushAll();
-        }
-        await removeFromLibrary(entry.id);
-        void openLibraryPanel();
-      });
+          await removeFromLibrary(entry.id);
+          void openLibraryPanel();
+        },
+        `「${entry.name}」の音声とサンプリング済音源の設定が消え、元に戻せません${where}`,
+      );
+      // (The song's last material stays: the page always has something to play.)
+      if (here && library.size < 2) {
+        remove.disabled = true;
+        remove.title = "この曲の素材がこれだけなので削除できません。別の素材を加えてから削除してください";
+      }
       const used = songs.length ? `使用: ${songs.map((p) => p.name).join("、")}` : "どの曲でも使っていません";
       return el("div", { className: `project-row${here ? " open" : ""}` }, [
         el("span", { className: "project-name", textContent: entry.builtin ? `${entry.name}(新しい曲はこれで始まります)` : entry.name }),
@@ -3701,6 +3736,11 @@ void (async () => {
   }
   refreshInstruments();
   refreshMaterialSelect();
+  const notice = safeSession(NOTICE_KEY);
+  if (notice) {
+    status.textContent = notice;
+    safeSession(NOTICE_KEY, null);
+  }
   await loadKitAudio();
   // The kit's sounds are in: the tracks are given them (they played the plain drums until now), the keyboard too.
   rollPanel.updateKit(() => {});

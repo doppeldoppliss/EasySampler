@@ -76,7 +76,7 @@ const MAX_MATERIAL_SEC = 60;
 /** Longer files are cut here when decoded (memory: 10 minutes of stereo 48 kHz is about 230 MB). */
 const MAX_DECODE_SEC = 600;
 const DEMO_RATE = 44100;
-const GUIDE_KEY = "maddaw.guide.v2";
+const GUIDE_KEY = "maddaw.guide.v3";
 const SMALL_SCREEN = window.matchMedia("(max-width: 600px)").matches || (window.matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) <= 600);
 /** iPhone / iPad (an iPad calls itself a Mac, with touch). */
 const IOS = /iP(hone|ad|od)/.test(navigator.platform) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -368,18 +368,28 @@ const volumeControl = el("label", { className: "inline volume", title: "モニ�
 // (Shown only once every material has been taken out: a new project starts on the built-in piano.)
 const emptyState = el("section", { className: "empty", hidden: true }, [
   el("p", { className: "empty-title", textContent: "声や効果音から楽器を作り、曲まで仕上げる。" }),
-  el("p", { textContent: "声や効果音のファイルを開くと、音程を判定して、伸ばす・移調する・1 回鳴らす楽器にします。曲の画面で MIDI を開くか打ち込めば、その楽器で曲になり、「ミックス」で音量を整えて WAV に書き出せます。単音の WAV やマルチサンプル(SFZ / Decent Sampler)として、ほかの DAW に渡すこともできます。" }),
+  el("p", { textContent: "声や効果音のファイルを開くと、音程を判定して、伸ばす・移調する・1 回鳴らす楽器にします。曲の画面で MIDI を開くか打ち込めば、その楽器で曲になります。「ミックス」の「まとめて自動ミックス」を押すと、音量・EQ・残響・マスター EQ まで目安に整い、診断で気になる点も分かります。仕上げに耳で直して、WAV に書き出します。単音の WAV やマルチサンプル(SFZ / Decent Sampler)として、ほかの DAW に渡すこともできます。" }),
   el("div", { className: "row" }, [el("label", { className: "button primary", htmlFor: "file", textContent: "素材を開く" }), button("ピアノで始める", "", () => void loadPiano())]),
   el("p", { className: "fine", textContent: "生成AIは使っていません。素材は端末の中だけで処理され、外部には送られません。BGM の入った素材は、先に除去してから開いてください。" }),
 ]);
 
 // ---------------------------------------------------------------- guide (3 steps)
 
+/** The header's 使い方: the guide back (it can be closed for good, and then this is the way to it). */
+const guideButton = button("使い方", "", () => {
+  guide.hidden = !guide.hidden;
+  if (!guide.hidden) guide.scrollIntoView({ block: "nearest", behavior: "smooth" });
+});
+guideButton.title = "4 つの手順(聴いて確かめる・作り方を選ぶ・曲にする・仕上げる)の案内を出します";
 const guide = el("aside", { className: "steps", hidden: safeStorage(GUIDE_KEY) === "seen" }, [
   el("ol", {}, [
     el("li", {}, [el("strong", { textContent: "聴いて確かめる" }), " — ▶ で鳴らし、判定した高さと帯(頭部・持続区間)がずれていれば直します"]),
     el("li", {}, [el("strong", { textContent: "作り方を選ぶ" }), " — 伸ばす(シンセ化)・伸ばす(移調)・移調・1 回鳴らす。鍵盤で弾いて確かめます"]),
-    el("li", {}, [el("strong", { textContent: "曲にする" }), " — 「曲(打ち込み)」のトラックでこのサンプリング済音源を選び、MIDI を開くか打ち込みます。「ミックス」で音量を整えて書き出します"]),
+    el("li", {}, [el("strong", { textContent: "曲にする" }), " — 「曲(打ち込み)」のトラックでこのサンプリング済音源を選び、MIDI を開くか打ち込みます。原曲・伴奏は「＋ 原曲・伴奏を置く」で"]),
+    el("li", {}, [
+      el("strong", { textContent: "仕上げる" }),
+      " — 「ミックス」で、メロディ・ベースの役割を確かめて(違えば列の役割で直す)「まとめて自動ミックス」。診断の気になる点を見て、最後は耳で直し、「曲を WAV で」書き出します(音量は投稿先に合わせられます)",
+    ]),
   ]),
   button("閉じる", "small", () => {
     guide.hidden = true;
@@ -2456,7 +2466,7 @@ const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs
 setView(view);
 
 document.getElementById("app")!.append(
-  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, projectButton, saveState, rePickButton, openButton, pianoButton, libraryButton])]),
+  el("header", { className: "top" }, [el("h1", { textContent: "EasySampler" }), el("div", { className: "row" }, [volumeControl, projectButton, saveState, rePickButton, openButton, pianoButton, libraryButton, guideButton])]),
   fileInput,
   projectDialog,
   libraryDialog,

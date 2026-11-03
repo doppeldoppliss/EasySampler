@@ -14,7 +14,7 @@ import { EngineClient } from "./audio/engineClient";
 import { askToPersist, forget, keep, kept, onSaveState, storageEstimate, whenSaved, type SaveState } from "./audio/store";
 import { chooseProject, createProject, currentProject, duplicateProject, newMaterialId, openProjects, projectKey, projectList, remapMaterials, removeProject, renameProject, touchProject } from "./audio/projects";
 import { buildProjectFile, parseProjectFile, PROJECT_FILE_EXTENSION } from "./audio/projectFile";
-import { addToLibrary, builtinPiano, copyInLibrary, findSame, inLibrary, libraryList, openLibrary, removeFromLibrary, setLibraryFrames, songsUsing, updateStoredSongs } from "./audio/library";
+import { addToLibrary, builtinPiano, copyInLibrary, findSame, inLibrary, libraryList, openLibrary, removeFromLibrary, setLibraryFrames, setLibraryName, songsUsing, updateStoredSongs } from "./audio/library";
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, resample, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
 import type { PitchTrack } from "./analysis/pyin";
@@ -418,6 +418,11 @@ function refreshCutUsage(): void {
 }
 const materialSelect = el("select", { ariaLabel: "編集する素材", className: "material-select" });
 materialSelect.addEventListener("change", () => switchMaterial(materialSelect.value));
+// 素材の名前: changed here, it is the material's everywhere (the library, every song's list, its saved samples).
+const materialName = el("input", { type: "text", className: "cut-name material-name", ariaLabel: "素材の名前", maxLength: 60, title: "素材の名前(素材ライブラリとすべての曲で変わります)" });
+materialName.addEventListener("change", () => {
+  if (material) void renameMaterial(material.id, materialName.value);
+});
 const trimUnusedButton = armedButton(
   "使っていない部分を捨てる",
   "もう一度押すと捨てる",
@@ -655,7 +660,7 @@ editor.onViewChange = (view) => {
 };
 
 const materialPanel = el("section", { className: "panel" }, [
-  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, trimUnusedButton, removeMaterialButton, splitButton, sharedNote]),
+  el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, materialName, trimUnusedButton, removeMaterialButton, splitButton, sharedNote]),
   cutBar,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [
@@ -2364,9 +2369,9 @@ function applyCurrentCut(): void {
 function rebuildCutSelect(): void {
   cutSelect.replaceChildren(...cuts.map((c, i) => el("option", { value: String(i), textContent: `${i + 1}. ${c.name}` })));
   cutSelect.value = String(current);
-  // One cut: nothing to choose or name yet — only "＋ 区間を追加".
+  // One cut: nothing to choose yet (its name can still be changed).
   const single = cuts.length < 2;
-  for (const node of [cutSelect, cutName, dupCutButton, removeCutButton]) node.hidden = single;
+  for (const node of [cutSelect, dupCutButton, removeCutButton]) node.hidden = single;
   batchButton.hidden = single;
 }
 
@@ -3369,6 +3374,9 @@ function refreshMaterialSelect(): void {
   refreshMaterialTab();
   materialSelect.replaceChildren(...[...library.values()].map(({ material: m }) => el("option", { value: m.id, textContent: m.name })));
   if (material) materialSelect.value = material.id;
+  // (One material: the list says nothing the name field does not.)
+  materialSelect.hidden = library.size < 2;
+  if (document.activeElement !== materialName) materialName.value = material?.name ?? "";
   // The last material stays: the page always has something to play (add another first, then take this one out).
   removeMaterialButton.disabled = library.size < 2;
   refreshSharing();
@@ -3466,7 +3474,8 @@ async function loadPiano(): Promise<void> {
 
 /** The built-in piano into the project: shown if it is already there, added (next to the other materials) if not. */
 async function addPiano(): Promise<void> {
-  const there = [...library.values()].find((e) => e.material.name === PIANO_NAME);
+  const shared = builtinPiano();
+  const there = [...library.values()].find((e) => e.material.id === shared?.id || e.material.name === PIANO_NAME);
   if (there) {
     if (there.material !== material) switchMaterial(there.material.id);
     refreshMaterialSelect();
@@ -3519,6 +3528,32 @@ async function trimToCuts(): Promise<void> {
   const from = Math.max(0, Math.min(...body.cuts.map((c) => c.markers.rangeStart)) - margin);
   const to = Math.min(material.channels[0].length / material.sampleRate, Math.max(...body.cuts.map((c) => c.markers.rangeEnd)) + margin);
   await trimMaterial(from, to);
+}
+
+/** A material renamed: on the page, in the library, in this song's list and every other song's, and in its saved samples. */
+async function renameMaterial(id: string, raw: string): Promise<void> {
+  const entry = library.get(id);
+  const name = raw.trim();
+  if (!entry || !name || name === entry.material.name) {
+    if (entry) materialName.value = entry.material.name;
+    return;
+  }
+  const m = entry.material;
+  m.name = name;
+  if (entry.settings) entry.settings = { ...entry.settings, material: { ...entry.settings.material, name } };
+  await keep(`audio:${id}`, { name, sampleRate: m.sampleRate, channels: m.channels });
+  await setLibraryName(id, name);
+  rollPanel.renameMaterial(id, name);
+  await updateStoredSongs(currentProject().id, (song) => {
+    const listed = (Array.isArray(song.materials) ? song.materials : []) as { id?: unknown; name?: unknown }[];
+    const hit = listed.find((x) => x?.id === id);
+    if (hit) hit.name = name;
+    return !!hit;
+  });
+  if (material?.id === id) saveNow();
+  refreshMaterialSelect();
+  refreshInstruments();
+  status.textContent = `素材の名前を「${name}」にしました(素材ライブラリとほかの曲でも同じ名前になります)。`;
 }
 
 /** Whether adding `seconds` of material would go past what an iPhone / iPad can hold (and says so). */

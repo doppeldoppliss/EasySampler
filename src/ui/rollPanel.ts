@@ -707,6 +707,16 @@ export class RollPanel {
     return moved;
   }
 
+  /** A material renamed: the song's list of them (the tracks' choices and the clips' labels follow). */
+  renameMaterial(id: string, name: string): void {
+    const m = this.project.materials.find((x) => x.id === id);
+    if (!m) return;
+    m.name = name;
+    this.renderTracks();
+    this.roll.draw();
+    this.scheduleSave();
+  }
+
   /** Whether a track plays a cut of this material, or has a clip of it. */
   usesMaterial(id: string): boolean {
     return this.project.tracks.some((t) => t.instrument?.startsWith(`${id}/`) || t.notes.some((n) => n.clip?.material === id));

@@ -79,6 +79,14 @@ export async function addToLibrary(entry: Omit<LibraryEntry, "addedAt">): Promis
   await keep(INDEX, entries);
 }
 
+/** A material renamed (its samples keep their own copy of the name: the caller rewrites them). */
+export async function setLibraryName(id: string, name: string): Promise<void> {
+  const entry = libraryEntry(id);
+  if (!entry) return;
+  entry.name = name;
+  await keep(INDEX, entries);
+}
+
 /** A material's recording got shorter (素材を切り詰める). */
 export async function setLibraryFrames(id: string, frames: number): Promise<void> {
   const entry = libraryEntry(id);

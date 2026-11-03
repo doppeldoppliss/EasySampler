@@ -64,6 +64,9 @@ const SHIMMER = 0.03;
 const FORMANT_FOLLOW_FROM = 7;
 const FORMANT_FOLLOW_POWER = 0.4;
 
+/** 伸ばす(移調): how long the drift correction takes to come in (and go), so the head runs on into it smoothly. */
+const DRIFT_FIX_SEC = 0.15;
+
 const Phase = {
   Head: 0,
   Sustain: 1,
@@ -123,6 +126,8 @@ class Voice {
   releasedAt = Infinity;
   /** The pitch correction as it has glided in so far (semitones), for tune.retuneSec. */
   retuneCorr = 0;
+  /** 伸ばす(移調): how far the drift correction has come in (0 in the head, up to 1 over DRIFT_FIX_SEC after it). */
+  driftIn = 0;
   /** The last grain's spacing (samples): the time step the glide advances by. */
   lastStep = 0;
   /** Portamento: semitones still to slide (added to the note, moving to 0), and how much it moves per output sample. */
@@ -441,6 +446,7 @@ export class Engine {
     v.released = false;
     v.releasedAt = Infinity;
     v.retuneCorr = 0;
+    v.driftIn = 0;
     v.lastStep = 0;
     v.bend = 0;
     v.bendPerSample = 0;
@@ -623,8 +629,18 @@ export class Engine {
     } else if (voiced) {
       const f0 = this.f0[k];
       let correction = 0;
-      // (移調: the contour is left as recorded; only the shift moves it.)
-      if (Number.isFinite(f0) && !params.transposeOnly) {
+      let tau = params.tune.retuneSec;
+      // (移調: the contour is left as recorded; only the shift moves it. 伸ばす(移調): past the head, the slow drift
+      // is brought onto the root, the vibrato and the fast movement kept. It fades in once, as the head ends, and then
+      // follows the read position at once: a loop or the pool jumping back finds its correction there.)
+      if (Number.isFinite(f0) && params.transposeOnly) {
+        tau = 0;
+        const slow = this.f0slow[k];
+        if (params.driftFix && params.sustainMode !== "none" && v.phase !== Phase.Head && Number.isFinite(slow)) {
+          v.driftIn = Math.min(1, v.driftIn + v.lastStep / this.sampleRate / DRIFT_FIX_SEC);
+          correction = v.driftIn * (params.root - slow);
+        }
+      } else if (Number.isFinite(f0)) {
         // The target in the material's own pitch space: the root (the one detected note).
         const target = params.root;
         // What is kept of the material's movement: the slow drift and the fast modulation, each by its own amount; 平坦化 scales both.
@@ -633,7 +649,6 @@ export class Engine {
         correction = target + (1 - params.flatten) * kept - f0;
       }
       // The correction glides in over the retune time (Auto-Tune's Retune Speed); 0 = at once.
-      const tau = params.tune.retuneSec;
       if (tau > 0) {
         const a = 1 - Math.exp(-(v.lastStep / this.sampleRate) / tau);
         v.retuneCorr += (correction - v.retuneCorr) * a;

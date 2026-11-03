@@ -60,3 +60,24 @@ describe("作り方", () => {
     expect(withMakeMode(p, "hold").sustainMode).toBe("loop");
   });
 });
+
+describe("作り方: 伸ばす(移調)", () => {
+  it("holds with the pitch moved as a whole; to and from the other 作り方", () => {
+    const start = PRESETS.find((p) => p.mode === "holdTranspose")!.apply({ ...DEFAULT_PARAMS });
+    expect([makeModeOf(start), start.sustainMode, start.transposeOnly, start.driftFix]).toEqual(["holdTranspose", "stretch", true, true]);
+    // Between the two kinds of 伸ばす the 伸ばし方 stays.
+    const plain = withMakeMode({ ...start, sustainMode: "loop" }, "hold");
+    expect([makeModeOf(plain), plain.sustainMode, plain.transposeOnly]).toEqual(["hold", "loop", false]);
+    // To 移調 and back finds the 伸ばし方 again.
+    const tr = withMakeMode(start, "transpose");
+    expect([makeModeOf(tr), tr.sustainMode]).toEqual(["transpose", "none"]);
+    expect(withMakeMode(tr, "holdTranspose").sustainMode).toBe("stretch");
+  });
+
+  it("is read back from a file as it was", () => {
+    const params = { ...DEFAULT_PARAMS, sustainMode: "pool", transposeOnly: true, driftFix: false };
+    const file = JSON.stringify({ app: "EasySampler", version: 1, cuts: [{ markers: { rangeStart: 0, sustainStart: 0.1, sustainEnd: 0.5, rangeEnd: 1 }, params }] });
+    const p = parseSettings(file).cuts[0].params;
+    expect([makeModeOf(p), p.driftFix]).toEqual(["holdTranspose", false]);
+  });
+});

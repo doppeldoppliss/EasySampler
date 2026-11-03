@@ -595,3 +595,35 @@ describe("移調 (transposeOnly)", () => {
     expect(d2).toBeGreaterThan(0.01);
   });
 });
+
+describe("Engine: 伸ばす(移調)", () => {
+  // A voice that rises steadily (a semitone a second) with a vibrato on it: the drift a long held note would wander with.
+  const drifting = () => synthVoice({ sampleRate: SR, durationSec: 1.6, pitch: (t) => 57 + (t - 0.8) + 0.3 * Math.sin(2 * Math.PI * 5.5 * t) });
+  /** The pitch (MIDI, from the note) every 0.2 s from 0.6 s on, the median of each step: a looped sustain 0.3–1.4 s held 2.4 s. */
+  const steps = (driftFix: boolean) => {
+    const material = drifting();
+    const analysis = analyzeMaterial([material], SR);
+    const engine = new Engine(SR);
+    engine.setSource(prepareSource([material], analysis, SR));
+    const root = analysis.root!.midi;
+    engine.setInstrument({ ...analysis.markers, rangeStart: 0, sustainStart: 0.3, sustainEnd: 1.4 }, { ...DEFAULT_PARAMS, root, sustainMode: "loop", transposeOnly: true, flatten: 0, driftFix });
+    const out = play(engine, 57, 2.4);
+    const f0 = analyzePitch(out, SR).f0;
+    const medians: number[] = [];
+    for (let t = 0.6; t < 2.35; t += 0.2) {
+      const span = Array.from(f0.slice(Math.round(t / 0.005), Math.round((t + 0.2) / 0.005))).filter(Number.isFinite).sort((x, y) => x - y);
+      medians.push(span[span.length >> 1] - 57 + (57 - root));
+    }
+    return medians;
+  };
+
+  it("brings the sustain's slow drift onto the key (the contour kept without it)", () => {
+    const spread = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
+    // As recorded, the loop goes up a semitone and jumps back each time round …
+    expect(spread(steps(false))).toBeGreaterThan(0.6);
+    // … with the drift brought in, it stays on the key (the vibrato averaged out in each step).
+    const fixed = steps(true);
+    expect(spread(fixed)).toBeLessThan(0.3);
+    for (const m of fixed) expect(Math.abs(m)).toBeLessThan(0.2);
+  });
+});

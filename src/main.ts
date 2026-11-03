@@ -29,6 +29,7 @@ import {
   DEFAULT_PARAMS,
   PRESETS,
   oneShotParams,
+  isHeld,
   makeModeOf,
   withMakeMode,
   type MakeMode,
@@ -707,6 +708,7 @@ const vibratoPanel = el("details", { className: "sub" }, [
 // 作り方: the first choice, deciding which settings below are shown (design.md 4.5).
 const makeSelect = el("select", { ariaLabel: "作り方" }, [
   el("option", { value: "hold", textContent: "伸ばす(シンセ化。押している間伸びる)" }),
+  el("option", { value: "holdTranspose", textContent: "伸ばす(移調。抑揚を残したまま伸ばす。平坦化しない)" }),
   el("option", { value: "transpose", textContent: "移調(録音を 1 回、全体の音程を上げ下げ。平坦化しない)" }),
   el("option", { value: "oneshot", textContent: "1 回鳴らす(伸ばさない。平坦化などで音程を整える)" }),
 ]);
@@ -746,6 +748,11 @@ const oneShot = (e: HTMLElement) => (oneShotOnly.push(e), e);
 const shapingOnly: HTMLElement[] = [];
 const shaping = (e: HTMLElement) => (shapingOnly.push(e), e);
 let wavetableRow: HTMLElement;
+// 伸ばす(移調): the slow drift past the head brought onto the key (on by default).
+const driftFixRow = el("div", {}, [
+  check("伸ばす部分のゆっくりした音程のずれだけ直す(ビブラートや細かい抑揚は残す)", () => params.driftFix, (p, v) => (p.driftFix = v)),
+  el("p", { className: "fine help", textContent: "長く伸ばしても音がずれていかないように、頭部より後ろのゆっくりした上がり下がり(0.2 秒より長い動き)だけを判定した高さにそろえます。オフにすると録音の音程のまま伸ばします(持続区間の中で音程が動く素材では、伸ばし方によってふらつきます)。" }),
+]);
 // 減衰 (the former preset): the sound dies away after its attack, like a struck string, and stops quickly when let go
 // (a damper). On: ディケイ 1.2 s down to nothing, リリース 0.25 s; off: the level holds.
 const decayCheck = check(
@@ -787,7 +794,8 @@ function refreshFadeGrips(): void {
 /** The 作り方 → which settings are shown, and what the chosen ones do. */
 function refreshMakeMode(): void {
   const mode = makeModeOf(params);
-  const hold = mode === "hold";
+  const hold = isHeld(mode);
+  driftFixRow.hidden = mode !== "holdTranspose";
   for (const e of holdOnly) e.hidden = !hold;
   for (const e of oneShotOnly) e.hidden = hold;
   wavetableRow.hidden = !hold || params.sustainMode !== "wavetable";
@@ -810,12 +818,12 @@ function refreshMakeMode(): void {
   sustainHelp.textContent = texts[params.sustainMode] ?? "";
   const end = params.stopOnRelease ? "離した所から「リリース」の長さで消えます。" : "押している長さに関係なく最後まで鳴ります。";
   makeHelp.textContent = hold
-    ? "押している間は持続区間で伸ばし、離すと「リリース」の長さで消えます。"
+    ? (mode === "holdTranspose" ? "抑揚はそのままに全体を弾いた鍵・音符の高さへ上げ下げし、" : "") + "押している間は持続区間で伸ばし、離すと「リリース」の長さで消えます。"
     : mode === "transpose"
       ? "録音を 1 回、抑揚はそのままに全体を弾いた鍵・音符の高さへ上げ下げします。" + end
       : "伸ばさずに録音を 1 回鳴らし、音程は平坦化などで整えます。" + end;
-  // 移調: the pitch shaping is not applied, so it is not shown.
-  for (const e of shapingOnly) e.hidden = mode === "transpose";
+  // 移調 (either): the pitch shaping is not applied, so it is not shown.
+  for (const e of shapingOnly) e.hidden = params.transposeOnly;
   // 速度連動 (細かい設定): the pitch is the speed, so the pitch shaping is dimmed, with a note.
   const resample = params.pitchMode === "resample";
   pitchModeNote.hidden = !resample;
@@ -857,6 +865,7 @@ const tunePanel = el("section", { className: "panel tune" }, [
   ),
   held(sustainHelp),
   (wavetableRow = range("ウェーブテーブルの周期数", 1, 8, 1, () => params.wavetableCycles, (p, v) => (p.wavetableCycles = v), (v) => `${v} 周期`)),
+  driftFixRow,
   oneShot(playRangeRow),
   oneShot(stopOnReleaseRow),
   pitchModeNote,
@@ -2359,7 +2368,7 @@ function refreshExport(): void {
         decaySec: params.amp.decay,
         sustain: params.amp.sustain,
         // A held note's file ends on the release (never shorter than the fade); a one-shot's fade runs out with the material.
-        fadeOutSec: makeModeOf(params) === "hold" ? Math.max(params.amp.release, params.amp.fadeOut) : params.amp.fadeOut,
+        fadeOutSec: isHeld(makeModeOf(params)) ? Math.max(params.amp.release, params.amp.fadeOut) : params.amp.fadeOut,
       },
     );
   }

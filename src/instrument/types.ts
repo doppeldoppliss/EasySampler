@@ -9,14 +9,14 @@
 
 export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
 export type PitchMode = "preserve-length" | "resample";
-export type PresetId = "synth" | "short" | "transpose" | "decay" | "once";
+export type PresetId = "synth" | "heldTranspose" | "short" | "transpose" | "decay" | "once";
 /**
  * 作り方: the first choice for a cut, deciding which settings mean anything (and are shown).
  * hold = drawn out while held (シンセ化); transpose = the recording once, its whole pitch moved up or down
  * as it is (no flattening); oneshot = the recording once, its pitch shaped (平坦化 and the rest).
  * (How the pitch is changed, 長さ保持 or 速度連動, is a 細かい設定 of each.)
  */
-export type MakeMode = "hold" | "transpose" | "oneshot";
+export type MakeMode = "hold" | "holdTranspose" | "transpose" | "oneshot";
 
 /** Seconds within the material, [start, end). */
 export interface TimeRange {
@@ -91,10 +91,15 @@ export interface InstrumentParams {
   /** The 伸ばし方 of 伸ばす, kept while the cut is a one-shot so that going back finds it. */
   heldSustainMode: Exclude<SustainMode, "none">;
   /**
-   * 移調 (a one-shot only): the pitch is moved as a whole, its contour untouched — the pitch shaping
+   * 移調 / 伸ばす(移調): the pitch is moved as a whole, its contour untouched — the pitch shaping
    * (平坦化, リチューン, the kept wobble, 細かい揺れ) is not applied, whatever it is set to.
    */
   transposeOnly: boolean;
+  /**
+   * 伸ばす(移調): past the head, the material's slow drift (over ~0.2 s) is brought onto the root, its
+   * vibrato and fast movement kept, so a long held note does not wander off the key.
+   */
+  driftFix: boolean;
   /** Wavetable sustain: how many consecutive periods are cycled (1 = one period over and over). */
   wavetableCycles: number;
   /**
@@ -206,6 +211,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   sustainMode: "pool",
   heldSustainMode: "pool",
   transposeOnly: false,
+  driftFix: true,
   wavetableCycles: 1,
   stretch: { head: 1 },
   wobble: { vibratoCents: 0, vibratoHz: 5.5, vibratoDelaySec: 0.25, vibratoAttackSec: 0.15, vibratoReleaseSec: 0, vibratoPhase: 0, tremoloDepth: 0, driftCents: 0, micro: true, smoothSec: 0, keepDrift: 1, keepModulation: 1 },
@@ -225,8 +231,13 @@ export function oneShotParams(p: InstrumentParams): InstrumentParams {
 
 /** The 作り方 a cut's settings amount to. */
 export function makeModeOf(p: InstrumentParams): MakeMode {
-  if (p.sustainMode !== "none" && p.sustainEnabled) return "hold";
+  if (p.sustainMode !== "none" && p.sustainEnabled) return p.transposeOnly ? "holdTranspose" : "hold";
   return p.transposeOnly ? "transpose" : "oneshot";
+}
+
+/** Whether a 作り方 holds (伸ばす, either kind). */
+export function isHeld(mode: MakeMode): boolean {
+  return mode === "hold" || mode === "holdTranspose";
 }
 
 /**
@@ -236,13 +247,14 @@ export function makeModeOf(p: InstrumentParams): MakeMode {
 export function withMakeMode(p: InstrumentParams, mode: MakeMode): InstrumentParams {
   const from = makeModeOf(p);
   if (from === mode) return p;
-  if (mode === "hold") return { ...p, sustainEnabled: true, sustainMode: p.heldSustainMode, transposeOnly: false };
+  const transposeOnly = mode === "transpose" || mode === "holdTranspose";
+  if (isHeld(mode)) return { ...p, sustainEnabled: true, sustainMode: isHeld(from) ? p.sustainMode : p.heldSustainMode, transposeOnly };
   return {
     ...p,
-    sustainEnabled: from === "hold" ? true : p.sustainEnabled,
+    sustainEnabled: isHeld(from) ? true : p.sustainEnabled,
     sustainMode: "none",
     heldSustainMode: p.sustainMode === "none" ? p.heldSustainMode : p.sustainMode,
-    transposeOnly: mode === "transpose",
+    transposeOnly,
   };
 }
 
@@ -274,6 +286,7 @@ function presetBase(p: InstrumentParams): InstrumentParams {
     sustainMode: "pool",
     heldSustainMode: "pool",
     transposeOnly: false,
+    driftFix: d.driftFix,
     stretch: { ...d.stretch },
     wobble: { ...d.wobble },
     amp: { ...d.amp, attack: p.amp.attack, fadeOut: p.amp.fadeOut, velocitySens: p.amp.velocitySens },
@@ -288,6 +301,9 @@ function presetBase(p: InstrumentParams): InstrumentParams {
 export const PRESETS: Preset[] = [
   // Synthesis: flat on the note, the vowel drawn out while held.
   { id: "synth", mode: "hold", label: "シンセ化(平坦)", apply: (p) => presetBase(p) },
+  // Held like シンセ化, the pitch moved as a whole (移調): read through slowly (the voice's movement kept, at a slower
+  // pace), the slow drift brought onto the key so a long note stays in tune.
+  { id: "heldTranspose", mode: "holdTranspose", label: "伸ばす(移調)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "stretch", heldSustainMode: "stretch", transposeOnly: true, wobble: { ...DEFAULT_PARAMS.wobble, micro: false } }) },
   // Not synth-ified at all: the whole cut plays through once, as recorded, moved up or down to the key pressed
   // (a pitch shift that keeps the length and the voice's colour; nothing is held or evened out).
   { id: "transpose", mode: "transpose", label: "移調のみ(全体をそのまま上げ下げ)", apply: (p) => ({ ...presetBase(p), flatten: 0, sustainMode: "none", transposeOnly: true, levelEven: 0, wobble: { ...DEFAULT_PARAMS.wobble, micro: false } }) },

@@ -334,6 +334,16 @@ export class RollPanel {
   /** Export only the loop range (WAV / stems), seamless. */
   private readonly loopOnlyBox = el("input", { type: "checkbox", ariaLabel: "ループ範囲だけ書き出す" });
   private readonly position = el("span", { className: "fine num" });
+  // ループ範囲 in bars, and the quick ways to set it (the ruler's drag still works too).
+  private readonly loopFrom = el("input", { type: "number", min: "1", step: "1", inputMode: "decimal", ariaLabel: "ループの始まり(小節)", className: "bar-input" });
+  private readonly loopTo = el("input", { type: "number", min: "1", step: "1", inputMode: "decimal", ariaLabel: "ループの終わり(小節)", className: "bar-input" });
+  private readonly loopBarButton = button("この小節", "small", () => this.loopAround("bar"), "再生位置のある小節をループします");
+  private readonly loopSelectionButton = button("選んだ音符", "small", () => this.loopAround("selection"), "選んでいる音符を含む小節をループします");
+  private readonly loopMarkerButton = button("マーカーの間", "small", () => this.loopAround("marker"), "再生位置の前のマーカーから次のマーカーまで(Aメロ、サビ…)をループします");
+  private readonly loopDoubleButton = button("長さ ×2", "small", () => this.loopAround("double"), "ループの長さを 2 倍にします(始まりはそのまま)");
+  private readonly loopHalfButton = button("長さ ½", "small", () => this.loopAround("half"), "ループの長さを半分にします(始まりはそのまま)");
+  /** What follows the page's scroll: play, record, the metronome, the loop switch, the position and the seek bar (placed by the page). */
+  readonly transport: HTMLElement;
   /** The tempo changes after the start: each its bar and beat, its tempo, and ×. */
   private readonly tempoList = el("div", { className: "row tempo-list" });
   /** The seek bar: the song from its start to a little past its last note (or the loop's end), in beats. */
@@ -410,20 +420,29 @@ export class RollPanel {
       this.commit();
     });
 
+    this.transport = el("div", { className: "sticky-transport song-transport axis-song" }, [
+      el("div", { className: "row roll-transport" }, [this.playButton, this.recordButton, this.metronomeToggle, this.loopButton, this.position]),
+      el("div", { className: "row song-seek-row" }, [this.seekBar]),
+    ]);
+    for (const input of [this.loopFrom, this.loopTo]) input.addEventListener("change", () => this.loopFromInputs());
     this.element = el("section", { className: "panel roll-panel" }, [
       el("div", { className: "row" }, [el("span", { className: "control-label", textContent: "打ち込み" })]),
       el("div", { className: "row" }, [this.midiButton, this.midiInput]),
-      el("div", { className: "row roll-transport" }, [
-        this.playButton,
-        this.recordButton,
-        this.metronomeToggle,
-        this.loopButton,
+      el("div", { className: "row roll-settings" }, [
         el("label", { className: "inline" }, ["BPM ", this.bpmInput]),
         el("span", { className: "inline time-sig" }, ["拍子 ", this.sigNum, "/", this.sigDen]),
         el("label", { className: "inline" }, ["吸着 ", this.gridSelect]),
-        this.position,
       ]),
-      el("div", { className: "row song-seek-row" }, [this.seekBar]),
+      el("div", { className: "row loop-range-row" }, [
+        el("span", { className: "fine", textContent: "ループ範囲:" }),
+        el("label", { className: "inline" }, [this.loopFrom, " 小節目から"]),
+        el("label", { className: "inline" }, [this.loopTo, " 小節目まで"]),
+        this.loopBarButton,
+        this.loopSelectionButton,
+        this.loopMarkerButton,
+        this.loopDoubleButton,
+        this.loopHalfButton,
+      ]),
       this.tempoList,
       this.markerList,
       this.trackList,
@@ -1670,6 +1689,45 @@ export class RollPanel {
     this.client.setSongLoop(loop.on ? { startSec: beatsToSec(loop.start, this.project), endSec: beatsToSec(loop.end, this.project) } : null);
   }
 
+  /** A new loop range (beats), switched on. */
+  private setLoopRange(start: number, end: number): void {
+    const s = Math.max(0, start);
+    this.project.loop = { start: s, end: Math.max(end, s + 1 / 16), on: true };
+    this.roll.setLoop(this.project.loop);
+    this.sendLoop();
+    this.refreshButtons();
+    this.scheduleSave();
+  }
+
+  /** The loop from the bar inputs: from the start of one bar to the end of another (the end at least one bar on). */
+  private loopFromInputs(): void {
+    const bpb = this.project.beatsPerBar;
+    const from = Math.max(1, Number(this.loopFrom.value) || 1);
+    const to = Math.max(from, Number(this.loopTo.value) || from);
+    this.setLoopRange((from - 1) * bpb, to * bpb);
+  }
+
+  /** The quick loop buttons: this bar, the selected notes' bars, between markers, twice or half as long. */
+  private loopAround(kind: "bar" | "selection" | "marker" | "double" | "half"): void {
+    const bpb = this.project.beatsPerBar;
+    const beat = secToBeats(this.from, this.project);
+    const barStart = (b: number) => Math.floor(b / bpb + 1e-9) * bpb;
+    const barEnd = (b: number) => Math.max(bpb, Math.ceil(b / bpb - 1e-9) * bpb);
+    const { loop } = this.project;
+    if (kind === "bar") this.setLoopRange(barStart(beat), barStart(beat) + bpb);
+    else if (kind === "selection") {
+      const span = this.roll.selectionSpan;
+      if (span) this.setLoopRange(barStart(span.start), Math.max(barEnd(span.end), barStart(span.start) + bpb));
+    } else if (kind === "marker") {
+      const marks = this.project.markers;
+      const before = [...marks].reverse().find((m) => m.beat <= beat + 1e-9);
+      const after = marks.find((m) => m.beat > beat + 1e-9);
+      const start = before?.beat ?? 0;
+      this.setLoopRange(start, after?.beat ?? Math.max(barEnd(this.lastBeat()), start + bpb));
+    } else if (kind === "double") this.setLoopRange(loop.start, loop.start + 2 * (loop.end - loop.start));
+    else this.setLoopRange(loop.start, loop.start + Math.max(1 / 16, (loop.end - loop.start) / 2));
+  }
+
   private setLoopOn(on: boolean): void {
     this.project.loop.on = on;
     this.roll.setLoop(this.project.loop);
@@ -1920,6 +1978,12 @@ export class RollPanel {
     this.arrangeLabel.textContent = `範囲(${range}、目盛りをドラッグで選ぶ):`;
     this.loopButton.textContent = `ループ: ${loop.on ? `オン(${range})` : "オフ"}`;
     this.loopButton.classList.toggle("on", loop.on);
+    // (Bars shown as numbers: a range off the bar lines shows its fraction.)
+    const bars = (beats: number) => String(+(beats / this.project.beatsPerBar).toFixed(2));
+    if (document.activeElement !== this.loopFrom) this.loopFrom.value = bars(loop.start + this.project.beatsPerBar);
+    if (document.activeElement !== this.loopTo) this.loopTo.value = bars(loop.end);
+    this.loopSelectionButton.disabled = none;
+    this.loopMarkerButton.disabled = this.project.markers.length === 0;
     this.selectToggle.textContent = `範囲選択: ${this.roll.selectMode ? "オン" : "オフ"}`;
     this.clearButton.disabled = this.roll.notes.length === 0;
     this.quantizeButton.disabled = this.roll.notes.length === 0;

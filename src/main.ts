@@ -640,7 +640,7 @@ const materialPanel = el("section", { className: "panel" }, [
       el("span", { className: "fine root-help", textContent: "素材はこの高さで鳴っているとみなし、弾いた鍵・音符の高さとの差だけ移調します(自動のときは範囲と持続区間に追従。録音の終わりまででは範囲全体を均等に見ます)。" }),
       el("span", { className: "row tight root-nudge" }, [rootButton("基準 −1半音", -1), rootButton("基準 −5¢", -0.05), rootButton("基準 +5¢", 0.05), rootButton("基準 +1半音", 1), detectedButton]),
     ]),
-    el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock, el("span", { className: "spacer" }), undoButton, redoButton, zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
+    el("div", { className: "row tight transport" }, [undoButton, redoButton, zoomOutButton, zoomInButton, zoomRangeButton, zoomAllButton, zoomLabel]),
   ]),
   el("details", { className: "fine hint" }, [
     el("summary", { textContent: "使い方: 両端のハンドルで範囲、帯の端でマーカー、波形を横にドラッグで選択。波形や目盛りを押すと再生位置、2 回押すと再生。" }),
@@ -2238,7 +2238,9 @@ function setView(next: View): void {
   window.scrollTo({ top: 0 });
 }
 
-const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs, guide, materialPanel, tunePanel, kitPanel, keysPanel, rollPanel.element, fxPanel, exportPanel, detailsPanel]);
+// The play controls follow the page's scroll (in the 素材 view: ▶, 元の音 | 仕上がり, the time; in the 曲 view: the song's).
+const materialTransport = el("div", { className: "sticky-transport material-transport axis-material" }, [el("div", { className: "row tight transport" }, [playButton, modeToggle, seekClock])]);
+const workspace = el("main", { className: "workspace", hidden: true }, [viewTabs, guide, materialTransport, materialPanel, tunePanel, kitPanel, keysPanel, rollPanel.transport, rollPanel.element, fxPanel, exportPanel, detailsPanel]);
 setView(view);
 
 document.getElementById("app")!.append(

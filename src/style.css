@@ -1358,3 +1358,53 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
 
 /* A button asking "press again" (armOnce): what it would do cannot be undone. */
 .button.armed { background: var(--warn); color: var(--accent-text); border-color: var(--warn); }
+
+/* The play controls, following the page's scroll (under the floating volume on a phone, beside it on a wider screen). */
+.sticky-transport {
+  display: block;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+.sticky-transport .row {
+  margin: 0;
+}
+.sticky-transport .song-seek-row {
+  margin-top: 6px;
+  width: 100%;
+}
+@media (min-width: 601px) {
+  .sticky-transport {
+    padding-right: 220px;
+  }
+}
+@media (max-width: 600px) {
+  .sticky-transport {
+    top: calc(48px + env(safe-area-inset-top, 0px));
+  }
+}
+.workspace[data-view="song"] > .song-transport {
+  order: 1;
+}
+.bar-input {
+  width: 4.5em;
+}
+@media (max-width: 600px) {
+  /* (On a phone the bar stays short: smaller buttons on one line, the position beside them.) */
+  .sticky-transport {
+    padding: 6px 8px;
+  }
+  .sticky-transport .roll-transport {
+    gap: 6px;
+  }
+  .sticky-transport .button {
+    padding: 4px 8px;
+    min-height: 0;
+    font-size: 13px;
+  }
+}

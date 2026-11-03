@@ -310,6 +310,13 @@ export class PianoRoll {
     return this.selected.size;
   }
 
+  /** From the first selected note's start to the last one's end (beats), or null with nothing selected. */
+  get selectionSpan(): { start: number; end: number } | null {
+    const picked = this.notesList.filter((n) => this.selected.has(n.id));
+    if (!picked.length) return null;
+    return { start: Math.min(...picked.map((n) => n.start)), end: Math.max(...picked.map((n) => n.start + n.length)) };
+  }
+
   /** Replaces the notes (a load, an import, the song's undo). */
   setNotes(notes: Note[]): void {
     // (A drag under way belongs to the notes being replaced: it ends here.)

@@ -64,6 +64,10 @@ const SHIMMER = 0.03;
 const FORMANT_FOLLOW_FROM = 7;
 const FORMANT_FOLLOW_POWER = 0.4;
 
+/** A gap in the pitch this short (seconds) between two voiced stretches, and at least this loud against the voice, is bridged. */
+const GAP_MAX_SEC = 0.15;
+const GAP_LEVEL = 0.3;
+
 /** How long the sustain's pitch shaping takes to come in as the head ends (持続部だけシンセ化, 伸ばす(移調)'s drift fix), so the head runs on into it smoothly. */
 const SHAPE_IN_SEC = 0.15;
 
@@ -158,6 +162,13 @@ export class Engine {
   private period = new Float32Array(0);
   /** The material's pitch per mark as the engine uses it: as detected, or averaged over smoothSec (平滑化). */
   private f0: Float32Array = new Float32Array(0);
+  /**
+   * A pitch for the marks the analysis found none for inside a short gap between voiced stretches, loud like a
+   * vowel (a fast slide, a voice breaking between two pitches): drawn between the pitches either side. NaN elsewhere
+   * (silence, a consonant, a long breath). These are moved to the note like their neighbours instead of slipping
+   * through at the recorded pitch.
+   */
+  private gapPitch: Float32Array = new Float32Array(0);
   /** The slow part of the pitch per mark (a 0.2 s mean): the drift; what is left is the modulation. */
   private f0slow: Float32Array = new Float32Array(0);
   private pool = new Int32Array(0);
@@ -222,6 +233,40 @@ export class Engine {
     const window = this.params?.wobble.smoothSec ?? 0;
     if (window > 0) this.f0 = this.meanOverWindow(raw, window);
     this.f0slow = this.meanOverWindow(this.f0, 0.2);
+    this.gapPitch = this.findGapPitch();
+  }
+
+  /** The pitches across short voiced-sounding gaps (gapPitch). */
+  private findGapPitch(): Float32Array {
+    const source = this.source!;
+    const n = source.marks.length;
+    const out = new Float32Array(n).fill(Number.NaN);
+    const hasPitch = (k: number) => source.voiced[k] === 1 && Number.isFinite(this.f0[k]);
+    // How loud the voice is: the median level over the marks with a pitch.
+    const levels: number[] = [];
+    for (let k = 0; k < n; k++) if (hasPitch(k) && this.markRms[k] > 0) levels.push(this.markRms[k]);
+    if (!levels.length) return out;
+    levels.sort((a, b) => a - b);
+    const loud = GAP_LEVEL * levels[levels.length >> 1];
+    const longest = GAP_MAX_SEC * source.sampleRate;
+    let k = 0;
+    while (k < n) {
+      if (hasPitch(k)) {
+        k++;
+        continue;
+      }
+      const from = k - 1;
+      let to = k;
+      while (to < n && !hasPitch(to)) to++;
+      if (from >= 0 && to < n && source.marks[to] - source.marks[from] <= longest) {
+        const a = this.f0[from];
+        const b = this.f0[to];
+        const span = source.marks[to] - source.marks[from];
+        for (let j = k; j < to; j++) if (this.markRms[j] >= loud) out[j] = a + ((b - a) * (source.marks[j] - source.marks[from])) / span;
+      }
+      k = to;
+    }
+    return out;
   }
 
   /** Each voiced mark's pitch replaced by the mean over the voiced marks within ±window/2 around it. */
@@ -673,11 +718,21 @@ export class Engine {
         gain *= 1 + (this.random() * 2 - 1) * SHIMMER;
       }
     } else {
-      // No pitch here. Optionally the grains are read at the shift's rate (and laid down as densely),
-      // so the noise's colour follows the note while the length stays: a 音MAD-style "s" that goes up.
-      alpha = params.unvoicedFollow ? 2 ** (shift / 12) : 1;
-      spacing = period / alpha;
-      gain = params.unvoicedGainDb <= -60 ? 0 : 10 ** (params.unvoicedGainDb / 20);
+      const bridged = this.gapPitch[k];
+      if (Number.isFinite(bridged)) {
+        // A voiced sound the analysis lost the pitch of, between two that have one: moved like them — by the key,
+        // and (not 移調, not the head kept as recorded) onto the note — read faster or slower, as the noise is.
+        const headKept = params.sustainOnlySynth && params.sustainEnabled && params.sustainMode !== "none" && v.phase === Phase.Head;
+        const correction = params.transposeOnly || headKept ? 0 : (params.root - bridged) * params.flatten;
+        alpha = 2 ** ((shift + wobble + correction) / 12);
+        spacing = period / alpha;
+      } else {
+        // No pitch here. Optionally the grains are read at the shift's rate (and laid down as densely),
+        // so the noise's colour follows the note while the length stays: a 音MAD-style "s" that goes up.
+        alpha = params.unvoicedFollow ? 2 ** (shift / 12) : 1;
+        spacing = period / alpha;
+        gain = params.unvoicedGainDb <= -60 ? 0 : 10 ** (params.unvoicedGainDb / 20);
+      }
       // Repeated noise grains sound metallic (and read as a pitch); alternating their direction hides it.
       // That happens in the sustain, and wherever a slowed-down part reuses its grains.
       if (v.phase === Phase.Sustain || this.speedAt(v, v.srcTime) < 1) {

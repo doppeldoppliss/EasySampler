@@ -657,3 +657,36 @@ describe("Engine: 持続部だけシンセ化", () => {
     }
   });
 });
+
+describe("Engine: a voiced gap the analysis lost the pitch of", () => {
+  it("is moved onto the note like the vowel around it, not left at the recorded pitch", () => {
+    // A vowel held at A3 a semitone sharp; 40 ms of it the analysis has no pitch for (a fast slide, a break).
+    const vowel = synthVoice({ sampleRate: SR, durationSec: 1.2, pitch: (t) => (t > 0.5 && t < 0.54 ? 61 : 58) });
+    const analysis = analyzeMaterial([vowel], SR);
+    const source = prepareSource([vowel], analysis, SR);
+    for (let k = 0; k < source.marks.length; k++) {
+      const sec = source.marks[k] / SR;
+      if (sec > 0.5 && sec < 0.54) {
+        source.voiced[k] = 0;
+        source.f0[k] = Number.NaN;
+      }
+    }
+    const engine = new Engine(SR);
+    engine.setSource(source);
+    engine.setInstrument({ ...analysis.markers, rangeStart: 0, sustainStart: 0.2, sustainEnd: 1.1 }, { ...DEFAULT_PARAMS, root: 58, sustainMode: "stretch", sustainOnlySynth: false });
+    const out = play(engine, 64, 1.2);
+    // The stretch reads the sustain about 1:1 here; the lost 40 ms sits around 0.5 s of the output. Its energy at the
+    // note (E4) against the recorded pitch the periods used to slip through at, untouched (C#4):
+    const power = (midi: number) => {
+      const hz = 440 * 2 ** ((midi - 69) / 12);
+      let re = 0;
+      let im = 0;
+      for (let i = Math.round(0.505 * SR); i < Math.round(0.535 * SR); i++) {
+        re += out[i] * Math.cos((2 * Math.PI * hz * i) / SR);
+        im += out[i] * Math.sin((2 * Math.PI * hz * i) / SR);
+      }
+      return re * re + im * im;
+    };
+    expect(power(64)).toBeGreaterThan(4 * power(61));
+  });
+});

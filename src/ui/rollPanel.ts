@@ -1783,7 +1783,7 @@ export class RollPanel {
     let named = 0;
     this.project.tracks.forEach((t, i) => {
       const n = names[i];
-      if (!n) return;
+      if (!n || n === t.name) return;
       t.name = n;
       named++;
     });

@@ -3720,7 +3720,9 @@ async function diagnoseMix(): Promise<void> {
       }
     } else points.push("メロディのトラックがありません。ミックスの列で役割を「メロディ」にすると、自動の音量・EQ の基準になります。");
     const wet = project.tracks.filter((t, i) => heard.has(i) && t.fx.reverb.on);
-    if (wet.length >= 3 && wet.length > (heard.size * 2) / 3) points.push(`${heard.size} 本中 ${wet.length} 本にリバーブがかかっています。全体がぼやけやすいので、速いパートや低いパートからは外すのが目安です。`);
+    // (Many rooms at a little each are fine: counted only when they are also heavy on average.)
+    const meanWet = wet.reduce((x, t) => x + t.fx.reverb.mix, 0) / Math.max(1, wet.length);
+    if (wet.length >= 3 && wet.length > (heard.size * 2) / 3 && meanWet >= 0.15) points.push(`${heard.size} 本中 ${wet.length} 本にリバーブがかかっていて、量も平均 ${Math.round(meanWet * 100)}% と多めです。全体がぼやけやすいので、速いパートや低いパートからは外すか、「自分で入れたエフェクトも整える」をオンにして「まとめて自動ミックス」を試してください。`);
     // (Only when the lows were still short after the fit: a shelf at its top that got there is fine.)
     if (project.masterFx.eq.on && project.masterFx.eq.lowDb >= 6 && (rollPanel.lowsShortDb ?? -Infinity) < -6) points.push("マスター EQ の低音が上限(+6 dB)です。低音が足りない曲は、EQ よりシンセベースを重ねるほうが効果的です(「マスター EQ を目安に寄せる」のあと、足りなければ下にボタンが出ます)。");
     // The bass's lows worked against (a low cut over them, a swaying pan), and names given twice: said up top too.

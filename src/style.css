@@ -1494,3 +1494,74 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
   background: #2ecc71;
   box-shadow: 0 0 6px #2ecc71;
 }
+
+/* Meters: a bar from -48 dB (left) to 0 dB (right), red past 0. */
+.meter {
+  position: relative;
+  display: inline-block;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+  overflow: hidden;
+}
+.meter-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: #2ecc71;
+}
+.meter-fill.over {
+  background: #e5484d;
+}
+/* A track's fader with its meter under it. */
+.fader {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  vertical-align: middle;
+}
+.track-meter {
+  width: 100%;
+}
+.fader-db {
+  display: inline-block;
+  min-width: 4.6em;
+  text-align: right;
+}
+/* The master meter in the song's bar. */
+.master-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.master-meter > .meter {
+  width: 120px;
+  height: 8px;
+}
+.master-meter-text {
+  min-width: 11em;
+}
+.clip-mark {
+  border: 0;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12px;
+  background: #e5484d;
+  color: #fff;
+  cursor: pointer;
+}
+@media (max-width: 600px) {
+  /* (The master meter shares the position's line: no label, a shorter bar, smaller figures.) */
+  .master-meter > .fine:first-child {
+    display: none;
+  }
+  .master-meter > .meter {
+    width: 60px;
+  }
+  .master-meter-text {
+    min-width: 0;
+    font-size: 11px;
+  }
+}

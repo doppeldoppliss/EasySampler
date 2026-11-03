@@ -190,6 +190,19 @@ export const DEFAULT_VELOCITY = 0.8;
 /** Portamento: a note that ends where the next (of another pitch) starts is held this much longer, so the next one starts while it is still held and slides from it. */
 const LEGATO_OVERLAP_SEC = 0.002;
 
+/** A track's volume at most: +6 dB. */
+export const MAX_TRACK_GAIN = 10 ** (6 / 20);
+/** The fader's bottom (dB): below it, silence. */
+export const FADER_FLOOR_DB = -60;
+/** A gain as the fader shows it (dB; the floor for silence). */
+export function gainToDb(gain: number): number {
+  return gain > 10 ** (FADER_FLOOR_DB / 20) ? 20 * Math.log10(gain) : FADER_FLOOR_DB;
+}
+/** The fader's dB as a gain (the floor = silence). */
+export function dbToGain(db: number): number {
+  return db <= FADER_FLOOR_DB ? 0 : Math.min(MAX_TRACK_GAIN, 10 ** (db / 20));
+}
+
 export function emptyProject(): Project {
   return { version: 1, bpm: 120, timeSig: { num: 4, den: 4 }, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, tempos: [], masterFx: structuredClone(DEFAULT_FX), masterAuto: [], kit: emptyKit(), markers: [] };
 }
@@ -351,7 +364,7 @@ export function sanitizeProject(raw: unknown): Project {
           instrument: typeof tr.instrument === "string" && (tr.instrument.includes("/") || tr.instrument === BACKING || tr.kind === "audio") ? tr.instrument : null,
           notes: sortNotes(notes),
           fx: sanitizeFx(tr.fx),
-          gain: num(tr.gain, 1, 0, 1.5),
+          gain: num(tr.gain, 1, 0, MAX_TRACK_GAIN),
           pan: num(tr.pan, 0, -1, 1),
           mute: tr.mute === true,
           solo: tr.solo === true,

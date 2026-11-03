@@ -6,6 +6,7 @@
 // and voice settings on a material) by id, an Engine per song track playing an
 // instrument, the "live" Engine the keyboard plays, and the master effects.
 
+import { ShortTermMeter } from "../audio/loudness";
 import { FxChain } from "../fx/chain";
 import type { InstrumentParams, Markers } from "../instrument/types";
 import { SongPlayer, type TrackSound } from "../song/player";
@@ -24,6 +25,8 @@ declare const AudioWorkletProcessor: typeof AudioWorkletProcessorLike;
 
 /** How often the voice count is reported (render quanta ≈ 0.1 s). */
 const STATUS_EVERY = 32;
+/** Blocks between meter readings (about 20 per second). */
+const METER_EVERY = 16;
 
 interface Instrument {
   material: string;
@@ -66,6 +69,12 @@ class EngineProcessor extends AudioWorkletProcessor {
   private kitR = new Float32Array(128);
   private quanta = 0;
   private lastVoices = -1;
+  // The meters: the output's loudest samples since the last reading, its loudness, and the tracks' peaks (from the song).
+  private readonly loudness = new ShortTermMeter(sampleRate);
+  private peakL = 0;
+  private peakR = 0;
+  private meterQuanta = 0;
+  private metersQuiet = true;
 
   constructor() {
     super();
@@ -240,6 +249,32 @@ class EngineProcessor extends AudioWorkletProcessor {
     }
   }
 
+  /** What the speakers get (before the listening volume), measured; the readings go to the page while anything sounds. */
+  private meter(left: Float32Array, right: Float32Array, frames: number): void {
+    let pl = this.peakL;
+    let pr = this.peakR;
+    for (let i = 0; i < frames; i++) {
+      const a = left[i] < 0 ? -left[i] : left[i];
+      const b = right[i] < 0 ? -right[i] : right[i];
+      if (a > pl) pl = a;
+      if (b > pr) pr = b;
+    }
+    this.peakL = pl;
+    this.peakR = pr;
+    this.loudness.push(left, right, frames);
+    if (++this.meterQuanta < METER_EVERY) return;
+    this.meterQuanta = 0;
+    const tracks = this.song.takePeaks();
+    const quiet = pl < 1e-5 && pr < 1e-5 && tracks.every(([, p]) => p < 1e-5);
+    // (Silence is sent once, so the meters fall to nothing, then not again until something sounds.)
+    if (!(quiet && this.metersQuiet)) {
+      this.port.postMessage({ type: "meters", tracks, peakL: pl, peakR: pr, momentary: this.loudness.momentary, shortTerm: this.loudness.shortTerm } satisfies FromEngine);
+    }
+    this.metersQuiet = quiet;
+    this.peakL = 0;
+    this.peakR = 0;
+  }
+
   process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
     const output = outputs[0];
     const left = output[0];
@@ -302,6 +337,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       for (let i = 0; i < frames; i++) left[i] += this.liveL[i];
       if (right !== left) for (let i = 0; i < frames; i++) right[i] += this.liveR[i];
     }
+    this.meter(left, right, frames);
     if (++this.quanta >= STATUS_EVERY) {
       this.quanta = 0;
       let voices = this.live.engine.activeVoices();

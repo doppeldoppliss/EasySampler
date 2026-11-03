@@ -32,6 +32,9 @@ import {
   tempoAt,
   tempoMapSec,
   trimClips,
+  dbToGain,
+  FADER_FLOOR_DB,
+  gainToDb,
   type TempoChange,
   toSeqNotes,
   type Note,
@@ -71,6 +74,11 @@ function remember(key: string, value: string): void {
 const COARSE = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 /** How far past the last note playback runs before it stops on its own (beats). */
 const END_PAD_BEATS = 2;
+
+/** Where 書き出す音量 is kept (this browser). */
+const LOUDNESS_KEY = "easysampler.exportLoudness";
+/** A fader's dB in words (−∞ at the bottom). */
+const dbText = (db: number) => (db <= FADER_FLOOR_DB ? "−∞ dB" : `${db > 0 ? "+" : db < 0 ? "−" : ""}${Math.abs(db).toFixed(1)} dB`);
 
 function button(text: string, className: string, onClick: () => void, title = ""): HTMLButtonElement {
   const b = el("button", { type: "button", className: `button ${className}`.trim(), textContent: text, title });
@@ -358,6 +366,21 @@ export class RollPanel {
   private readonly seekWrap = el("div", { className: "seek-wrap" }, [this.loopBand, this.loopStartGrip, this.loopEndGrip, this.seekBar, this.seekActivity]);
   /** Each track row's lamp: lit while that track sounds (a note under the playhead, the track heard). */
   private trackLamps: HTMLElement[] = [];
+  /** Each track's meter, by track id: its bar, and the level it shows (dB, falling back slowly). */
+  private readonly trackMeters = new Map<string, { fill: HTMLElement; db: number }>();
+  // The master meter (in the bar that follows the scroll): the output's level, its loudness, and a clip mark.
+  private readonly masterFill = el("span", { className: "meter-fill" });
+  private readonly masterText = el("span", { className: "fine num master-meter-text" });
+  private readonly clipMark = el("button", { type: "button", className: "clip-mark", textContent: "0 dB 超え", title: "どこかで 0 dB を超えました(書き出すと音割れします)。押すと消えます" });
+  private masterDb = -Infinity;
+  /** The loudest the output has been lately (dB), held a while so it can be read. */
+  private masterHold = { db: -Infinity, at: 0 };
+  // 書き出す音量: the song WAV brought to a platform's loudness (or left as it is), kept in this browser.
+  private readonly loudnessSelect = el("select", { ariaLabel: "書き出す音量" }, [
+    el("option", { value: "none", textContent: "音量: そのまま(音割れだけ防ぐ)" }),
+    el("option", { value: "niconico", textContent: "音量: ニコニコ動画向け(-15 LUFS)" }),
+    el("option", { value: "youtube", textContent: "音量: YouTube・配信向け(-14 LUFS)" }),
+  ]);
   private seeking = false;
   private seekTimer = 0;
   readonly info = el("p", { className: "fine", role: "status" });
@@ -431,7 +454,19 @@ export class RollPanel {
     });
 
     this.transport = el("div", { className: "sticky-transport song-transport axis-song" }, [
-      el("div", { className: "row roll-transport" }, [this.playButton, this.recordButton, this.metronomeToggle, this.loopButton, this.position]),
+      el("div", { className: "row roll-transport" }, [
+        this.playButton,
+        this.recordButton,
+        this.metronomeToggle,
+        this.loopButton,
+        this.position,
+        el("span", { className: "master-meter", title: "マスター(曲全体)の音の大きさ。バーと「ピーク」は瞬間の最大、「LUFS」は直近 3 秒の聞こえの大きさ(配信サイトが揃える基準と同じ物差し)" }, [
+          el("span", { className: "fine", textContent: "マスター" }),
+          el("span", { className: "meter" }, [this.masterFill]),
+          this.masterText,
+          this.clipMark,
+        ]),
+      ]),
       el("div", { className: "row song-seek-row" }, [this.seekWrap]),
     ]);
     for (const input of [this.loopFrom, this.loopTo]) input.addEventListener("change", () => this.loopFromInputs());
@@ -486,6 +521,7 @@ export class RollPanel {
         button("トラック別の WAV(zip)", "small", () => this.onExport("stems"), "トラックごとに 1 本ずつ(各トラックのエフェクト込み、マスターなし)"),
         button("MIDI(.mid)", "small", () => this.onExport("mid"), "音符だけを MIDI ファイルに(別の DAW へ持っていく用)"),
         el("label", { className: "inline fine", title: "ループ範囲だけを、つなぎ目なくループできる長さで書き出します(WAV・トラック別)" }, [this.loopOnlyBox, " ループ範囲だけ"]),
+        el("label", { className: "inline", title: "曲の WAV を、投稿先がそろえる聞こえの大きさ(LUFS)に合わせて書き出します。上限はトゥルーピーク -1 dB(リミッター)。トラック別の WAV はそのままです" }, [this.loudnessSelect]),
       ]),
       this.exportStatus,
     ]);
@@ -509,6 +545,21 @@ export class RollPanel {
     // (The strip is drawn in pixels: again when the bar changes width.)
     if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => this.drawSeekActivity()).observe(this.seekActivity);
     this.grabLoopEnd(this.loopStartGrip, "start");
+    this.clipMark.hidden = true;
+    this.clipMark.addEventListener("click", () => (this.clipMark.hidden = true));
+    try {
+      const kept = localStorage.getItem(LOUDNESS_KEY);
+      if (kept && [...this.loudnessSelect.options].some((o) => o.value === kept)) this.loudnessSelect.value = kept;
+    } catch {
+      // (private window: the default)
+    }
+    this.loudnessSelect.addEventListener("change", () => {
+      try {
+        localStorage.setItem(LOUDNESS_KEY, this.loudnessSelect.value);
+      } catch {
+        // (not kept)
+      }
+    });
     this.grabLoopEnd(this.loopEndGrip, "end");
     this.applyProject();
   }
@@ -1226,8 +1277,9 @@ export class RollPanel {
 
   private renderTracks(): void {
     this.summarize();
-    // (The lamps come back with the rows below.)
+    // (The lamps and meters come back with the rows below.)
     this.trackLamps = [];
+    this.trackMeters.clear();
     this.drawSeekActivity();
     this.refreshTrackOps();
     this.renderLongList();
@@ -1275,12 +1327,22 @@ export class RollPanel {
         this.mix(t, (x) => (x.solo = !x.solo));
         solo.classList.toggle("on", t.solo);
       }, "ソロ");
-      const volume = el("input", { type: "range", min: "0", max: "1.5", step: "0.01", value: String(t.gain), ariaLabel: "音量" });
-      volume.addEventListener("input", () => this.mix(t, (x) => (x.gain = Number(volume.value))));
-      volume.addEventListener("dblclick", () => {
-        volume.value = "1";
-        this.mix(t, (x) => (x.gain = 1));
+      // The volume in dB (0 dB = as it is, up to +6, the bottom = silent), with the track's meter under it.
+      const volume = el("input", { type: "range", min: String(FADER_FLOOR_DB), max: "6", step: "0.1", value: String(gainToDb(t.gain)), ariaLabel: "音量(dB)" });
+      const volumeText = el("span", { className: "fine num fader-db" });
+      const showVolume = () => (volumeText.textContent = dbText(gainToDb(t.gain)));
+      showVolume();
+      volume.addEventListener("input", () => {
+        this.mix(t, (x) => (x.gain = dbToGain(Number(volume.value))));
+        showVolume();
       });
+      volume.addEventListener("dblclick", () => {
+        volume.value = "0";
+        this.mix(t, (x) => (x.gain = 1));
+        showVolume();
+      });
+      const meterFill = el("span", { className: "meter-fill" });
+      this.trackMeters.set(t.id, { fill: meterFill, db: -Infinity });
       const pan = el("input", { type: "range", min: "-1", max: "1", step: "0.05", value: String(t.pan), ariaLabel: "パン" });
       pan.addEventListener("input", () => this.mix(t, (x) => (x.pan = Number(pan.value))));
       pan.addEventListener("dblclick", () => {
@@ -1317,7 +1379,11 @@ export class RollPanel {
         editCut ?? el("span", { className: "track-slot track-edit" }),
         mute,
         solo,
-        el("label", { className: "inline fine" }, ["音量 ", volume]),
+        el("label", { className: "inline fine track-volume", title: "音量(dB)。ダブルクリックで 0 dB。下のバーはこのトラックの音の大きさ(赤 = 0 dB を超えている)" }, [
+          "音量 ",
+          el("span", { className: "fader" }, [volume, el("span", { className: "meter track-meter" }, [meterFill])]),
+          volumeText,
+        ]),
         el("label", { className: "inline fine" }, ["パン ", pan]),
         fxMark ?? el("span", { className: "track-slot track-fx" }),
         silent ?? el("span", { className: "track-slot track-note" }),
@@ -2055,6 +2121,47 @@ export class RollPanel {
       this.seekBar.max = max;
       this.drawSeekLoop();
     }
+  }
+
+  /** The song WAV's loudness target (LUFS), or null to leave it as it is. */
+  get exportLoudness(): { targetLufs: number; label: string } | null {
+    const v = this.loudnessSelect.value;
+    return v === "niconico" ? { targetLufs: -15, label: "ニコニコ動画向け" } : v === "youtube" ? { targetLufs: -14, label: "YouTube・配信向け" } : null;
+  }
+
+  /**
+   * The engine's meter readings: each track's bar (it rises at once and falls back about 25 dB a second), the
+   * master's bar, peak (held two seconds) and loudness, and the clip mark once the output passes 0 dB.
+   */
+  showMeters(m: { tracks: [string, number][]; peakL: number; peakR: number; shortTerm: number }): void {
+    const fall = 1.3;
+    const toDb = (p: number) => (p > 1e-6 ? 20 * Math.log10(p) : -Infinity);
+    const bar = (fill: HTMLElement, db: number) => {
+      // (−48 dB at the left to 0 dB at the right; red past 0.)
+      fill.style.width = `${Math.max(0, Math.min(1, (db + 48) / 48)) * 100}%`;
+      fill.classList.toggle("over", db > 0);
+    };
+    const seen = new Set<string>();
+    for (const [id, peak] of m.tracks) {
+      const meter = this.trackMeters.get(id);
+      if (!meter) continue;
+      seen.add(id);
+      meter.db = Math.max(toDb(peak), meter.db - fall);
+      bar(meter.fill, meter.db);
+    }
+    for (const [id, meter] of this.trackMeters) {
+      if (seen.has(id)) continue;
+      meter.db -= fall;
+      bar(meter.fill, meter.db);
+    }
+    const peakDb = toDb(Math.max(m.peakL, m.peakR));
+    this.masterDb = Math.max(peakDb, this.masterDb - fall);
+    bar(this.masterFill, this.masterDb);
+    const now = performance.now();
+    if (peakDb >= this.masterHold.db || now - this.masterHold.at > 2000) this.masterHold = { db: peakDb, at: now };
+    if (peakDb > 0) this.clipMark.hidden = false;
+    const lufs = Number.isFinite(m.shortTerm) && m.shortTerm > -70 ? `${m.shortTerm.toFixed(1)} LUFS` : "— LUFS";
+    this.masterText.textContent = `ピーク ${Number.isFinite(this.masterHold.db) ? this.masterHold.db.toFixed(1) : "−∞"} dB・${lufs}`;
   }
 
   /** The seek bar's thumb is this wide: its track runs from half of it in to half of it short of the end. */

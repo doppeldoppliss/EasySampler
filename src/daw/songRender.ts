@@ -2,6 +2,7 @@
 // page plays through, run offline over the whole song, then the master
 // effects. What you hear is what is written.
 
+import { matchLoudness } from "../audio/loudness";
 import type { PreparedSource } from "../engine/engine";
 import { FxChain } from "../fx/chain";
 import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
@@ -58,6 +59,8 @@ export interface SongRenderInput {
   window?: { fromSec: number; lengthSec: number };
   /** A stem: left at its level (no gain against clipping) and untrimmed, so the stems can be brought to one gain and one length. */
   raw?: boolean;
+  /** 書き出す音量: brought to this loudness (LUFS) under a true-peak ceiling (dBTP), instead of only kept under full scale. */
+  loudness?: { targetLufs: number; ceilingDb: number };
 }
 
 export interface RenderedSong {
@@ -65,6 +68,8 @@ export interface RenderedSong {
   sampleRate: number;
   /** Gain applied to keep the mix under full scale (1 = none). */
   gain: number;
+  /** With `loudness`: the loudness before and after, the gain (dB) and the true peak (dBTP) it ended on. */
+  matched?: { beforeLufs: number; afterLufs: number; gainDb: number; truePeakDb: number };
 }
 
 /**
@@ -198,9 +203,15 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
     if (a > peak) peak = a;
   }
   end = win || input.raw ? at : Math.min(at, end + Math.round(0.05 * sr));
-  const gain = !input.raw && peak > 0.999 ? 0.98 / peak : 1;
   const outL = left.slice(0, end);
   const outR = right.slice(0, end);
+  if (input.loudness && !input.raw) {
+    // (The measuring takes a moment: the screen hears the render is done first.)
+    if (progress) await progress(1);
+    const matched = matchLoudness(outL, outR, sr, input.loudness.targetLufs, input.loudness.ceilingDb);
+    return { channels: [outL, outR], sampleRate: sr, gain: 10 ** (matched.gainDb / 20), matched };
+  }
+  const gain = !input.raw && peak > 0.999 ? 0.98 / peak : 1;
   if (gain !== 1)
     for (let i = 0; i < end; i++) {
       outL[i] *= gain;

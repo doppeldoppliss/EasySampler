@@ -3170,7 +3170,8 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
   const stamp = songFileStamp() + (range ? "_loop" : "");
   const songInfo = { ISFT: "EasySampler" };
   const window = range ? { fromSec: range.lengthSec, lengthSec: range.lengthSec } : undefined;
-  const key = JSON.stringify([kind, range, project, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
+  const loudness = kind === "wav" ? rollPanel.exportLoudness : null;
+  const key = JSON.stringify([kind, range, loudness, project, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
   let built = songBuilt?.key === key ? songBuilt : null;
   if (!built) {
     songBuilding = true;
@@ -3187,9 +3188,21 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
       } else if (kind === "wav") {
         say("作成中…");
         await yieldToScreen();
-        const song = await renderSong({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, range), tempoMap, window }, progress);
+        const song = await renderSong(
+          { sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, range), tempoMap, window, loudness: loudness ? { targetLufs: loudness.targetLufs, ceilingDb: -1 } : undefined },
+          async (share) => {
+            await progress(share);
+            if (share >= 1 && loudness) say("音量を合わせています…");
+          },
+        );
         const fileName = `${stamp}.wav`;
-        const lowered = song.gain < 1 ? `。音割れしないよう全体を ${(20 * Math.log10(song.gain)).toFixed(1)} dB 下げました` : "";
+        const m = song.matched;
+        const signed = (db: number) => `${db >= 0 ? "+" : "−"}${Math.abs(db).toFixed(1)}`;
+        const lowered = m
+          ? `。${loudness!.label}: ${m.beforeLufs.toFixed(1)} → ${m.afterLufs.toFixed(1)} LUFS(${signed(m.gainDb)} dB、トゥルーピーク ${m.truePeakDb.toFixed(1)} dBTP)`
+          : song.gain < 1
+            ? `。音割れしないよう全体を ${(20 * Math.log10(song.gain)).toFixed(1)} dB 下げました`
+            : "";
         built = { key, blob: new Blob([encodeWavBytes(song.channels, song.sampleRate, songInfo, undefined, { bits: 24 })], { type: "audio/wav" }), fileName, summary: `${(song.channels[0].length / song.sampleRate).toFixed(1)} 秒、${song.sampleRate / 1000} kHz / 24bit${lowered}` };
       } else {
         // Every stem from 0, at one gain and one length: laid side by side they add up to the mix (without the master).
@@ -3237,6 +3250,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
   say(`保存しました: ${built.fileName}(${built.summary})`);
 }
 rollPanel.onExport = (kind) => void exportSong(kind);
+client.onMeters = (meters) => rollPanel.showMeters(meters);
 
 /** The cuts of every material, for the tracks' lists. */
 function refreshInstruments(): void {

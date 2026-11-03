@@ -90,6 +90,17 @@ describe("renderSong", () => {
     expect(Math.max(...one.channels[0])).toBeCloseTo(0.8, 3);
   });
 
+  it("書き出す音量: brings the song to the target loudness under -1 dBTP, quiet or loud", async () => {
+    const tone = (amp: number) => Float32Array.from({ length: SR * 3 }, (_, i) => amp * Math.sin((2 * Math.PI * 440 * i) / SR));
+    for (const amp of [0.05, 0.9]) {
+      const tracks = [{ id: "x", instrument: null, samples: [[tone(amp)]], notes: [{ start: 0, end: 3, note: 0, velocity: 1, drum: false }], ...plain }];
+      const song = await renderSong({ sampleRate: SR, bpm: 120, masterFx: null, tracks, loudness: { targetLufs: -14, ceilingDb: -1 } });
+      expect(song.matched!.afterLufs).toBeGreaterThan(-14.6);
+      expect(song.matched!.afterLufs).toBeLessThan(-13.4);
+      expect(song.matched!.truePeakDb).toBeLessThanOrEqual(-0.95);
+    }
+  });
+
   it("plays a part on the plain backing synth, and drum rows on its drum sound", async () => {
     const song = await renderSong({
       sampleRate: SR,

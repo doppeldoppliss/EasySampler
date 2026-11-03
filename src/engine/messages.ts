@@ -59,4 +59,8 @@ export type ToEngine =
   | { type: "songStop" }
   | { type: "songLoop"; loop: { startSec: number; endSec: number } | null };
 
-export type FromEngine = { type: "status"; voices: number };
+export type FromEngine =
+  | { type: "status"; voices: number }
+  // The meters (about 20 a second while anything sounds): each track's loudest sample since the last reading (after
+  // its volume and pan), the output's per side, and its loudness (LUFS, momentary 400 ms and short-term 3 s).
+  | { type: "meters"; tracks: [string, number][]; peakL: number; peakR: number; momentary: number; shortTerm: number };

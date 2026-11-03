@@ -45,6 +45,8 @@ export class EngineClient {
   /** The buffer last played, so a seek can restart it from elsewhere. */
   private lastBuffer: AudioBuffer | null = null;
   onStatus: (voices: number) => void = () => {};
+  /** The meters, as the engine reads them (about 20 a second while anything sounds). */
+  onMeters: (meters: Extract<FromEngine, { type: "meters" }>) => void = () => {};
   onError: (message: string) => void = () => {};
   onPreviewEnd: () => void = () => {};
 
@@ -114,6 +116,7 @@ export class EngineClient {
     const node = new AudioWorkletNode(context, "maddaw-engine", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
     node.port.onmessage = (event: MessageEvent<FromEngine>) => {
       if (event.data.type === "status") this.onStatus(event.data.voices);
+      else if (event.data.type === "meters") this.onMeters(event.data);
     };
     node.connect(this.out(context));
     this.node = node;

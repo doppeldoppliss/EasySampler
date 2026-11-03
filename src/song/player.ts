@@ -100,6 +100,8 @@ class Lane {
   gr = NaN;
   l = new Float32Array(128);
   r = new Float32Array(128);
+  /** The loudest sample it put into the mix since the meters last read it (after its gain and pan). */
+  peak = 0;
 
   constructor(id: string, sound: TrackSound, sampleRate: number) {
     this.id = id;
@@ -362,12 +364,35 @@ export class SongPlayer {
       const r = lane.r;
       const sl = (gl1 - gl0) / frames;
       const sr = (gr1 - gr0) / frames;
-      if (outR === outL) for (let i = 0; i < frames; i++) outL[i] += (l[i] * (gl0 + sl * i) + r[i] * (gr0 + sr * i)) * 0.5;
+      let peak = lane.peak;
+      if (outR === outL)
+        for (let i = 0; i < frames; i++) {
+          const v = (l[i] * (gl0 + sl * i) + r[i] * (gr0 + sr * i)) * 0.5;
+          outL[i] += v;
+          if (v > peak) peak = v;
+          else if (-v > peak) peak = -v;
+        }
       else
         for (let i = 0; i < frames; i++) {
-          outL[i] += l[i] * (gl0 + sl * i);
-          outR[i] += r[i] * (gr0 + sr * i);
+          const a = l[i] * (gl0 + sl * i);
+          const b = r[i] * (gr0 + sr * i);
+          outL[i] += a;
+          outR[i] += b;
+          const m = Math.max(a, -a, b, -b);
+          if (m > peak) peak = m;
         }
+      lane.peak = peak;
     }
+  }
+
+  /** Each track's loudest sample since the last call (the meters), the metronome left out; then they start again. */
+  takePeaks(): [string, number][] {
+    const out: [string, number][] = [];
+    for (const lane of this.lanes) {
+      if (lane.id.startsWith("__")) continue;
+      out.push([lane.id, lane.peak]);
+      lane.peak = 0;
+    }
+    return out;
   }
 }

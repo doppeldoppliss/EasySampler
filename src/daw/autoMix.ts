@@ -109,12 +109,26 @@ export function cleanEq(lowCutHz: number, dip: { hz: number; db: number } | null
 // ------------------------------------------------------------ ducking to the kick
 
 /** How far each part ducks to the kick (dB); the lead, the drums and the audio do not. */
-const DUCK_DB: Partial<Record<Role, number>> = { bass: -6, chords: -3, backing: -3, harmony: -3 };
+const DUCK_DB: Partial<Record<Role, number>> = { bass: -4, chords: -2, backing: -2, harmony: -2 };
 
-/** A track's ducking to the kick (null: it does not duck): back up over about an eighth note. */
-export function kickDuck(role: Role, bpm: number, duck: FxSettings["duck"]): FxSettings["duck"] | null {
+/** Notes at least this long (beats, the median) make a part one that is held: only those duck, besides the bass. */
+const HELD_BEATS = 1;
+
+/** The middle of a track's note lengths (beats); 0 without notes. */
+export function medianLength(notes: readonly Note[]): number {
+  if (!notes.length) return 0;
+  const s = notes.map((n) => n.length).sort((a, b) => a - b);
+  return s[s.length >> 1];
+}
+
+/**
+ * A track's ducking to the kick (null: it does not duck), gently (the whole song pumping is too much): the bass
+ * (−4 dB), and chords or accompaniment that are held (notes a beat or longer, −2 dB); back up over about an
+ * eighth note.
+ */
+export function kickDuck(role: Role, bpm: number, duck: FxSettings["duck"], lengthBeats: number): FxSettings["duck"] | null {
   const depthDb = DUCK_DB[role];
-  if (depthDb === undefined) return null;
+  if (depthDb === undefined || (role !== "bass" && lengthBeats < HELD_BEATS)) return null;
   return { ...duck, on: true, source: "kick", depthDb, releaseMs: Math.round(Math.min(300, Math.max(80, 30000 / bpm))) };
 }
 
@@ -138,15 +152,18 @@ export function octaveFit(notes: readonly Note[], root: number): number {
 // ------------------------------------------------------------ rooms
 
 /** How much room each part gets (the reverb's dry/wet); the bass, the drums and the audio get none. */
-const ROOM_MIX: Partial<Record<Role, number>> = { lead: 0.12, chords: 0.22, backing: 0.25, harmony: 0.28 };
+const ROOM_MIX: Partial<Record<Role, number>> = { lead: 0.06, chords: 0.11, backing: 0.12, harmony: 0.14 };
+
+/** Notes shorter than this (beats, the median) make a part fast and short: it gets no room (it would only blur). */
+const SHORT_BEATS = 0.25;
 
 /**
  * A track's room by its part (null: none): its tail about two beats long at the tempo, its pre-delay a 64th note (31 ms at 120)
  * (so the note stays clear in front of it), the accompaniment a little darker (further back).
  */
-export function roomFor(role: Role, bpm: number, reverb: FxSettings["reverb"]): FxSettings["reverb"] | null {
+export function roomFor(role: Role, bpm: number, reverb: FxSettings["reverb"], lengthBeats: number): FxSettings["reverb"] | null {
   const mix = ROOM_MIX[role];
-  if (mix === undefined) return null;
+  if (mix === undefined || lengthBeats < SHORT_BEATS) return null;
   const twoBeats = 120 / bpm;
   return {
     ...reverb,

@@ -60,11 +60,12 @@ describe("自動ミックス", () => {
     expect(maskingDip(bump(2500, 6), bump(400, 6))).toBeNull();
   });
 
-  it("ducks the bass and the accompaniment to the kick, not the lead or the drums", () => {
-    expect(kickDuck("bass", 120, DEFAULT_FX.duck)).toMatchObject({ on: true, source: "kick", depthDb: -6, releaseMs: 250 });
-    expect(kickDuck("chords", 120, DEFAULT_FX.duck)?.depthDb).toBe(-3);
-    expect(kickDuck("lead", 120, DEFAULT_FX.duck)).toBeNull();
-    expect(kickDuck("drum", 120, DEFAULT_FX.duck)).toBeNull();
+  it("ducks the bass and the held chords to the kick, gently; not short chords, the lead or the drums", () => {
+    expect(kickDuck("bass", 120, DEFAULT_FX.duck, 0.25)).toMatchObject({ on: true, source: "kick", depthDb: -4, releaseMs: 250 });
+    expect(kickDuck("chords", 120, DEFAULT_FX.duck, 2)?.depthDb).toBe(-2);
+    expect(kickDuck("chords", 120, DEFAULT_FX.duck, 0.5)).toBeNull();
+    expect(kickDuck("lead", 120, DEFAULT_FX.duck, 2)).toBeNull();
+    expect(kickDuck("drum", 120, DEFAULT_FX.duck, 2)).toBeNull();
   });
 
   it("moves a track by the octaves that bring it nearest its cut's pitch", () => {
@@ -75,12 +76,15 @@ describe("自動ミックス", () => {
   });
 
   it("rooms by part and tempo: none on the bass, more on the accompaniment than the lead, longer when slower", () => {
-    expect(roomFor("bass", 120, DEFAULT_FX.reverb)).toBeNull();
-    const lead = roomFor("lead", 120, DEFAULT_FX.reverb)!;
-    const backing = roomFor("backing", 120, DEFAULT_FX.reverb)!;
+    expect(roomFor("bass", 120, DEFAULT_FX.reverb, 1)).toBeNull();
+    const lead = roomFor("lead", 120, DEFAULT_FX.reverb, 1)!;
+    const backing = roomFor("backing", 120, DEFAULT_FX.reverb, 1)!;
     expect(backing.mix).toBeGreaterThan(lead.mix);
-    expect(roomFor("lead", 70, DEFAULT_FX.reverb)!.size).toBeGreaterThan(roomFor("lead", 170, DEFAULT_FX.reverb)!.size);
+    expect(roomFor("lead", 70, DEFAULT_FX.reverb, 1)!.size).toBeGreaterThan(roomFor("lead", 170, DEFAULT_FX.reverb, 1)!.size);
     expect(lead.preDelayMs).toBe(31);
+    expect(lead.mix).toBe(0.06);
+    // A fast part of sixteenths: no room.
+    expect(roomFor("backing", 120, DEFAULT_FX.reverb, 0.13)).toBeNull();
   });
 
   it("a role set by hand wins, and a lead set by hand stops another being found", () => {

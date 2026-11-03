@@ -55,7 +55,7 @@ import { drumRows, keyLabel, soundKey, type Kit } from "../daw/kit";
 import { arrange, type ArrangeKind } from "../daw/arrange";
 import { armOnce, el } from "./dom";
 import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, ROLE_NAMES, spreadPans, trackRoles, type Role } from "../daw/roles";
-import { kickDuck, octaveFit, roomFor } from "../daw/autoMix";
+import { kickDuck, medianLength, octaveFit, roomFor } from "../daw/autoMix";
 import { KICK_KEYS } from "../song/player";
 import { PianoRoll } from "./pianoRoll";
 import { isSynthPreset, SYNTH_PRESETS } from "../song/backing";
@@ -601,8 +601,8 @@ export class RollPanel {
         el("span", { className: "fine", textContent: "役割から自動で:" }),
         button("音量を合わせる", "small", () => this.onAutoLevels(), "トラックを 1 本ずつ書き出して聞こえの大きさ(LUFS)を測り、役割ごとの目安(原曲・伴奏かメロディを基準に、ベース −2・ドラム −1・和音 −5・伴奏 −6・ハモリ −8 dB。同じ役割が複数なら分け合う)に音量を合わせます"),
         button("トラックの EQ", "small", () => this.onAutoEq(), "メロディ・和音・伴奏・ハモリのトラックに、低い音符の少し下からのローカットと、メロディとぶつかる帯を 2〜3 dB 削る EQ を入れます(EQ を自分で入れたトラックはそのまま)"),
-        button("キックに合わせて沈める", "small", () => this.autoDuck(), "ベース(−6 dB)と和音・伴奏・ハモリ(−3 dB)に、ドラムトラックのキック(35・36 番)で沈むサイドチェーンを入れます(サイドチェーンを自分で入れたトラックはそのまま)"),
-        button("残響を付ける", "small", () => this.autoRooms(), "メロディは少し、和音・伴奏・ハモリは多めに、テンポに合った長さのリバーブを入れます。ベース・ドラム・原曲にはなし(リバーブを自分で入れたトラックはそのまま)"),
+        button("キックに合わせて沈める", "small", () => this.autoDuck(), "ベース(−4 dB)と、1 拍以上伸ばす音が中心の和音・伴奏・ハモリ(−2 dB)に、ドラムトラックのキック(35・36 番)で沈むサイドチェーンを入れます(サイドチェーンを自分で入れたトラックはそのまま)"),
+        button("残響を付ける", "small", () => this.autoRooms(), "メロディは少し(6%)、和音・伴奏・ハモリはやや多め(11〜14%)に、テンポに合った長さのリバーブを入れます。ベース・ドラム・原曲と、16 分音符以下の短い音が中心の速いパートにはなし(リバーブを自分で入れたトラックはそのまま)"),
       ]),
       this.mixInfo,
       this.mixStrips,
@@ -1607,7 +1607,7 @@ export class RollPanel {
     let releaseMs = 0;
     const done: string[] = [];
     const fxs = this.project.tracks.map((t, i) => {
-      const duck = kickDuck(roles[i], this.project.bpm, t.fx.duck);
+      const duck = kickDuck(roles[i], this.project.bpm, t.fx.duck, medianLength(t.notes));
       if (!duck || !t.notes.length) return null;
       if (t.fx.duck.on && t.fx.duck.source !== "kick") {
         kept++;
@@ -1622,7 +1622,7 @@ export class RollPanel {
       fxs,
       done.length
         ? `キックで沈むサイドチェーンを入れました: ${done.join("、")}(戻るまで ${releaseMs} ms)。${keptNote}「元に戻す」で戻せます。`
-        : `沈めるトラック(ベース・和音・伴奏・ハモリ)がありませんでした。${keptNote}`,
+        : `沈めるトラック(ベースと、音を伸ばす和音・伴奏・ハモリ)がありませんでした。${keptNote}`,
     );
   }
 
@@ -1632,7 +1632,7 @@ export class RollPanel {
     let kept = 0;
     const done: string[] = [];
     const fxs = this.project.tracks.map((t, i) => {
-      const reverb = roomFor(roles[i], this.project.bpm, t.fx.reverb);
+      const reverb = roomFor(roles[i], this.project.bpm, t.fx.reverb, medianLength(t.notes));
       if (!reverb || !t.notes.length) return null;
       if (t.fx.reverb.on) {
         kept++;
@@ -1646,7 +1646,7 @@ export class RollPanel {
       fxs,
       done.length
         ? `リバーブを入れました(かかる量): ${done.join("、")}。長さはテンポに合わせました。${keptNote}「元に戻す」で戻せます。`
-        : `残響を付けるトラック(メロディ・和音・伴奏・ハモリ)がありませんでした。${keptNote}`,
+        : `残響を付けるトラック(メロディ・和音・伴奏・ハモリのうち、16 分音符より長い音が中心のもの)がありませんでした。${keptNote}`,
     );
   }
 

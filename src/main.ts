@@ -1067,6 +1067,17 @@ const keysPanel = el("section", { className: "panel keys-panel" }, [
 new ResizeObserver(() => document.body.style.setProperty("--keys-height", `${keysPanel.offsetHeight}px`)).observe(keysPanel);
 // While something is being typed, a phone's own keyboard takes the bottom of the screen: the pinned piano steps aside.
 document.addEventListener("focusin", (event) => document.body.classList.toggle("typing", isTypingTarget(event.target)));
+// A drop-down list chosen from with the mouse or a finger lets go of the focus once chosen: left in focus, the next
+// arrow or letter key (meant for the piano roll, the keyboard) would quietly change the material or a track's 音源.
+// (Chosen with the keys, it keeps the focus: arrowing through a list goes on working.)
+let selectByPointer: HTMLSelectElement | null = null;
+document.addEventListener("pointerdown", (event) => (selectByPointer = event.target instanceof HTMLSelectElement ? event.target : null), true);
+document.addEventListener("change", (event) => {
+  if (event.target instanceof HTMLSelectElement && event.target === selectByPointer) {
+    event.target.blur();
+    selectByPointer = null;
+  }
+}, true);
 document.addEventListener("focusout", () => document.body.classList.remove("typing"));
 showPinned();
 

@@ -11,6 +11,9 @@
 import { pitchLabel } from "../analysis/pitch";
 import { el, isTypingTarget } from "./dom";
 
+/** Where keys type text (a field), not a drop-down list: the PC keyboard leaves those keys alone. */
+const isTextEntry = (target: EventTarget | null) => isTypingTarget(target) && !(target instanceof HTMLSelectElement);
+
 export interface NoteSink {
   noteOn(note: number, velocity: number): void;
   noteOff(note: number): void;
@@ -174,7 +177,9 @@ export class PcKeyboard {
   }
 
   private keyDown(event: KeyboardEvent): void {
-    if (isTypingTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+    // (A drop-down list in focus is not typed into: the keys play — left to it, a letter jumps the list to an item
+    // starting with it, and the material or a track's 音源 changed under the player's hands.)
+    if (isTextEntry(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.isComposing || event.keyCode === 229 || event.key === "Process") {
       if (this.state.enabled) this.onIme();
       return;

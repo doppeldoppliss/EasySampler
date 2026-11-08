@@ -267,6 +267,8 @@ export interface Project {
   masterAuto: BeatPoint[];
   /** ベースの強さ: how far over its usual level 音量を合わせる puts the bass (dB; 0, 3 or 6). */
   bassLevelDb: number;
+  /** 和音・伴奏の強さ: the same for the chords, the accompaniment and the harmonies (dB; 0, 3 or 6). */
+  chordsLevelDb: number;
   /** The drum kit the drum tracks and the kit view's keyboard play (design.md 13.2). */
   kit: Kit;
   /** Named places in the song (Aメロ, サビ…), sorted by beat. */
@@ -298,7 +300,7 @@ export function dbToGain(db: number): number {
 }
 
 export function emptyProject(): Project {
-  return { version: 1, bpm: 120, timeSig: { num: 4, den: 4 }, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, tempos: [], masterFx: structuredClone(DEFAULT_FX), masterAuto: [], bassLevelDb: 0, kit: emptyKit(), markers: [] };
+  return { version: 1, bpm: 120, timeSig: { num: 4, den: 4 }, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, tempos: [], masterFx: structuredClone(DEFAULT_FX), masterAuto: [], bassLevelDb: 0, chordsLevelDb: 0, kit: emptyKit(), markers: [] };
 }
 
 let nextId = 1;
@@ -509,6 +511,7 @@ export function sanitizeProject(raw: unknown): Project {
     masterFx: sanitizeFx(r.masterFx),
     masterAuto: line(r.masterAuto, 0, VOLUME_AUTO_MAX),
     bassLevelDb: num(r.bassLevelDb, 0, 0, 12),
+    chordsLevelDb: num(r.chordsLevelDb, 0, 0, 12),
     markers: Array.isArray(r.markers)
       ? r.markers
           .filter((q): q is Record<string, unknown> => !!q && typeof q === "object")

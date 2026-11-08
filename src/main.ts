@@ -3552,7 +3552,7 @@ async function autoLevels(): Promise<void> {
       // floor of the lows, twice.)
       project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain, notes: t.notes, weight: roles[i] !== "bass" ? 1 : t.main ? 3 : t.instrument === BACKING ? 2 : 1 })),
       MAX_TRACK_GAIN,
-      { bass: project.bassLevelDb },
+      { bass: project.bassLevelDb, chords: project.chordsLevelDb, backing: project.chordsLevelDb, harmony: project.chordsLevelDb },
     );
     rollPanel.applyGains(gains, reference, loweredDb);
   } finally {
@@ -3731,7 +3731,7 @@ async function diagnoseMix(): Promise<void> {
       for (const [i, l] of lufsOf) {
         const t = project.tracks[i];
         // (The bass may sit over the lead by what ベースの強さ asks for.)
-        const allowed = lead + 1 + (roles[i] === "bass" ? project.bassLevelDb : 0);
+        const allowed = lead + 1 + (roles[i] === "bass" ? project.bassLevelDb : roles[i] === "chords" || roles[i] === "backing" || roles[i] === "harmony" ? project.chordsLevelDb : 0);
         if (roles[i] !== "lead" && roles[i] !== "audio" && roles[i] !== "drum" && l > allowed) points.push(`「${t.name}」(${ROLE_NAMES[roles[i]]})がメロディより ${(l - lead).toFixed(1)} dB 大きく、メロディを隠しがちです。`);
         if (l < lead - 24) points.push(`「${t.name}」はメロディより ${(lead - l).toFixed(0)} dB 小さく、ほとんど聞こえません(要らなければミュート、要るなら音量を上げる)。`);
       }

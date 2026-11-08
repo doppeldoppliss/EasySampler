@@ -443,6 +443,12 @@ export class RollPanel {
     el("option", { value: "3", textContent: "ベース: 強め(+3 dB)" }),
     el("option", { value: "6", textContent: "ベース: かなり強め(+6 dB)" }),
   ]);
+  /** 和音・伴奏の強さ: what 音量を合わせる aims the chords, the accompaniment and the harmonies at (kept with the project). */
+  private readonly chordsLevelSelect = el("select", { ariaLabel: "和音・伴奏の強さ", title: "「音量を合わせる」が和音・伴奏・ハモリをどのくらいの大きさにするか。標準はメロディより 5〜8 dB 小さく(何本も同時に鳴るときは分け合う)。和音が聞こえにくいときは強めに" }, [
+    el("option", { value: "0", textContent: "和音・伴奏: 標準" }),
+    el("option", { value: "3", textContent: "和音・伴奏: 強め(+3 dB)" }),
+    el("option", { value: "6", textContent: "和音・伴奏: かなり強め(+6 dB)" }),
+  ]);
   /** 自分で入れたエフェクトも整える: the automatic mixing reaches the effects set by hand too (design.md 37). */
   private readonly tidyOwnBox = el("input", { type: "checkbox", ariaLabel: "自分で入れたエフェクトも整える" });
 
@@ -632,6 +638,7 @@ export class RollPanel {
         el("div", { className: "row tight automix-settings" }, [
           el("label", { className: "inline fine", title: "マスター EQ で寄せる音域の形。標準 / 電子音・ボカロ系は低音と高音が多め / 生楽器系はなだらか" }, ["音域の目安 ", this.balanceSelect]),
           el("label", { className: "inline fine" }, [this.bassLevelSelect]),
+          el("label", { className: "inline fine" }, [this.chordsLevelSelect]),
           el("label", { className: "inline fine", title: "オンにすると、自分で入れたエフェクトも整えます: リバーブは量を役割の目安に(響きの質はそのまま。ベース・ドラム・速いパートは外す)、サイドチェーンは自動の目安に、EQ はつまみを残してローカットを足す(ベースは低い音を削らない位置に)、ベースのコーラス・ステレオ幅・オートパン・ディレイ・リバーブは外す、ディレイは 30% まで。コンプ・サチュレーションなど音色のエフェクトは触りません" }, [this.tidyOwnBox, " 自分で入れたエフェクトも整える"]),
         ]),
         el("details", { className: "automix-steps" }, [
@@ -716,6 +723,12 @@ export class RollPanel {
       this.scheduleSave();
       this.commit();
       this.info.textContent = "ベースの強さを変えました。「音量を合わせる」(または「まとめて自動ミックス」)を押すと反映されます。";
+    });
+    this.chordsLevelSelect.addEventListener("change", () => {
+      this.project.chordsLevelDb = Number(this.chordsLevelSelect.value) || 0;
+      this.scheduleSave();
+      this.commit();
+      this.info.textContent = "和音・伴奏の強さを変えました。「音量を合わせる」(または「まとめて自動ミックス」)を押すと反映されます。";
     });
     this.applyProject();
   }
@@ -3178,6 +3191,7 @@ export class RollPanel {
     this.loopButton.textContent = `ループ: ${loop.on ? `オン(${range})` : "オフ"}`;
     this.loopButton.classList.toggle("on", loop.on);
     this.bassLevelSelect.value = String(this.project.bassLevelDb);
+    this.chordsLevelSelect.value = String(this.project.chordsLevelDb);
     this.drawSeekLoop();
     // (Bars shown as numbers: a range off the bar lines shows its fraction.)
     const bars = (beats: number) => String(+(beats / this.project.beatsPerBar).toFixed(2));

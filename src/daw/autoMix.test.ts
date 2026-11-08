@@ -198,4 +198,17 @@ describe("自動ミックス", () => {
     );
     expect(20 * Math.log10(gains[1]!)).toBeCloseTo(9, 5);
   });
+
+  it("和音・伴奏の強さ: +3 puts the chords 3 dB nearer the lead", () => {
+    const { gains } = balanceGains(
+      [
+        { role: "lead", lufs: -14, gain: 1 },
+        { role: "chords", lufs: -20, gain: 1 },
+      ],
+      4,
+      { chords: 3 },
+    );
+    // −5 under the lead, +3: −16 from −20.
+    expect(20 * Math.log10(gains[1]!)).toBeCloseTo(4, 5);
+  });
 });

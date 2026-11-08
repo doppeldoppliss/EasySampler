@@ -3721,9 +3721,13 @@ async function diagnoseMix(): Promise<void> {
       "measure",
       (share) => (rollPanel.info.textContent = `診断しています… ${heard.size + 1} / ${heard.size + 1}(曲全体)${Math.round(share * 100)}%`),
     );
-    const song = { lufs: whole.lufs, peakDb: whole.truePeakDb };
+    const song = { lufs: whole.lufs, peakDb: whole.truePeakDb, correlation: whole.correlation, sideDb: whole.sideDb };
+    // How wide: nearly mono, or so wide it falls apart on one speaker.
+    const wide = `左右の相関 ${whole.correlation.toFixed(2)}・横の成分 ${whole.sideDb.toFixed(1)} dB`;
     // What stands out.
     const points: string[] = [];
+    if (whole.correlation > 0.95) points.push(`左右の広がりがほとんどありません(${wide})。和音・伴奏を左右に振るか、リバーブを少し足すと広がります。目安は相関 0.7〜0.9。`);
+    else if (whole.correlation < 0.5) points.push(`左右が広がりすぎています(${wide})。スマホのスピーカーなど 1 つで鳴らすと音が痩せます。ステレオ幅のエフェクトやパンを控えめにしてください。`);
     if (song.peakDb > 0) points.push(`曲全体が 0 dB を超えます(トゥルーピーク +${song.peakDb.toFixed(1)} dB)。再生と書き出しでは抑えますが、そのぶん潰れます。全体の音量(フェーダー)かマスターのコンプのメイクアップを下げると素直な音になります。`);
     const leads = [...lufsOf].filter(([i]) => roles[i] === "lead" || roles[i] === "audio").map(([, l]) => l);
     const lead = leads.length ? Math.max(...leads) : null;

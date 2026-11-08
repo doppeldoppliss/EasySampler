@@ -255,3 +255,25 @@ export class ShortTermMeter {
     this.n = 0;
   }
 }
+
+/**
+ * How wide a stereo mix is: the correlation of left and right (1 = the same on both, mono; 0 = unrelated; below 0 =
+ * out of phase) and the side (L−R) against the mid (L+R) in dB — a finished mix sits around 0.7–0.9 and −12 to −8 dB.
+ */
+export function stereoImage(left: Float32Array, right: Float32Array): { correlation: number; sideDb: number } {
+  let lr = 0;
+  let ll = 0;
+  let rr = 0;
+  let mid = 0;
+  let side = 0;
+  for (let i = 0; i < left.length; i++) {
+    const l = left[i];
+    const r = right[i];
+    lr += l * r;
+    ll += l * l;
+    rr += r * r;
+    mid += (l + r) * (l + r);
+    side += (l - r) * (l - r);
+  }
+  return { correlation: ll > 0 && rr > 0 ? lr / Math.sqrt(ll * rr) : 1, sideDb: mid > 0 ? 10 * Math.log10(Math.max(side, 1e-20) / mid) : -Infinity };
+}

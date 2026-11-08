@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { integratedLoudness, matchLoudness, ShortTermMeter, truePeak } from "./loudness";
+import { integratedLoudness, matchLoudness, ShortTermMeter, truePeak, stereoImage } from "./loudness";
 
 const SR = 48000;
 const sine = (hz: number, amp: number, sec: number, phase = 0) => Float32Array.from({ length: Math.round(sec * SR) }, (_, i) => amp * Math.sin((2 * Math.PI * hz * i) / SR + phase));
@@ -47,5 +47,16 @@ describe("loudness (BS.1770)", () => {
     for (let i = 0; i < x.length; i += 128) meter.push(x.subarray(i, i + 128), x.subarray(i, i + 128), Math.min(128, x.length - i));
     expect(meter.shortTerm).toBeCloseTo(-20, 0);
     expect(meter.momentary).toBeCloseTo(-20, 0);
+  });
+
+  it("stereo image: the same on both sides is mono (1, no side), unrelated sides are wide (about 0), opposite is out of phase (−1)", () => {
+    const n = 48000;
+    const a = new Float32Array(n).map((_, i) => Math.sin(i * 0.05));
+    const b = new Float32Array(n).map((_, i) => Math.sin(i * 0.0371 + 1));
+    expect(stereoImage(a, a).correlation).toBeCloseTo(1, 5);
+    expect(stereoImage(a, a).sideDb).toBeLessThan(-100);
+    expect(Math.abs(stereoImage(a, b).correlation)).toBeLessThan(0.1);
+    expect(stereoImage(a, b).sideDb).toBeCloseTo(0, 0);
+    expect(stereoImage(a, a.map((x) => -x)).correlation).toBeCloseTo(-1, 5);
   });
 });

@@ -5,7 +5,7 @@
 
 import type { RenderJob, RenderMeasure, RenderReply } from "../workers/render.worker";
 import { renderSong, type RenderedSong, type SongRenderInput } from "./songRender";
-import { integratedLoudness, truePeak } from "../audio/loudness";
+import { integratedLoudness, stereoImage, truePeak } from "../audio/loudness";
 import { bandSpectrum } from "../fx/balance";
 
 export type { RenderMeasure };
@@ -52,7 +52,7 @@ function measure(song: RenderedSong): RenderMeasure {
   const [l, r] = song.channels;
   let peak = 0;
   for (const c of song.channels) for (let i = 0; i < c.length; i++) peak = Math.max(peak, Math.abs(c[i]));
-  return { lufs: integratedLoudness(l, r, song.sampleRate), peakDb: dB(peak), truePeakDb: dB(truePeak(l, r)), bands: bandSpectrum(song.channels, song.sampleRate) };
+  return { lufs: integratedLoudness(l, r, song.sampleRate), peakDb: dB(peak), truePeakDb: dB(truePeak(l, r)), bands: bandSpectrum(song.channels, song.sampleRate), ...stereoImage(l, r) };
 }
 
 /** Renders a song off the page: its samples. */

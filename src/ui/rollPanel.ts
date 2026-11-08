@@ -1973,7 +1973,7 @@ export class RollPanel {
   }
 
   /** ミックスを診断する: the table of what was measured, and what stands out. */
-  showDiagnosis(rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[], song: { lufs: number; peakDb: number } | null, points: string[]): void {
+  showDiagnosis(rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[], song: { lufs: number; peakDb: number; correlation?: number; sideDb?: number } | null, points: string[]): void {
     const f = (x: number | null, unit: string) => (x === null || !Number.isFinite(x) ? "—" : `${x.toFixed(1)} ${unit}`);
     const table = el("table", { className: "diagnosis-table fine" }, [
       el("tr", {}, ["トラック", "役割", "大きさ", "ピーク", "気になる点"].map((h) => el("th", { textContent: h }))),
@@ -1981,7 +1981,7 @@ export class RollPanel {
     ]);
     this.diagnosis.replaceChildren(
       el("details", { open: true }, [
-        el("summary", { textContent: `診断の結果${song ? `(曲全体 ${f(song.lufs, "LUFS")}・ピーク ${f(song.peakDb, "dBTP")})` : ""}` }),
+        el("summary", { textContent: `診断の結果${song ? `(曲全体 ${f(song.lufs, "LUFS")}・ピーク ${f(song.peakDb, "dBTP")}${song.correlation !== undefined ? `・左右の相関 ${song.correlation.toFixed(2)}・横の成分 ${f(song.sideDb ?? null, "dB")}` : ""})` : ""}` }),
         ...(points.length ? [el("ul", { className: "fine" }, points.map((p) => el("li", { textContent: p })))] : [el("p", { className: "fine", textContent: "目立った問題は見つかりませんでした。" })]),
         el("div", { className: "diagnosis-scroll" }, [table]),
       ]),

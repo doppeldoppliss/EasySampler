@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_FX, type FxSettings } from "../instrument/types";
-import { FxChain } from "./chain";
+import { FxChain, canonicalFx } from "./chain";
 
 const SR = 48000;
 
@@ -281,5 +281,17 @@ describe("FxChain: sidechain (ducking)", () => {
     }
     expect(20 * Math.log10(out[10] / 0.5)).toBeLessThan(-11);
     expect(20 * Math.log10(out[99] / 0.5)).toBeGreaterThan(-0.5);
+  });
+
+  it("settings go in one shape (DEFAULT_FX's groups and fields, in its order, no auto mark), so the per-sample reads stay fast", () => {
+    const a = structuredClone(DEFAULT_FX);
+    a.eq = { highCutHz: 15000, auto: true, on: true, lowCutHz: 30, lowDb: 3, lowHz: 250, midDb: -2, midHz: 800, midQ: 1, highDb: 0, highHz: 6000 } as typeof a.eq;
+    const shaped = canonicalFx(a);
+    expect(Object.keys(shaped)).toEqual(Object.keys(DEFAULT_FX));
+    expect(Object.keys(shaped.eq)).toEqual(Object.keys(DEFAULT_FX.eq));
+    expect(shaped.eq).toMatchObject({ on: true, lowCutHz: 30, highCutHz: 15000 });
+    expect("auto" in shaped.eq).toBe(false);
+    // (Arrays copied: the chain never shares a pattern with the settings it was given.)
+    expect(shaped.gate.steps).not.toBe(a.gate.steps);
   });
 });

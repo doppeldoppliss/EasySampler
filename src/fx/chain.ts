@@ -7,10 +7,28 @@
 // (after the voices) and in the file render, so what is heard is what is
 // written. Every effect that is off costs nothing.
 
-import { PATTERN_STEPS, type FxBeats, type FxSettings } from "../instrument/types";
+import { DEFAULT_FX, PATTERN_STEPS, type FxBeats, type FxSettings } from "../instrument/types";
 
 const TAU = 2 * Math.PI;
 const dbToGain = (db: number) => 10 ** (db / 20);
+
+/**
+ * Effect settings in the one shape DEFAULT_FX has — its groups and their fields in its order, nothing else (an
+ * `auto` mark dropped), arrays copied — so every chain's per-sample reads see the same hidden classes.
+ */
+export function canonicalFx(fx: FxSettings): FxSettings {
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [group, defaults] of Object.entries(DEFAULT_FX) as [keyof FxSettings, Record<string, unknown>][]) {
+    const given = (fx[group] ?? {}) as Record<string, unknown>;
+    const shaped: Record<string, unknown> = {};
+    for (const [key, d] of Object.entries(defaults)) {
+      const v = given[key] ?? d;
+      shaped[key] = Array.isArray(v) ? [...v] : v;
+    }
+    out[group] = shaped;
+  }
+  return out as unknown as FxSettings;
+}
 
 // ------------------------------------------------------------ biquad (RBJ cookbook)
 
@@ -369,8 +387,11 @@ export class FxChain {
     if (Number.isFinite(beat)) this.beat = beat;
   }
 
-  set(fx: FxSettings): void {
+  set(settings: FxSettings): void {
     const was = this.fx;
+    // (One shape for every chain: process() reads these per sample, and settings of many shapes — an `auto` mark on
+    // some, keys in another order on others — made those reads megamorphic: a whole song rendered 20× slower.)
+    const fx = canonicalFx(settings);
     this.fx = fx;
     const sr = this.sampleRate;
     const e = fx.eq;

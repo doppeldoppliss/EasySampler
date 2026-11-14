@@ -17,6 +17,8 @@ import { buildProjectFile, parseProjectFile, PROJECT_FILE_EXTENSION } from "./au
 import { addToLibrary, builtinPiano, copyInLibrary, findSame, inLibrary, libraryList, openLibrary, removeFromLibrary, setLibraryFrames, setLibraryName, songsUsing, updateStoredSongs } from "./audio/library";
 import { Engine, type PreparedSource } from "./engine/engine";
 import { mixToMono, prepareSource, resample, rootForMarkers, type MaterialAnalysis } from "./engine/prepare";
+import { tonalPitch, tonalStretches } from "./analysis/tonal";
+import type { RootPitch } from "./analysis/rootPitch";
 import type { PitchTrack } from "./analysis/pyin";
 import { buildBatch, buildOne, type Built, type BuildInput } from "./export/build";
 import { canShareFiles, downloadFile, shareFile } from "./export/deliver";
@@ -116,6 +118,20 @@ interface Cut extends CutSettings {
 }
 
 let material: Material | null = null;
+
+/** Under this the period analysis's root is not trusted (a mixed sound: music, a chord, a voice over an accompaniment). */
+const UNSURE_ROOT = 0.4;
+/**
+ * The root for a cut's markers: the period analysis's — and where that is unsure, the note the spectrum shows over
+ * the same stretch (the sustain when there is one to lean on), when one stands clear there (design.md 43).
+ */
+function rootFor(m: Material, markers: Markers, p?: InstrumentParams): RootPitch | null {
+  const root = rootForMarkers(m.analysis.track, markers, p);
+  if (root && root.confidence >= UNSURE_ROOT) return root;
+  const held = markers.sustainEnd - markers.sustainStart >= 0.1 && !(p && playedParts(p).tail);
+  const tonal = (held ? tonalPitch(m.mono, m.sampleRate, markers.sustainStart, markers.sustainEnd) : null) ?? tonalPitch(m.mono, m.sampleRate, markers.rangeStart, markers.rangeEnd);
+  return tonal ? { midi: tonal.midi, voicedSec: root?.voicedSec ?? 0, spread: 0, confidence: tonal.clarity } : root;
+}
 /**
  * Every material of the project (design.md 13.1): the one in the editor is
  * `material` (its cuts live in `cuts`); the others wait here with their
@@ -412,6 +428,55 @@ cutName.addEventListener("input", () => {
 });
 const addCutButton = button("＋ 音源を追加", "small", () => addCut("next"));
 const dupCutButton = button("複製", "small", () => addCut("copy"));
+// 音程のはっきりした所を探す (design.md 43): where in the material one note stands clear and holds — each found stretch
+// can be made a cut (its range, its sustain inside it, its root, played by 波形合わせ).
+const tonalList = el("div", { className: "tonal-list", hidden: true });
+const tonalButton = button("音程のはっきりした所を探す", "small", () => showTonalStretches());
+tonalButton.title = "曲や和音など混ざった音の素材から、1 つの音がはっきり鳴って動かない所を探します。見つかった所はそのまま音源にできます";
+function showTonalStretches(): void {
+  if (!material) return;
+  if (!tonalList.hidden) {
+    tonalList.hidden = true;
+    return;
+  }
+  const m = material;
+  const found = tonalStretches(m.mono, m.sampleRate).sort((a, b) => a.start - b.start);
+  tonalList.replaceChildren(
+    el("p", { className: "fine help", textContent: found.length ? "1 つの音がはっきり鳴って動かない所です(低音より上の音で判定。オクターブは違って聞こえることがあります)。「見る」で波形に範囲を出し、「音源にする」でその所を鳴らす音源を足します。" : "1 つの音がはっきり鳴っている所は見つかりませんでした。" }),
+    ...found.map((r) =>
+      el("div", { className: "row tight tonal-row" }, [
+        el("span", { className: "tonal-where", textContent: `${r.start.toFixed(2)}〜${r.end.toFixed(2)} 秒(${(r.end - r.start).toFixed(2)} 秒)` }),
+        el("span", { className: "tonal-note", textContent: pitchLabel(r.midi) }),
+        el("span", { className: "fine", textContent: `はっきり度 ${Math.round(r.clarity * 100)}%` }),
+        button("見る", "small", () => {
+          if (material !== m) return;
+          editor.setSelection({ from: r.start, to: r.end });
+        }),
+        button("音源にする", "small", () => {
+          if (material === m) addTonalCut(r.start, r.end, r.midi);
+        }),
+      ]),
+    ),
+    button("閉じる", "small", () => (tonalList.hidden = true)),
+  );
+  tonalList.hidden = false;
+}
+/** A cut on a found stretch: the range a little around it, the sustain inside it, the root as found, moved by 波形合わせ and held by reading the sustain round. */
+function addTonalCut(start: number, end: number, midi: number): void {
+  if (!material || !markers) return;
+  syncCut();
+  const length = end - start;
+  const sustainStart = start + Math.min(0.03, length * 0.2);
+  const sustainEnd = end - Math.min(0.02, length * 0.15);
+  const m = clampMarkers({ rangeStart: Math.max(0, start - 0.01), rangeEnd: Math.min(material.analysis.durationSec, end + 0.01), attack: sustainStart, sustainStart, sustainEnd, tailStart: sustainEnd });
+  const p: InstrumentParams = { ...structuredClone(DEFAULT_PARAMS), root: midi, rootMode: "manual", pitchMode: "wsola", transposeOnly: true, sustainEnabled: true, sustainMode: "loop", heldSustainMode: "loop" };
+  const cut: Cut = { id: newCutId(), name: `音源 ${cuts.length + 1}(${pitchLabel(Math.round(midi))})`, markers: m, params: p, note: Math.max(24, Math.min(96, Math.round(midi))), noteMode: "auto", detectedRoot: midi };
+  cuts.splice(current + 1, 0, cut);
+  current++;
+  applyCurrentCut();
+  defineMaterialCuts();
+  status.textContent = `${start.toFixed(2)}〜${end.toFixed(2)} 秒を音源「${cut.name}」にしました(高さ ${pitchLabel(midi)}、ピッチの変え方は波形合わせ)。鍵盤で確かめて、オクターブが違って聞こえるときは「判定 …」を 12 半音動かしてください。「元に戻す」で戻せます。`;
+}
 const removeCutButton = button("この音源を削除", "small", () => removeCut());
 // Which tracks play this cut, and a new one that does (the song side, without hunting for it there).
 const cutUsage = el("span", { className: "fine" });
@@ -454,6 +519,7 @@ const cutBar = el("div", { className: "cut-bar" }, [
   cutSelect,
   cutName,
   addCutButton,
+  tonalButton,
   dupCutButton,
   removeCutButton,
   cutUsage,
@@ -562,7 +628,7 @@ const clearRemovedButton = button("削除をすべて戻す", "small", () => {
 function afterMarkersEdited(): void {
   if (!markers) return;
   if (material && params.rootMode === "auto") {
-    const root = rootForMarkers(material.analysis.track, markers, params);
+    const root = rootFor(material, markers, params);
     if (root) {
       cuts[current].detectedRoot = root.midi;
       params = { ...params, root: root.midi };
@@ -676,6 +742,7 @@ editor.onViewChange = (view) => {
 const materialPanel = el("section", { className: "panel" }, [
   el("div", { className: "cut-bar material-bar" }, [el("span", { className: "control-label", textContent: "素材" }), materialSelect, materialName, trimUnusedButton, removeMaterialButton, splitButton, sharedNote]),
   cutBar,
+  tonalList,
   el("div", { className: "editor-bar" }, [
     el("div", { className: "root-box" }, [
       el("span", { className: "fine", textContent: "判定した高さ" }),
@@ -2528,7 +2595,7 @@ function cutFromAnalysis(m: Markers, name: string, base: InstrumentParams): Cut 
  * Unpitched or forced: 移調 at the speed of the key (速度連動), from its own pitch (C4 when there is none).
  */
 function cutFor(track: PitchTrack | null, m: Markers, name: string, base: InstrumentParams, hint: PresetId | "", forceOneShot: boolean): Cut {
-  const root = track ? rootForMarkers(track, m) : null;
+  const root = track ? (material && material.analysis.track === track ? rootFor(material, m) : rootForMarkers(track, m)) : null;
   const p = structuredClone(base);
   if (root && !forceOneShot) {
     p.root = root.midi;
@@ -3075,7 +3142,7 @@ async function setCorrections(corrections: PitchCorrection[]): Promise<void> {
     editor.setMaterial({ mono: target.mono, sampleRate: target.sampleRate, track: analysis.track });
     editor.setSelection(selection);
     for (const cut of cuts) {
-      const root = rootForMarkers(analysis.track, cut.markers, cut.params);
+      const root = rootFor(target, cut.markers, cut.params);
       cut.detectedRoot = root?.midi ?? null;
       if (cut.params.rootMode === "auto" && root) cut.params = { ...cut.params, root: root.midi };
     }
@@ -3192,7 +3259,7 @@ function applySettings(file: SettingsFile, analysed = false): void {
   const duration = material.analysis.durationSec;
   cuts = file.cuts.map((c) => {
     const m = clampMarkers({ ...c.markers, rangeEnd: Math.min(c.markers.rangeEnd, duration) });
-    const detected = rootForMarkers(material!.analysis.track, m, c.params);
+    const detected = rootFor(material!, m, c.params);
     return { ...c, markers: m, params: { ...c.params, maxVoices: DEFAULT_PARAMS.maxVoices }, detectedRoot: detected?.midi ?? null };
   });
   current = file.currentCut;
@@ -3680,7 +3747,7 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
     const root = analysis.root;
     let text =
       `「${name}」 ${seconds} 秒 — 解析 ${Math.round(elapsedMs)} ms。` +
-      (root ? ` 音程 ${pitchLabel(root.midi)}(信頼度 ${Math.round(root.confidence * 100)}%)。${root.confidence < 0.4 ? "音程をはっきり調べられない素材です(和音・合成音・伴奏つきの声など)。高さを変えて雑音が出るときは、細かい設定の「ピッチの変え方」を「波形合わせ」にしてください。" : ""}` : " 音程が見つからなかったので、1 回鳴らしきる音として扱います。ドラムに使うなら、波形で範囲を選んで「ドラムキットへ」送ってください。");
+      (root ? ` 音程 ${pitchLabel(root.midi)}(信頼度 ${Math.round(root.confidence * 100)}%)。${root.confidence < 0.4 ? "音程をはっきり調べられない素材です(和音・合成音・伴奏つきの声など)。「音程のはっきりした所を探す」で音源にできる所を探せます。高さを変えて雑音が出るときは、細かい設定の「ピッチの変え方」を「波形合わせ」にしてください。" : ""}` : " 音程が見つからなかったので、1 回鳴らしきる音として扱います。ドラムに使うなら、波形で範囲を選んで「ドラムキットへ」送ってください。");
     // Its settings, as kept in the library.
     const stored = kept?.settings ? serializeSettings(kept.settings) : null;
     let restored = false;
@@ -3979,7 +4046,7 @@ editor.onMarkersChange = (next, final) => {
   markers = next;
   if (final && material && params.rootMode === "auto") {
     // The root leans on the sustain, so it follows when the sustain moves.
-    const root = rootForMarkers(material.analysis.track, next, params);
+    const root = rootFor(material, next, params);
     if (root) {
       cuts[current].detectedRoot = root.midi;
       params = { ...params, root: root.midi };

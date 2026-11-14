@@ -1884,3 +1884,26 @@ button.mix-auto {
 .room-box input[type="range"] {
   width: 90px;
 }
+
+.tonal-list {
+  margin: 6px 0 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.tonal-row {
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 2px 0;
+}
+
+.tonal-where {
+  min-width: 13em;
+  font-variant-numeric: tabular-nums;
+}
+
+.tonal-note {
+  min-width: 5.5em;
+  font-weight: 600;
+}

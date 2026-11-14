@@ -506,7 +506,7 @@ details.params > summary {
 }
 
 .swatch.pitchless {
-  border-top: 3px dotted var(--muted);
+  border-top: 4px dotted var(--pitch-edited);
 }
 
 .swatch.edited {

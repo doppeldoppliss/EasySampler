@@ -823,9 +823,10 @@ export class MaterialEditor {
     // Where the material has no pitch (consonants, breath) there is no curve to draw, but the sound is there and plays:
     // marked on the target note — dotted (it stays noise, whatever its colour follows), or a thin line once 強制シンセ化
     // puts it on the note.
-    g.strokeStyle = this.pitchlessForced ? cssVar("--pitch-edited") : cssVar("--muted");
-    g.lineWidth = (this.pitchlessForced ? 2 : 2.5) * dpr;
-    g.setLineDash(this.pitchlessForced ? [] : [1.5 * dpr, 4 * dpr]);
+    // (In the curve's colour and as thick: the target note's own line runs under it.)
+    g.strokeStyle = cssVar("--pitch-edited");
+    g.lineWidth = (this.pitchlessForced ? 2 : 4) * dpr;
+    g.setLineDash(this.pitchlessForced ? [] : [3 * dpr, 5 * dpr]);
     g.beginPath();
     const end = this.playedEnd(markers);
     let open: number | null = null;

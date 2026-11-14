@@ -3547,6 +3547,25 @@ async function renderTrackAlone(project: ReturnType<typeof rollPanel.snapshot>, 
   return renderOff({ sampleRate: client.sampleRate, bpm: project.bpm, tracks: songTracks(project, id, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, "measure", say);
 }
 
+/**
+ * These tracks each measured alone, side by side (the render workers share them out): `says` is the line shown
+ * with how many are done.
+ */
+async function measureTracks(project: ReturnType<typeof rollPanel.snapshot>, indices: readonly number[], says: string): Promise<Map<number, RenderMeasure>> {
+  const out = new Map<number, RenderMeasure>();
+  let done = 0;
+  const show = () => (rollPanel.info.textContent = `${says}… ${done} / ${indices.length} 本`);
+  show();
+  await Promise.all(
+    indices.map(async (i) => {
+      out.set(i, await renderTrackAlone(project, project.tracks[i].id, () => {}));
+      done++;
+      show();
+    }),
+  );
+  return out;
+}
+
 /** The tracks the mix lets through (not muted, not outside a solo) that have notes: what the automatic mixing works on. */
 function heardTracks(project: ReturnType<typeof rollPanel.snapshot>): number[] {
   const soloing = project.tracks.some((t) => t.solo);
@@ -3566,10 +3585,9 @@ async function autoLevels(): Promise<void> {
   songBuilding = true;
   try {
     const lufs: (number | null)[] = project.tracks.map(() => null);
-    for (const [k, i] of heard.entries()) {
-      const t = project.tracks[i];
-      const song = await renderTrackAlone(project, t.id, (share) => (rollPanel.info.textContent = `音量を測っています… ${k + 1} / ${heard.length}「${t.name}」${Math.round(share * 100)}%`));
-      const l = song.lufs;
+    const measured = await measureTracks(project, heard, "音量を測っています");
+    for (const i of heard) {
+      const l = measured.get(i)!.lufs;
       lufs[i] = Number.isFinite(l) && l > -70 ? l : null;
     }
     const { gains, reference, loweredDb } = balanceGains(
@@ -3628,11 +3646,9 @@ async function autoEq(tidy = false): Promise<void> {
   try {
     const leads = roles.flatMap((r, i) => (r === "lead" && heard.has(i) ? [i] : []));
     const dipped = work.filter((i) => roles[i] !== "lead");
-    const measure = async (i: number, k: number, n: number) => {
-      const t = project.tracks[i];
-      const song = await renderTrackAlone(project, t.id, (share) => (rollPanel.info.textContent = `周波数の分布を測っています… ${k} / ${n}「${t.name}」${Math.round(share * 100)}%`));
-      return song.bands;
-    };
+    // (All measured side by side first: the leads, and the tracks that may be dipped under them.)
+    const measured = dipped.length ? await measureTracks(project, [...leads, ...dipped], "周波数の分布を測っています") : new Map<number, RenderMeasure>();
+    const measure = async (i: number, _k: number, _n: number) => measured.get(i)?.bands ?? null;
     const total = dipped.length ? dipped.length + leads.length : 0;
     let step = 0;
     // The leads together: their band powers added.
@@ -3727,7 +3743,12 @@ async function diagnoseMix(): Promise<void> {
   try {
     const rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[] = [];
     const lufsOf = new Map<number, number>();
-    let k = 0;
+    // The whole song and every heard track alone, side by side.
+    const wholeJob = renderOff(
+      { sampleRate: client.sampleRate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, null), tempoMap: tempoMapSec(project), raw: true },
+      "measure",
+    );
+    const measured = await measureTracks(project, [...heard], "診断しています");
     for (const [i, t] of project.tracks.entries()) {
       if (!t.notes.length) continue;
       const notes = rollPanel.trackWarnings(i);
@@ -3735,17 +3756,13 @@ async function diagnoseMix(): Promise<void> {
         rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: null, peakDb: null, notes: [t.mute ? "ミュート中" : "ソロの外", ...notes] });
         continue;
       }
-      k++;
-      const song = await renderTrackAlone(project, t.id, (share) => (rollPanel.info.textContent = `診断しています… ${k} / ${heard.size + 1}「${t.name}」${Math.round(share * 100)}%`));
+      const song = measured.get(i)!;
       const l = song.lufs;
       if (Number.isFinite(l) && l > -70) lufsOf.set(i, l);
       rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: lufsOf.get(i) ?? null, peakDb: song.peakDb, notes });
     }
-    const whole = await renderOff(
-      { sampleRate: client.sampleRate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, null), tempoMap: tempoMapSec(project), raw: true },
-      "measure",
-      (share) => (rollPanel.info.textContent = `診断しています… ${heard.size + 1} / ${heard.size + 1}(曲全体)${Math.round(share * 100)}%`),
-    );
+    rollPanel.info.textContent = "診断しています…(曲全体)";
+    const whole = await wholeJob;
     const song = { lufs: whole.lufs, peakDb: whole.truePeakDb, correlation: whole.correlation, sideDb: whole.sideDb };
     // How wide: nearly mono, or so wide it falls apart on one speaker.
     const wide = `左右の相関 ${whole.correlation.toFixed(2)}・横の成分 ${whole.sideDb.toFixed(1)} dB`;

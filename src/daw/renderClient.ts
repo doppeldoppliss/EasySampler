@@ -1,5 +1,6 @@
 // The page's side of the render worker (design.md 38): a job in, its progress
-// and its result (the samples, or the measurements) back, one job at a time.
+// and its result (the samples, or the measurements) back; a few workers take
+// the jobs side by side.
 // Where a worker cannot be made, the render runs here as before (the page
 // pauses, but the result is the same).
 
@@ -10,39 +11,61 @@ import { bandSpectrum } from "../fx/balance";
 
 export type { RenderMeasure };
 
-type Waiting = { progress?: (share: number) => void; resolve: (value: RenderedSong | RenderMeasure) => void; reject: (error: Error) => void };
+type Job = { id: number; message: RenderJob; progress?: (share: number) => void; resolve: (value: RenderedSong | RenderMeasure) => void; reject: (error: Error) => void };
 
-let worker: Worker | null | undefined;
+/**
+ * A few workers, each on one job at a time: the automatic mixing measures every track alone, and those renders do
+ * not depend on each other — side by side they take a fraction of the time. (Half the cores, four at most: every
+ * job carries its own copy of the materials.)
+ */
+const POOL = Math.max(1, Math.min(4, Math.floor((typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 2 : 2) / 2)));
+type Slot = { worker: Worker; job: Job | null };
+let slots: Slot[] | null | undefined;
 let nextId = 1;
-const waiting = new Map<number, Waiting>();
+const queue: Job[] = [];
 
-function theWorker(): Worker | null {
-  if (worker !== undefined) return worker;
+function pool(): Slot[] | null {
+  if (slots !== undefined) return slots;
   try {
-    worker = new Worker(new URL("../workers/render.worker.ts", import.meta.url), { type: "module" });
+    slots = Array.from({ length: POOL }, () => ({ worker: new Worker(new URL("../workers/render.worker.ts", import.meta.url), { type: "module" }), job: null }));
   } catch {
-    worker = null;
+    slots = null;
     return null;
   }
-  worker.onmessage = (event: MessageEvent<RenderReply>) => {
-    const reply = event.data;
-    const job = waiting.get(reply.id);
-    if (!job) return;
-    if ("progress" in reply) job.progress?.(reply.progress);
-    else {
-      waiting.delete(reply.id);
-      if ("error" in reply) job.reject(new Error(reply.error));
-      else job.resolve("song" in reply ? reply.song : reply.measure);
-    }
-  };
-  // (The worker itself failed — a script that would not load: every job waiting fails, the next one starts afresh.)
-  worker.onerror = (event) => {
-    for (const job of waiting.values()) job.reject(new Error(event.message || "書き出しの処理を始められませんでした"));
-    waiting.clear();
-    worker?.terminate();
-    worker = undefined;
-  };
-  return worker;
+  for (const slot of slots) {
+    slot.worker.onmessage = (event: MessageEvent<RenderReply>) => {
+      const reply = event.data;
+      const job = slot.job;
+      if (!job || job.id !== reply.id) return;
+      if ("progress" in reply) job.progress?.(reply.progress);
+      else {
+        slot.job = null;
+        if ("error" in reply) job.reject(new Error(reply.error));
+        else job.resolve("song" in reply ? reply.song : reply.measure);
+        pump();
+      }
+    };
+    // (A worker itself failed — a script that would not load: every job fails, the next one starts afresh.)
+    slot.worker.onerror = (event) => {
+      const error = new Error(event.message || "書き出しの処理を始められませんでした");
+      for (const other of slots ?? []) {
+        other.job?.reject(error);
+        other.worker.terminate();
+      }
+      for (const job of queue.splice(0)) job.reject(error);
+      slots = undefined;
+    };
+  }
+  return slots;
+}
+
+/** Jobs waiting go to the workers that are free. */
+function pump(): void {
+  for (const slot of slots ?? []) {
+    if (slot.job || !queue.length) continue;
+    slot.job = queue.shift()!;
+    slot.worker.postMessage(slot.job.message);
+  }
 }
 
 const dB = (x: number) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
@@ -60,8 +83,7 @@ export function renderOff(input: SongRenderInput, want: "song", progress?: (shar
 /** Renders a song off the page: only its loudness, peaks and bands. */
 export function renderOff(input: SongRenderInput, want: "measure", progress?: (share: number) => void): Promise<RenderMeasure>;
 export async function renderOff(input: SongRenderInput, want: "song" | "measure", progress?: (share: number) => void): Promise<RenderedSong | RenderMeasure> {
-  const w = theWorker();
-  if (!w) {
+  if (!pool()) {
     const song = await renderSong(input, async (share) => {
       progress?.(share);
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -70,7 +92,7 @@ export async function renderOff(input: SongRenderInput, want: "song" | "measure"
   }
   const id = nextId++;
   return new Promise((resolve, reject) => {
-    waiting.set(id, { progress, resolve, reject });
-    w.postMessage({ id, want, input } satisfies RenderJob);
+    queue.push({ id, message: { id, want, input }, progress, resolve, reject });
+    pump();
   });
 }

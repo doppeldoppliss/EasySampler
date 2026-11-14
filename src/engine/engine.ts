@@ -870,18 +870,32 @@ export class Engine {
       const from = Math.max(blockStart, Math.ceil(g.center - g.left));
       const to = Math.min(blockEnd, Math.floor(g.center + g.right) + 1);
       const apart = force !== null && (forceAll || g.noise);
-      for (let t = from; t < to; t++) {
-        const d = t - g.center;
-        const w = d < 0 ? 0.5 + 0.5 * Math.cos((Math.PI * d) / g.left) : 0.5 + 0.5 * Math.cos((Math.PI * d) / g.right);
-        const position = g.mark + (g.reverse ? -d : d) * g.alpha;
-        const i = t - blockStart;
-        const amount = w * g.gain;
-        if (apart) {
-          forced[i] += amount * (right !== left ? 0.5 * (cubic(left, position) + cubic(right, position)) : cubic(left, position));
-          continue;
+      // The window (a raised cosine, each half its own width) by recurrence — cos(θ + δ) = 2 cos δ · cos θ − cos(θ − δ)
+      // — instead of a cosine per sample: the two halves are two runs, each started with two real cosines.
+      const split = Math.max(from, Math.min(to, Math.ceil(g.center)));
+      for (let half = 0; half < 2; half++) {
+        const a = half === 0 ? from : split;
+        const b = half === 0 ? split : to;
+        if (a >= b) continue;
+        const delta = Math.PI / (half === 0 ? g.left : g.right);
+        const k = 2 * Math.cos(delta);
+        let c0 = Math.cos((a - g.center) * delta);
+        let c1 = Math.cos((a + 1 - g.center) * delta);
+        const step = g.reverse ? -g.alpha : g.alpha;
+        for (let t = a; t < b; t++) {
+          const position = g.mark + (t - g.center) * step;
+          const i = t - blockStart;
+          const amount = (0.5 + 0.5 * c0) * g.gain;
+          const next = k * c1 - c0;
+          c0 = c1;
+          c1 = next;
+          if (apart) {
+            forced[i] += amount * (right !== left ? 0.5 * (cubic(left, position) + cubic(right, position)) : cubic(left, position));
+            continue;
+          }
+          bufL[i] += amount * cubic(left, position);
+          if (right !== left) bufR[i] += amount * cubic(right, position);
         }
-        bufL[i] += amount * cubic(left, position);
-        if (right !== left) bufR[i] += amount * cubic(right, position);
       }
       if (g.center + g.right < blockEnd) g.active = false;
       else anyGrain = true;
@@ -974,11 +988,23 @@ function freeGrain(grains: Grain[]): Grain {
 function cubic(x: Float32Array, position: number): number {
   const i = Math.floor(position);
   const f = position - i;
-  const at = (k: number) => (k >= 0 && k < x.length ? x[k] : 0);
-  const y0 = at(i - 1);
-  const y1 = at(i);
-  const y2 = at(i + 1);
-  const y3 = at(i + 2);
+  let y0: number;
+  let y1: number;
+  let y2: number;
+  let y3: number;
+  if (i >= 1 && i + 2 < x.length) {
+    // (Inside the recording, as nearly always: straight reads.)
+    y0 = x[i - 1];
+    y1 = x[i];
+    y2 = x[i + 1];
+    y3 = x[i + 2];
+  } else {
+    const at = (k: number) => (k >= 0 && k < x.length ? x[k] : 0);
+    y0 = at(i - 1);
+    y1 = at(i);
+    y2 = at(i + 1);
+    y3 = at(i + 2);
+  }
   const c1 = 0.5 * (y2 - y0);
   const c2 = y0 - 2.5 * y1 + 2 * y2 - 0.5 * y3;
   const c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);

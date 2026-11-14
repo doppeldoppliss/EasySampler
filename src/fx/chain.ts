@@ -11,6 +11,8 @@ import { DEFAULT_FX, PATTERN_STEPS, type FxBeats, type FxSettings } from "../ins
 
 const TAU = 2 * Math.PI;
 const dbToGain = (db: number) => 10 ** (db / 20);
+/** exp(dB × this) = the gain of −dB. */
+const NEG_DB_LN = -Math.LN10 / 20;
 
 /**
  * Effect settings in the one shape DEFAULT_FX has — its groups and their fields in its order, nothing else (an
@@ -70,11 +72,15 @@ class Biquad {
   private b2 = 0;
   private a1 = 0;
   private a2 = 0;
-  // Direct form I state, per channel.
-  private x1 = [0, 0];
-  private x2 = [0, 0];
-  private y1 = [0, 0];
-  private y2 = [0, 0];
+  // Direct form I state, per channel (plain fields: this runs for every sample of every EQ band).
+  private x1L = 0;
+  private x2L = 0;
+  private y1L = 0;
+  private y2L = 0;
+  private x1R = 0;
+  private x2R = 0;
+  private y1R = 0;
+  private y2R = 0;
 
   set(kind: BiquadKind, freq: number, q: number, gainDb: number, sampleRate: number): void {
     const f = Math.min(freq, sampleRate * 0.45);
@@ -137,11 +143,17 @@ class Biquad {
     this.a2 = a2 / a0;
   }
 
+  /** The right channel's state from the left's (they ran as one while both carried the same sound). */
+  mirror(): void {
+    this.x1R = this.x1L;
+    this.x2R = this.x2L;
+    this.y1R = this.y1L;
+    this.y2R = this.y2L;
+  }
+
   reset(): void {
-    this.x1.fill(0);
-    this.x2.fill(0);
-    this.y1.fill(0);
-    this.y2.fill(0);
+    this.x1L = this.x2L = this.y1L = this.y2L = 0;
+    this.x1R = this.x2R = this.y1R = this.y2R = 0;
   }
 
   /** How much it lifts or cuts a sine at `hz` (dB). */
@@ -159,11 +171,19 @@ class Biquad {
   }
 
   tick(x: number, ch: number): number {
-    const y = this.b0 * x + this.b1 * this.x1[ch] + this.b2 * this.x2[ch] - this.a1 * this.y1[ch] - this.a2 * this.y2[ch];
-    this.x2[ch] = this.x1[ch];
-    this.x1[ch] = x;
-    this.y2[ch] = this.y1[ch];
-    this.y1[ch] = y;
+    if (ch === 0) {
+      const y = this.b0 * x + this.b1 * this.x1L + this.b2 * this.x2L - this.a1 * this.y1L - this.a2 * this.y2L;
+      this.x2L = this.x1L;
+      this.x1L = x;
+      this.y2L = this.y1L;
+      this.y1L = y;
+      return y;
+    }
+    const y = this.b0 * x + this.b1 * this.x1R + this.b2 * this.x2R - this.a1 * this.y1R - this.a2 * this.y2R;
+    this.x2R = this.x1R;
+    this.x1R = x;
+    this.y2R = this.y1R;
+    this.y1R = y;
     return y;
   }
 }
@@ -189,6 +209,8 @@ const STUTTER_FADE_SEC = 0.002;
 export class FxChain {
   private readonly sampleRate: number;
   private fx: FxSettings | null = null;
+  /** Both channels have carried the same sound since the last reset (see process). */
+  private twin = true;
   private bpm = 120;
   /**
    * Where the song is, in beats (the gate and the stutter follow its bars). The player sets it every block; on
@@ -418,6 +440,7 @@ export class FxChain {
 
   /** Back to silence (a new note in a render, a song starting). The LFOs restart at their beginning. */
   reset(): void {
+    this.twin = true;
     this.envFast = this.envSlow = 0;
     for (const b of [this.eqLowCut, this.eqLow, this.eqMid, this.eqHigh, this.eqHighCut, this.airShelf, this.airBand]) b.reset();
     this.dcX.fill(0);
@@ -457,12 +480,35 @@ export class FxChain {
     const fx = this.fx;
     if (!fx || !this.active) return;
     const mono = left === right;
+    // A mono sound on two channels (most materials): the per-channel effects (EQ, saturation, air, filter — all
+    // before anything widens it) run once and serve both. Exact while the two sides have always been the same
+    // since the last reset; the first block that differs gives the right side its own state back.
+    let twin = this.twin && !mono;
+    if (twin) {
+      for (let i = 0; i < frames; i++) {
+        if (left[i] !== right[i]) {
+          twin = false;
+          break;
+        }
+      }
+      if (!twin) {
+        this.twin = false;
+        for (const b of [this.eqLowCut, this.eqLow, this.eqMid, this.eqHigh, this.eqHighCut, this.airShelf, this.airBand]) b.mirror();
+        this.dcX[1] = this.dcX[0];
+        this.dcY[1] = this.dcY[0];
+        this.svfIc1[1] = this.svfIc1[0];
+        this.svfIc2[1] = this.svfIc2[0];
+      }
+    }
+    const chans = mono || twin ? 1 : 2;
     const sr = this.sampleRate;
     const beatHz = (beats: FxBeats) => this.bpm / 60 / beats;
 
     // Per-block constants.
     const tAtk = dbToGain(fx.transient.attackDb);
     const tSus = dbToGain(fx.transient.sustainDb);
+    const tAtkLn = Math.log(tAtk);
+    const tSusLn = Math.log(tSus);
     const drive = 1 + fx.saturation.drive * 14;
     const bias = 0.2 * fx.saturation.drive;
     const satNorm = 1 / Math.tanh(drive);
@@ -489,6 +535,10 @@ export class FxChain {
     if (fx.reverb.on) this.ensureReverb();
     const revFeedback = 0.7 + 0.28 * fx.reverb.size;
     const revDamp = fx.reverb.damping * 0.4;
+    const revKeep = 1 - revDamp;
+    const reverbOn = fx.reverb.on;
+    const revCombs = this.revCombs;
+    const revAll = this.revAll;
     const revPreSamples = Math.min((this.revPre?.[0].length ?? 2) - 1, Math.round((fx.reverb.preDelayMs / 1000) * sr));
     const limIn = dbToGain(fx.limiter.gainDb);
     const ceiling = dbToGain(fx.limiter.ceilingDb);
@@ -558,7 +608,8 @@ export class FxChain {
         this.envSlow = e > this.envSlow ? this.tSlowAtk * this.envSlow + (1 - this.tSlowAtk) * e : this.tSlowRel * this.envSlow + (1 - this.tSlowRel) * e;
         // How much of the level right now is attack (the fast follower running ahead of the slow one).
         const t = this.envFast > 1e-6 ? Math.max(0, Math.min(1, (this.envFast - this.envSlow) / this.envFast)) : 0;
-        const g = tAtk ** t * tSus ** (1 - t);
+        // (tAtk^t × tSus^(1−t), as one exponential.)
+        const g = Math.exp(tAtkLn * t + tSusLn * (1 - t));
         l *= g;
         r *= g;
       }
@@ -569,14 +620,14 @@ export class FxChain {
         // (Under the threshold nothing is wanted: no logarithm for it; and no power once the reduction has let go.)
         const want = level > compThreshold ? (20 * Math.log10(level) - fx.compressor.thresholdDb) * compSlope : 0;
         this.compGr = want > this.compGr ? compAtk * this.compGr + (1 - compAtk) * want : compRel * this.compGr + (1 - compRel) * want;
-        const g = (this.compGr > 1e-4 ? dbToGain(-this.compGr) : 1) * compMakeup;
+        const g = (this.compGr > 1e-4 ? Math.exp(this.compGr * NEG_DB_LN) : 1) * compMakeup;
         l *= g;
         r *= g;
       }
 
       if (fx.eq.on) {
         const e = fx.eq;
-        for (let ch = 0; ch < (mono ? 1 : 2); ch++) {
+        for (let ch = 0; ch < chans; ch++) {
           let x = ch === 0 ? l : r;
           if (e.lowCutHz > 0) x = this.eqLowCut.tick(x, ch);
           if (e.lowDb !== 0) x = this.eqLow.tick(x, ch);
@@ -586,11 +637,11 @@ export class FxChain {
           if (ch === 0) l = x;
           else r = x;
         }
-        if (mono) r = l;
+        if (chans === 1) r = l;
       }
 
       if (fx.saturation.on) {
-        for (let ch = 0; ch < (mono ? 1 : 2); ch++) {
+        for (let ch = 0; ch < chans; ch++) {
           const x = ch === 0 ? l : r;
           // Asymmetric soft curve (even harmonics, like a triode), then the DC it leaves is taken out.
           const wet = (Math.tanh(drive * x + bias) - tanhBias) * satNorm;
@@ -601,18 +652,18 @@ export class FxChain {
           if (ch === 0) l = out;
           else r = out;
         }
-        if (mono) r = l;
+        if (chans === 1) r = l;
       }
 
       if (fx.air.on) {
-        for (let ch = 0; ch < (mono ? 1 : 2); ch++) {
+        for (let ch = 0; ch < chans; ch++) {
           const x = ch === 0 ? l : r;
           const top = this.airBand.tick(x, ch);
           const out = this.airShelf.tick(x, ch) + Math.tanh(top * 3) * airExcite;
           if (ch === 0) l = out;
           else r = out;
         }
-        if (mono) r = l;
+        if (chans === 1) r = l;
       }
 
       if (fx.filter.on) {
@@ -631,7 +682,7 @@ export class FxChain {
         const a1 = 1 / (1 + g * (g + k));
         const a2 = g * a1;
         const a3 = g * a2;
-        for (let ch = 0; ch < (mono ? 1 : 2); ch++) {
+        for (let ch = 0; ch < chans; ch++) {
           const x = ch === 0 ? l : r;
           const v3 = x - this.svfIc2[ch];
           const v1 = a1 * this.svfIc1[ch] + a2 * v3;
@@ -642,7 +693,7 @@ export class FxChain {
           if (ch === 0) l = out;
           else r = out;
         }
-        if (mono) r = l;
+        if (chans === 1) r = l;
       }
 
       if (fx.crush.on) {
@@ -713,7 +764,7 @@ export class FxChain {
         r += echoR * d.mix;
       }
 
-      if (fx.reverb.on && this.revCombs && this.revAll && this.revPre) {
+      if (reverbOn && revCombs && revAll && this.revPre) {
         const v = fx.reverb;
         // Pre-delay, then 8 damped combs in parallel and 4 allpasses in series, per side (Freeverb).
         const pre = this.revPre;
@@ -727,18 +778,28 @@ export class FxChain {
         for (let side = 0; side < 2; side++) {
           const input = pre[side][pr];
           let acc = 0;
-          for (const comb of this.revCombs[side]) {
-            const y = comb.buf[comb.at];
-            comb.store = y * (1 - revDamp) + comb.store * revDamp;
-            comb.buf[comb.at] = input + comb.store * revFeedback;
-            comb.at = (comb.at + 1) % comb.buf.length;
+          // (Indexed loops, the buffer and its place in locals, a wrap by comparison: this is the chain's hottest loop.)
+          const combs = revCombs[side];
+          for (let c = 0; c < combs.length; c++) {
+            const comb = combs[c];
+            const buf = comb.buf;
+            const at = comb.at;
+            const y = buf[at];
+            const store = y * revKeep + comb.store * revDamp;
+            comb.store = store;
+            buf[at] = input + store * revFeedback;
+            comb.at = at + 1 === buf.length ? 0 : at + 1;
             acc += y;
           }
-          for (const ap of this.revAll[side]) {
-            const b = ap.buf[ap.at];
-            ap.buf[ap.at] = acc + b * 0.5;
+          const alls = revAll[side];
+          for (let c = 0; c < alls.length; c++) {
+            const ap = alls[c];
+            const buf = ap.buf;
+            const at = ap.at;
+            const b = buf[at];
+            buf[at] = acc + b * 0.5;
             acc = b - acc;
-            ap.at = (ap.at + 1) % ap.buf.length;
+            ap.at = at + 1 === buf.length ? 0 : at + 1;
           }
           if (side === 0) outL = acc;
           else outR = acc;

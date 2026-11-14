@@ -774,7 +774,9 @@ export class Engine {
     grain.alpha = alpha;
     grain.reverse = reverse;
     grain.gain = gain;
-    grain.noise = !voiced && !Number.isFinite(this.gapPitch[k]);
+    // (For 強制シンセ化: every grain without a period of its own — the bridged gaps too, which are read at the note's rate
+    // but stay the noise they are.)
+    grain.noise = !voiced;
 
     const step = Math.max(1, spacing);
     v.nextCenter += step;

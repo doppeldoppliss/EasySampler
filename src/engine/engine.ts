@@ -48,6 +48,18 @@ export interface PreparedSource {
 }
 
 const MAX_GRAINS = 16;
+
+// 波形合わせ (pitchMode "wsola", design.md 42): grains of a fixed length read at the shift's rate, each taken from where
+// the material best continues the one before (WSOLA). Nothing of it needs the material's periods, so what the analysis
+// finds no pitch in — chords, a synthesiser, a voice over music — moves as cleanly as a plain voice.
+/** Half a grain, in output seconds; four overlap. */
+const WS_HALF_SEC = 0.022;
+/** How far from the read position a grain may be taken (source seconds, to either side): half the longest period it must align. */
+const WS_REACH_SEC = 0.012;
+/** The stretch compared (source samples), every WS_SKIP-th sample, at candidates WS_STEP apart. */
+const WS_COMPARE = 1536;
+const WS_SKIP = 6;
+const WS_STEP = 3;
 const FORCE_OFF: InstrumentParams["force"] = { mode: "off", scope: "unvoiced", amount: 0 };
 const BLOCK = 128;
 /** Longest half-grain (seconds): bridges gaps without smearing across them. */
@@ -110,6 +122,8 @@ class Voice {
   phase: Phase = Phase.Head;
   /** Read position in the source (samples) for head / loop / run. */
   srcTime = 0;
+  /** 波形合わせ: where the last grain was taken from (source samples), −1 before the first. */
+  wsPrev = -1;
   /** Output clock of this voice (samples since note on). */
   clock = 0;
   nextCenter = 0;
@@ -510,6 +524,7 @@ export class Engine {
     v.phase = Phase.Head;
     v.cycleIndex = 0;
     v.srcTime = this.skipRemoved(this.rangeStart);
+    v.wsPrev = -1;
     v.clock = 0;
     v.poolIndex = Math.floor(this.pool.length / 2);
     v.previousPoolIndex = -1;
@@ -651,6 +666,7 @@ export class Engine {
     this.enterPhaseIfDue(v);
     // The head ended with nothing after it (the sustain off: 頭部だけ).
     if (v.phase === Phase.Done) return false;
+    if (params.pitchMode === "wsola") return this.scheduleAligned(v);
 
     // "stretch": the slowed pass reached the end of the region with the note still held — the pool takes over from there.
     if (v.phase === Phase.Sustain && params.sustainMode === "stretch" && !v.stretchDone && v.srcTime >= this.sustainEnd && this.pool.length >= MIN_POOL) {
@@ -791,6 +807,79 @@ export class Engine {
     if (!(v.phase === Phase.Sustain && this.fromPool(v))) {
       v.srcTime = this.skipRemoved(v.srcTime + step * (resample ? alpha : 1) * this.speedAt(v, v.srcTime));
     }
+    return true;
+  }
+
+  /**
+   * 波形合わせ: the next grain, taken from near the read position where the material best goes on from the last grain,
+   * read at the shift's rate. A held sustain reads its region round and round (the alignment finds the seam).
+   */
+  private scheduleAligned(v: Voice): boolean {
+    const x = this.source!.channels[0];
+    if (v.phase === Phase.Sustain && v.srcTime >= this.sustainEnd) {
+      v.srcTime = this.skipRemoved(v.srcTime - Math.max(1, this.sustainEnd - this.sustainStart));
+    }
+    if ((v.phase === Phase.Run || v.phase === Phase.Head) && v.srcTime >= this.rangeEnd) {
+      v.phase = Phase.Done;
+      return false;
+    }
+    const seconds = v.nextCenter / this.sampleRate;
+    const alpha = 2 ** ((this.shiftOf(v.note, v.bend) + this.wobbleAt(v, seconds)) / 12);
+    const half = Math.round(WS_HALF_SEC * this.sampleRate);
+    const hop = half >> 1;
+    const ideal = v.srcTime;
+    let mark = ideal;
+    if (v.wsPrev >= 0) {
+      // Where the last grain would go on by itself, one hop later.
+      const natural = v.wsPrev + hop * alpha;
+      const reach = Math.round(WS_REACH_SEC * this.sampleRate);
+      if (Math.abs(natural - ideal) <= reach && !this.isRemoved(natural)) {
+        // Still near the read position: it simply goes on (the material itself, unbroken).
+        mark = natural;
+      } else {
+        const n0 = Math.floor(natural) - (WS_COMPARE >> 1);
+        let best = -Infinity;
+        for (let d = -reach; d <= reach; d += WS_STEP) {
+          const c0 = Math.floor(ideal) + d - (WS_COMPARE >> 1);
+          if (c0 < 0 || c0 + WS_COMPARE >= x.length || n0 < 0 || n0 + WS_COMPARE >= x.length) continue;
+          let dot = 0;
+          let energy = 1e-9;
+          for (let i = 0; i < WS_COMPARE; i += WS_SKIP) {
+            const a = x[c0 + i];
+            dot += a * x[n0 + i];
+            energy += a * a;
+          }
+          const score = dot / Math.sqrt(energy);
+          if (score > best) {
+            best = score;
+            mark = Math.floor(ideal) + d;
+          }
+        }
+      }
+    }
+    v.wsPrev = mark;
+
+    const grain = freeGrain(v.grains);
+    grain.active = true;
+    grain.mark = mark;
+    grain.center = v.nextCenter;
+    grain.left = half;
+    grain.right = half;
+    grain.alpha = alpha;
+    grain.reverse = false;
+    // (Four raised cosines overlapping add up to 2.)
+    grain.gain = 0.5;
+    grain.noise = false;
+
+    v.nextCenter += hop;
+    v.lastStep = hop;
+    if (v.bend !== 0) {
+      const left = Math.abs(v.bend) - hop * v.bendPerSample;
+      v.bend = left > 0 ? Math.sign(v.bend) * left : 0;
+    }
+    v.lastLeft = half;
+    v.driftCountdown -= hop / this.sampleRate;
+    v.srcTime = this.skipRemoved(v.srcTime + hop * this.speedAt(v, v.srcTime));
     return true;
   }
 

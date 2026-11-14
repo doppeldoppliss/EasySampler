@@ -892,7 +892,7 @@ const flattenWarn = el("p", { className: "warn fine" }, [
 function refreshMakeMode(): void {
   const mode = makeModeOf(params);
   const hold = isHeld(mode);
-  flattenWarn.hidden = !(mode === "hold" && params.flatten < 0.5 && params.pitchMode !== "resample");
+  flattenWarn.hidden = !(mode === "hold" && params.flatten < 0.5 && params.pitchMode === "preserve-length");
   flattenWarn.firstElementChild!.textContent = `平坦化が ${Math.round(params.flatten * 100)}% なので、伸ばした音は録音の抑揚のまま揺れます(シンセ化されません)。 `;
   driftFixRow.hidden = mode !== "holdTranspose";
   sustainOnlyRow.hidden = mode !== "hold";
@@ -928,8 +928,10 @@ function refreshMakeMode(): void {
   // 移調 (either): the pitch shaping is not applied, so it is not shown.
   for (const e of shapingOnly) e.hidden = params.transposeOnly;
   // 速度連動 (細かい設定): the pitch is the speed, so the pitch shaping is dimmed, with a note.
-  const resample = params.pitchMode === "resample";
+  // (波形合わせ too: the pitch only follows the key, the material's own pitch is not looked at.)
+  const resample = params.pitchMode !== "preserve-length";
   pitchModeNote.hidden = !resample;
+  pitchModeNote.textContent = params.pitchMode === "wsola" ? PITCH_NOTE_WSOLA : PITCH_NOTE_RESAMPLE;
   for (const group of pitchGroups) {
     group.classList.toggle("unused", resample);
     group.inert = resample;
@@ -938,7 +940,9 @@ function refreshMakeMode(): void {
 
 // Played by resampling (無加工, ドラム・効果音…), a cut's pitch only follows the key, sped up or slowed down:
 // the pitch shaping and the voiceless-sound handling are not used, and are shown so (dimmed, out of reach).
-const pitchModeNote = el("p", { className: "fine help pitch-mode-note", hidden: true, textContent: "「ピッチの変え方」が速度連動(録音を早回し・遅回しして高さを変える)なので、音程の調整(平坦化・リチューン・揺れの残し方)・フォルマント・子音・息の扱いは使われません。使うときは、細かい設定の「ピッチの変え方」を「長さ保持」にしてください。" });
+const PITCH_NOTE_RESAMPLE = "「ピッチの変え方」が速度連動(録音を早回し・遅回しして高さを変える)なので、音程の調整(平坦化・リチューン・揺れの残し方)・フォルマント・子音・息の扱いは使われません。使うときは、細かい設定の「ピッチの変え方」を「長さ保持」にしてください。";
+const PITCH_NOTE_WSOLA = "「ピッチの変え方」が波形合わせ(素材の音程を調べずに、長さを保ったまま全体を上げ下げする。和音・合成音・伴奏つきの声向け)なので、音程の調整(平坦化・リチューン・揺れの残し方)・フォルマント・子音・息の扱いは使われません。抑揚は録音のまま、声色は高さと一緒に動きます。伸ばしている間は持続区間を繰り返します。";
+const pitchModeNote = el("p", { className: "fine help pitch-mode-note", hidden: true, textContent: PITCH_NOTE_RESAMPLE });
 const pitchGroups: HTMLElement[] = [];
 function pitchGroup(children: HTMLElement[]): HTMLElement {
   const group = el("div", { className: "pitch-group" }, children);
@@ -1549,7 +1553,7 @@ const detailsPanel = el("details", { className: "panel params" }, [
     ]),
     el("fieldset", {}, [
       el("legend", { textContent: "鳴らし方" }),
-      select("ピッチの変え方", [["preserve-length", "長さ保持(PSOLA)"], ["resample", "速度連動(昔ながら)"]], () => params.pitchMode, (p, v) => (p.pitchMode = v)),
+      select("ピッチの変え方", [["preserve-length", "長さ保持(声・単音向け。音程を調べて整える)"], ["wsola", "波形合わせ(長さ保持。和音・合成音・伴奏つき向け、音程を調べない)"], ["resample", "速度連動(昔ながら)"]], () => params.pitchMode, (p, v) => (p.pitchMode = v)),
       pitchGroup([
         range("フォルマント", -6, 6, 0.1, () => params.formantSemitones, (p, v) => (p.formantSemitones = v), semis),
         range("±7 半音を超える移調で声質を追従させる", 0, 1, 0.05, () => params.formantFollow, (p, v) => (p.formantFollow = v), pct),
@@ -3676,7 +3680,7 @@ async function load(name: string, channels: Float32Array[], sampleRate: number, 
     const root = analysis.root;
     let text =
       `「${name}」 ${seconds} 秒 — 解析 ${Math.round(elapsedMs)} ms。` +
-      (root ? ` 音程 ${pitchLabel(root.midi)}(信頼度 ${Math.round(root.confidence * 100)}%)。` : " 音程が見つからなかったので、1 回鳴らしきる音として扱います。ドラムに使うなら、波形で範囲を選んで「ドラムキットへ」送ってください。");
+      (root ? ` 音程 ${pitchLabel(root.midi)}(信頼度 ${Math.round(root.confidence * 100)}%)。${root.confidence < 0.4 ? "音程をはっきり調べられない素材です(和音・合成音・伴奏つきの声など)。高さを変えて雑音が出るときは、細かい設定の「ピッチの変え方」を「波形合わせ」にしてください。" : ""}` : " 音程が見つからなかったので、1 回鳴らしきる音として扱います。ドラムに使うなら、波形で範囲を選んで「ドラムキットへ」送ってください。");
     // Its settings, as kept in the library.
     const stored = kept?.settings ? serializeSettings(kept.settings) : null;
     let restored = false;

@@ -145,7 +145,7 @@ function readParams(raw: unknown): InstrumentParams {
   return {
     root: num(raw.root, d.root),
     rootMode: raw.rootMode === "manual" ? "manual" : "auto",
-    pitchMode: raw.pitchMode === "resample" ? "resample" : "preserve-length",
+    pitchMode: raw.pitchMode === "resample" || raw.pitchMode === "wsola" ? raw.pitchMode : "preserve-length",
     flatten: clamp(num(raw.flatten, d.flatten), 0, 1),
     tune: sanitizeTune(raw.tune, d.tune),
     unvoicedFollow: typeof raw.unvoicedFollow === "boolean" ? raw.unvoicedFollow : d.unvoicedFollow,

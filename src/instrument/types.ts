@@ -8,7 +8,7 @@
  * the whole region slowed to fit ("stretch": its natural change kept, VocalShifter-style), or not at all. */
 
 export type SustainMode = "pool" | "loop" | "wavetable" | "stretch" | "none";
-export type PitchMode = "preserve-length" | "resample";
+export type PitchMode = "preserve-length" | "resample" | "wsola";
 export type PresetId = "synth" | "heldTranspose" | "short" | "transpose" | "decay" | "once";
 /**
  * 作り方: the first choice for a cut, deciding which settings mean anything (and are shown).

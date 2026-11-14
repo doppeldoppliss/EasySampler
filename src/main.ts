@@ -695,7 +695,8 @@ const materialPanel = el("section", { className: "panel" }, [
   editor.element,
   el("p", { className: "legend fine" }, [
     el("span", { className: "swatch original" }), "元のピッチ  ",
-    el("span", { className: "swatch edited" }), "整えたあと(試聴の高さで鳴らしたとき)",
+    el("span", { className: "swatch edited" }), "整えたあと(試聴の高さで鳴らしたとき)  ",
+    el("span", { className: "swatch pitchless" }), "音程のない部分(子音・息。強制シンセ化を入れると線になります)",
   ]),
   el("p", { className: "fine band-legend" }, [headLegend, sustainLegend, rangeLegend]),
   fixBar,
@@ -2700,6 +2701,7 @@ function refreshExport(): void {
   if (markers) {
     const flatten = params.transposeOnly ? 0 : params.flatten;
     editor.setParts(playedParts(params));
+    editor.setPitchless(!!params.force && params.force.mode !== "off" && params.force.amount > 0);
     editor.setState(markers, params.root, flatten, note, !params.transposeOnly && params.keepHeadContour && makeModeOf(params) === "hold");
     refreshFadeGrips();
     editor.setLayout(

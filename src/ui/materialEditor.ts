@@ -100,6 +100,8 @@ export class MaterialEditor {
   private flatten = 0;
   /** The head drawn as recorded (持続部だけシンセ化). */
   private headKept = false;
+  /** The stretches without a pitch are forced onto the note (強制シンセ化): drawn as a line on it, not as dots. */
+  private pitchlessForced = false;
   /** How a detected pitch becomes the output pitch (the yellow curve); null = flatten toward the target. */
   private selection: TimeSelection | null = null;
   private layout: OutputLayout | null = null;
@@ -185,6 +187,13 @@ export class MaterialEditor {
     this.target = target;
     this.flatten = flatten;
     this.clampView();
+    this.draw();
+  }
+
+  /** Whether the stretches without a pitch (consonants, breath) are forced onto the note. */
+  setPitchless(forced: boolean): void {
+    if (forced === this.pitchlessForced) return;
+    this.pitchlessForced = forced;
     this.draw();
   }
 
@@ -810,6 +819,31 @@ export class MaterialEditor {
     const shapedFrom = this.headKept ? Math.min(markers.sustainStart, this.playedEnd(markers)) : markers.rangeStart;
     if (shapedFrom > markers.rangeStart) curve((p) => this.target + (p - this.root), markers.rangeStart, shapedFrom);
     curve((p) => this.target + (1 - this.flatten) * (p - this.root), shapedFrom, this.playedEnd(markers));
+
+    // Where the material has no pitch (consonants, breath) there is no curve to draw, but the sound is there and plays:
+    // marked on the target note — dotted (it stays noise, whatever its colour follows), or a thin line once 強制シンセ化
+    // puts it on the note.
+    g.strokeStyle = this.pitchlessForced ? cssVar("--pitch-edited") : cssVar("--muted");
+    g.lineWidth = (this.pitchlessForced ? 2 : 2.5) * dpr;
+    g.setLineDash(this.pitchlessForced ? [] : [1.5 * dpr, 4 * dpr]);
+    g.beginPath();
+    const end = this.playedEnd(markers);
+    let open: number | null = null;
+    for (let i = 0; i <= track.f0.length; i++) {
+      const t = i * track.hopSec;
+      const pitchless = i < track.f0.length && !Number.isFinite(track.f0[i]) && t >= markers.rangeStart && t <= end && !inRemoved(t);
+      if (pitchless && open === null) open = x(t);
+      else if (!pitchless && open !== null) {
+        const to = x(t);
+        if (to > 0 && open < width) {
+          g.moveTo(Math.max(0, open), y(this.target));
+          g.lineTo(Math.min(width, to), y(this.target));
+        }
+        open = null;
+      }
+    }
+    g.stroke();
+    g.setLineDash([]);
 
     // Marker strip: the head and the sustain with labels, or (録音の終わりまで) the range as one band.
     const bands: [number, number, string, string][] = this.parts.tail

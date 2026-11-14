@@ -58,15 +58,13 @@ import { clock, RangePicker } from "./ui/rangePicker";
 import { isMidiFile } from "./song/midi";
 import { RollPanel, type InstrumentOption } from "./ui/rollPanel";
 import { evenStems, type RenderTrack } from "./daw/songRender";
-import { renderOff, type RenderMeasure } from "./daw/renderClient";
-import { fitBalance, type BalanceStyle } from "./fx/balance";
-import { balanceGains, cleanEq, lowCutFor, madeByAuto, maskingDip } from "./daw/autoMix";
-import { ROLE_NAMES } from "./daw/roles";
+import { renderOff } from "./daw/renderClient";
+import { installAutoMix } from "./daw/autoMixRun";
 import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, KEY_FAMILIES, newSlot, renderSlot, slotFor, soundKey, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
 import { MidiInput } from "./audio/midiInput";
-import { autoToSec, BACKING, beatsToSec, clipsToSeq, MAX_TRACK_GAIN, tempoMapSec, toSeqNotes, trimClips, withHarmony, type Tempo } from "./daw/model";
+import { autoToSec, BACKING, beatsToSec, clipsToSeq, tempoMapSec, toSeqNotes, trimClips, withHarmony, type Tempo } from "./daw/model";
 import { autoValue, type AutoPoint } from "./song/player";
 import { zipStore, type ZipEntry } from "./export/zip";
 import { encodeWavBytes } from "./audio/wav";
@@ -3392,10 +3390,11 @@ function songFileStamp(): string {
 
 /** The last file made, kept so a second tap can share it at once (iPhone: the share sheet needs a fresh tap). */
 let songBuilt: { key: string; blob: Blob; fileName: string; summary: string } | null = null;
-let songBuilding = false;
+/** One render-heavy job at a time: the export, and the automatic mixing's measurements. */
+const renderLock = { busy: false };
 
 async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
-  if (songBuilding) return;
+  if (renderLock.busy) return;
   const say = (text: string) => (rollPanel.exportStatus.textContent = text);
   const project = rollPanel.snapshot();
   if (!project.tracks.some((t) => t.notes.length)) {
@@ -3423,7 +3422,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
   const key = JSON.stringify([kind, range, loudness, project, [...library.values()].map((e) => (e.material === material ? settingsBody() : e.settings))]);
   let built = songBuilt?.key === key ? songBuilt : null;
   if (!built) {
-    songBuilding = true;
+    renderLock.busy = true;
     rollPanel.stop();
     try {
       const rate = client.sampleRate;
@@ -3486,7 +3485,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
       say(`書き出せませんでした: ${error instanceof Error ? error.message : error}`);
       return;
     } finally {
-      songBuilding = false;
+      renderLock.busy = false;
     }
   }
   if (SHARE_ONLY && canShareFiles()) {
@@ -3506,301 +3505,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
 }
 rollPanel.onExport = (kind) => void exportSong(kind);
 
-/**
- * 音域のバランス: the song rendered without the master (offline, as the WAV would be), its long-term spectrum
- * measured, and the master EQ set toward the style's target (design.md 35).
- */
-async function balanceMaster(style: BalanceStyle): Promise<void> {
-  if (songBuilding) return;
-  const project = rollPanel.snapshot();
-  if (!project.tracks.some((t) => t.notes.length)) {
-    rollPanel.balanceSays("測る音符がありません。");
-    return;
-  }
-  songBuilding = true;
-  try {
-    const rate = client.sampleRate;
-    const song = await renderOff({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, "measure", (share) =>
-      rollPanel.balanceSays(share >= 1 ? "周波数の分布を調べています…" : `曲を測っています… ${Math.round(share * 100)}%`),
-    );
-    const measured = song.bands;
-    if (!measured) {
-      rollPanel.balanceSays("曲に音がありませんでした(ミュートやソロも確かめてください)。");
-      return;
-    }
-    rollPanel.applyBalance(fitBalance(measured, style, rate, project.masterFx.eq), style);
-  } finally {
-    songBuilding = false;
-  }
-}
-rollPanel.onBalance = (style) => void balanceMaster(style);
-// The lows-short notice's refit: the volumes, then the master EQ, then what came of it under the notice.
-rollPanel.onRefitLows = () =>
-  void (async () => {
-    await autoLevels();
-    await balanceMaster(rollPanel.balanceStyle());
-    rollPanel.refitDone();
-  })();
-
-/** One track as the song plays it (its effects, its volume; no master), offline: what the automatic mixing measures. */
-async function renderTrackAlone(project: ReturnType<typeof rollPanel.snapshot>, id: string, say: (share: number) => void): Promise<RenderMeasure> {
-  return renderOff({ sampleRate: client.sampleRate, bpm: project.bpm, tracks: songTracks(project, id, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, "measure", say);
-}
-
-/**
- * These tracks each measured alone, side by side (the render workers share them out): `says` is the line shown
- * with how many are done.
- */
-async function measureTracks(project: ReturnType<typeof rollPanel.snapshot>, indices: readonly number[], says: string): Promise<Map<number, RenderMeasure>> {
-  const out = new Map<number, RenderMeasure>();
-  let done = 0;
-  const show = () => (rollPanel.info.textContent = `${says}… ${done} / ${indices.length} 本`);
-  show();
-  await Promise.all(
-    indices.map(async (i) => {
-      out.set(i, await renderTrackAlone(project, project.tracks[i].id, () => {}));
-      done++;
-      show();
-    }),
-  );
-  return out;
-}
-
-/** The tracks the mix lets through (not muted, not outside a solo) that have notes: what the automatic mixing works on. */
-function heardTracks(project: ReturnType<typeof rollPanel.snapshot>): number[] {
-  const soloing = project.tracks.some((t) => t.solo);
-  return project.tracks.flatMap((t, i) => (t.notes.length && !t.mute && (!soloing || t.solo) ? [i] : []));
-}
-
-/** 音量を合わせる (design.md 36): each heard track measured alone (LUFS), then brought to its part's level. */
-async function autoLevels(): Promise<void> {
-  if (songBuilding) return;
-  const project = rollPanel.snapshot();
-  const roles = rollPanel.roles();
-  const heard = heardTracks(project);
-  if (!heard.length) {
-    rollPanel.info.textContent = "測れるトラック(音符があり、ミュートしていないもの)がありません。";
-    return;
-  }
-  songBuilding = true;
-  try {
-    const lufs: (number | null)[] = project.tracks.map(() => null);
-    const measured = await measureTracks(project, heard, "音量を測っています");
-    for (const i of heard) {
-      const l = measured.get(i)!.lufs;
-      lufs[i] = Number.isFinite(l) && l > -70 ? l : null;
-    }
-    const { gains, reference, loweredDb } = balanceGains(
-      // (The bass set as the main one takes three times a plain voice bass's share; a bass on the 簡易シンセ, the
-      // floor of the lows, twice.)
-      project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain, notes: t.notes, weight: roles[i] !== "bass" ? 1 : t.main ? 3 : t.instrument === BACKING ? 2 : 1 })),
-      MAX_TRACK_GAIN,
-      { bass: project.bassLevelDb, chords: project.chordsLevelDb, backing: project.chordsLevelDb, harmony: project.chordsLevelDb },
-    );
-    rollPanel.applyGains(gains, reference, loweredDb);
-  } finally {
-    songBuilding = false;
-  }
-}
-rollPanel.onAutoLevels = () => void autoLevels();
-
-/**
- * トラックの EQ (design.md 36): on the leads, the chords, the accompaniment and the harmonies, a low cut a little
- * under their notes; on all but the leads, a dip where the leads (measured together: a melody passed between tracks
- * by section) are strong and so are they. An EQ set by hand is kept; one the automatic mixing put in before is
- * replaced, or taken out where the track's part no longer wants one.
- */
-async function autoEq(tidy = false): Promise<void> {
-  if (songBuilding) return;
-  const project = rollPanel.snapshot();
-  const roles = rollPanel.roles();
-  const heard = new Set(heardTracks(project));
-  const wanted = new Set(["lead", "chords", "backing", "harmony"]);
-  const mine = (i: number) => madeByAuto(project.tracks[i].fx, "eq", project.bpm);
-  const targets = project.tracks.flatMap((t, i) => (heard.has(i) && t.kind === "melodic" && wanted.has(roles[i]) ? [i] : []));
-  // (Tidying: an EQ set by hand keeps its knobs and gets a low cut where it has none; a bass's cut over its lowest
-  // note comes down under it.)
-  const handTidy: (FxSettings | null)[] = project.tracks.map((t, i) => {
-    if (!tidy || !t.fx.eq.on) return null;
-    const notes = withHarmony(t.notes, t.harmony, t.glide);
-    if (targets.includes(i)) return !mine(i) && t.fx.eq.lowCutHz === 0 && notes.length ? { ...structuredClone(t.fx), eq: { ...t.fx.eq, lowCutHz: lowCutFor(notes) } } : null;
-    // (A bass's cut, set by hand or taken for an old automatic one, never over its lowest note.)
-    if (roles[i] === "bass" && notes.length) {
-      const lowest = 440 * 2 ** ((Math.min(...notes.map((n) => n.pitch)) - 69) / 12);
-      if (t.fx.eq.lowCutHz > lowest) return { ...structuredClone(t.fx), eq: { ...t.fx.eq, lowCutHz: Math.round(lowest * 0.7) } };
-    }
-    return null;
-  });
-  const tidiedEq = handTidy.filter(Boolean).length;
-  const kept = targets.filter((i) => !mine(i) && !handTidy[i]);
-  const work = targets.filter(mine);
-  // (An automatic EQ on a track whose part wants none now — the bass, say: taken out.)
-  const off = project.tracks.flatMap((t, i) => (!targets.includes(i) && t.fx.eq.on && t.fx.eq.auto ? [i] : []));
-  if (!work.length && !off.length && !tidiedEq) {
-    rollPanel.info.textContent = targets.length
-      ? `EQ を入れるトラックはありませんでした(対象の ${targets.length} 本はどれも EQ を自分で入れてあります)。`
-      : "EQ を入れるトラック(メロディ・和音・伴奏・ハモリ)がありませんでした。";
-    return;
-  }
-  songBuilding = true;
-  try {
-    const leads = roles.flatMap((r, i) => (r === "lead" && heard.has(i) ? [i] : []));
-    const dipped = work.filter((i) => roles[i] !== "lead");
-    // (All measured side by side first: the leads, and the tracks that may be dipped under them.)
-    const measured = dipped.length ? await measureTracks(project, [...leads, ...dipped], "周波数の分布を測っています") : new Map<number, RenderMeasure>();
-    const measure = async (i: number, _k: number, _n: number) => measured.get(i)?.bands ?? null;
-    const total = dipped.length ? dipped.length + leads.length : 0;
-    let step = 0;
-    // The leads together: their band powers added.
-    let leadSpectrum: number[] | null = null;
-    if (dipped.length) {
-      for (const i of leads) {
-        const s = await measure(i, ++step, total);
-        if (!s) continue;
-        leadSpectrum = leadSpectrum ? leadSpectrum.map((x, j) => 10 * Math.log10(10 ** (x / 10) + 10 ** (s[j] / 10))) : s;
-      }
-    }
-    const fxs: (FxSettings | null)[] = project.tracks.map(() => null);
-    const said: string[] = [];
-    const hz = (v: number) => (v >= 1000 ? `${+(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz`);
-    for (const i of work) {
-      const t = project.tracks[i];
-      const notes = withHarmony(t.notes, t.harmony, t.glide);
-      const spectrum = roles[i] !== "lead" && leadSpectrum ? await measure(i, ++step, total) : null;
-      const dip = leadSpectrum && spectrum ? maskingDip(leadSpectrum, spectrum) : null;
-      const fx = structuredClone(t.fx);
-      fx.eq = cleanEq(lowCutFor(notes), dip);
-      fxs[i] = fx;
-      said.push(`「${t.name}」ローカット ${hz(fx.eq.lowCutHz)}${dip ? `・${hz(dip.hz)} ${dip.db} dB` : ""}`);
-    }
-    for (const i of off) {
-      const fx = structuredClone(project.tracks[i].fx);
-      fx.eq = { ...DEFAULT_FX.eq };
-      fxs[i] = fx;
-    }
-    handTidy.forEach((fx, i) => {
-      if (fx) fxs[i] = fx;
-    });
-    rollPanel.applyTrackFx(
-      fxs,
-      `${said.length ? `トラックの EQ を入れました: ${said.join("、")}。` : ""}${off.length ? `前に自動で入れた EQ を ${off.length} 本から外しました。` : ""}${!leads.length && dipped.length ? "メロディのトラックがないので、ぶつかりを削る EQ は入れていません。" : ""}${tidiedEq ? `自分で入れていた EQ ${tidiedEq} 本のローカットを整えました(つまみはそのまま)。` : ""}${kept.length ? `EQ を自分で入れていた ${kept.length} 本はそのままです。` : ""}「元に戻す」で戻せます。`,
-    );
-  } finally {
-    songBuilding = false;
-  }
-}
-rollPanel.onAutoEq = () => void autoEq();
-
-/**
- * まとめて自動ミックス (design.md 37): the automatic steps in the order they build on — the clean-up EQ, the ducking,
- * the rooms (what the volumes are then measured through), the volumes, and the master EQ last (on the mix as it
- * now is). Each stays its own step to undo.
- */
-async function autoMixAll(): Promise<void> {
-  if (songBuilding) return;
-  const said: string[] = [];
-  const note = (label: string) => said.push(`${label}: ${rollPanel.info.textContent}`);
-  rollPanel.nameTracks();
-  note("トラック名");
-  rollPanel.spreadPans(true);
-  note("パン(真ん中のトラックだけ)");
-  const tidy = rollPanel.tidyOwn();
-  await autoEq(tidy);
-  note("EQ");
-  rollPanel.autoDuck(tidy);
-  note("沈め");
-  rollPanel.autoRooms(tidy);
-  note("残響");
-  if (tidy) {
-    rollPanel.tidyOwnEffects();
-    note("エフェクトの整理");
-  }
-  await autoLevels();
-  note("音量");
-  await balanceMaster(rollPanel.balanceStyle());
-  said.push("マスター EQ: 下の「音域のバランス」に結果があります。");
-  // Last, the diagnosis of what came out (it changes nothing).
-  await diagnoseMix();
-  said.push(`診断: ${rollPanel.info.textContent}`);
-  rollPanel.info.textContent = `まとめて自動ミックスをしました。${said.map((s, k) => `${k + 1}. ${s}`).join(" ")}`;
-}
-rollPanel.onAutoMixAll = () => void autoMixAll();
-
-/**
- * ミックスを診断する (design.md 37): each heard track alone and the whole song (through the master, before the
- * playback's safety limiter) rendered and measured, and what stands out listed. Changes nothing.
- */
-async function diagnoseMix(): Promise<void> {
-  if (songBuilding) return;
-  const project = rollPanel.snapshot();
-  const roles = rollPanel.roles();
-  const heard = new Set(heardTracks(project));
-  if (!heard.size) {
-    rollPanel.info.textContent = "診断するトラック(音符があり、ミュートしていないもの)がありません。";
-    return;
-  }
-  songBuilding = true;
-  try {
-    const rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[] = [];
-    const lufsOf = new Map<number, number>();
-    // The whole song and every heard track alone, side by side.
-    const wholeJob = renderOff(
-      { sampleRate: client.sampleRate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, null), tempoMap: tempoMapSec(project), raw: true },
-      "measure",
-    );
-    const measured = await measureTracks(project, [...heard], "診断しています");
-    for (const [i, t] of project.tracks.entries()) {
-      if (!t.notes.length) continue;
-      const notes = rollPanel.trackWarnings(i);
-      if (!heard.has(i)) {
-        rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: null, peakDb: null, notes: [t.mute ? "ミュート中" : "ソロの外", ...notes] });
-        continue;
-      }
-      const song = measured.get(i)!;
-      const l = song.lufs;
-      if (Number.isFinite(l) && l > -70) lufsOf.set(i, l);
-      rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: lufsOf.get(i) ?? null, peakDb: song.peakDb, notes });
-    }
-    rollPanel.info.textContent = "診断しています…(曲全体)";
-    const whole = await wholeJob;
-    const song = { lufs: whole.lufs, peakDb: whole.truePeakDb, correlation: whole.correlation, sideDb: whole.sideDb };
-    // How wide: nearly mono, or so wide it falls apart on one speaker.
-    const wide = `左右の相関 ${whole.correlation.toFixed(2)}・横の成分 ${whole.sideDb.toFixed(1)} dB`;
-    // What stands out.
-    const points: string[] = [];
-    if (whole.correlation > 0.95) points.push(`左右の広がりがほとんどありません(${wide})。和音・伴奏を左右に振るか、リバーブを少し足すと広がります。目安は相関 0.7〜0.9。`);
-    else if (whole.correlation < 0.5) points.push(`左右が広がりすぎています(${wide})。スマホのスピーカーなど 1 つで鳴らすと音が痩せます。ステレオ幅のエフェクトやパンを控えめにしてください。`);
-    if (song.peakDb > 0) points.push(`曲全体が 0 dB を超えます(トゥルーピーク +${song.peakDb.toFixed(1)} dB)。再生と書き出しでは抑えますが、そのぶん潰れます。全体の音量(フェーダー)かマスターのコンプのメイクアップを下げると素直な音になります。`);
-    const leads = [...lufsOf].filter(([i]) => roles[i] === "lead" || roles[i] === "audio").map(([, l]) => l);
-    const lead = leads.length ? Math.max(...leads) : null;
-    if (lead !== null) {
-      for (const [i, l] of lufsOf) {
-        const t = project.tracks[i];
-        // (The bass may sit over the lead by what ベースの強さ asks for.)
-        const allowed = lead + 1 + (roles[i] === "bass" ? project.bassLevelDb : roles[i] === "chords" || roles[i] === "backing" || roles[i] === "harmony" ? project.chordsLevelDb : 0);
-        if (roles[i] !== "lead" && roles[i] !== "audio" && roles[i] !== "drum" && l > allowed) points.push(`「${t.name}」(${ROLE_NAMES[roles[i]]})がメロディより ${(l - lead).toFixed(1)} dB 大きく、メロディを隠しがちです。`);
-        if (l < lead - 24) points.push(`「${t.name}」はメロディより ${(lead - l).toFixed(0)} dB 小さく、ほとんど聞こえません(要らなければミュート、要るなら音量を上げる)。`);
-      }
-    } else points.push("メロディのトラックがありません。ミックスの列で役割を「メロディ」にすると、自動の音量・EQ の基準になります。");
-    const wet = project.tracks.filter((t, i) => heard.has(i) && t.fx.reverb.on);
-    // (Many rooms at a little each are fine: counted only when they are also heavy on average.)
-    const meanWet = wet.reduce((x, t) => x + t.fx.reverb.mix, 0) / Math.max(1, wet.length);
-    if (wet.length >= 3 && wet.length > (heard.size * 2) / 3 && meanWet >= 0.15) points.push(`${heard.size} 本中 ${wet.length} 本にリバーブがかかっていて、量も平均 ${Math.round(meanWet * 100)}% と多めです。全体がぼやけやすいので、速いパートや低いパートからは外すか、「自分で入れたエフェクトも整える」をオンにして「まとめて自動ミックス」を試してください。`);
-    // (Only when the lows were still short after the fit: a shelf at its top that got there is fine.)
-    if (project.masterFx.eq.on && project.masterFx.eq.lowDb >= 6 && (rollPanel.lowsShortDb ?? -Infinity) < -6) points.push("マスター EQ の低音が上限(+6 dB)です。低音が足りない曲は、EQ よりシンセベースを重ねるほうが効果的です(「マスター EQ を目安に寄せる」のあと、足りなければ下にボタンが出ます)。");
-    // The bass's lows worked against (a low cut over them, a swaying pan), and names given twice: said up top too.
-    for (const r of rows) for (const n of r.notes) if (/ローカット|左右に揺れる|低音が削れて/.test(n)) points.push(`「${r.name}」: ${n}。ベースは低い音が仕事なので、エフェクトの EQ のローカット・オートパン・フィルターを外すのが目安です。`);
-    const names = rows.map((r) => r.name);
-    const twice = [...new Set(names.filter((n, k) => names.indexOf(n) !== k))];
-    if (twice.length) points.push(`同じ名前のトラックがあります(${twice.map((n) => `「${n}」`).join("、")})。見分けやすいように名前を変えてください。`);
-    for (const r of rows) if (r.peakDb !== null && r.peakDb > 0) points.push(`「${r.name}」だけで 0 dB を超えています(+${r.peakDb.toFixed(1)} dB)。トラックの音量かエフェクト(コンプのメイクアップなど)を下げてください。`);
-    rollPanel.showDiagnosis(rows, song, points);
-    rollPanel.info.textContent = `診断しました: 曲全体 ${song.lufs.toFixed(1)} LUFS・ピーク ${song.peakDb.toFixed(1)} dBTP、気になる点 ${points.length} 件(下の「診断の結果」)。`;
-  } finally {
-    songBuilding = false;
-  }
-}
-rollPanel.onDiagnose = () => void diagnoseMix();
+installAutoMix({ rollPanel, sampleRate: () => client.sampleRate, songTracks, renderLine, lock: renderLock });
 client.onMeters = (meters) => rollPanel.showMeters(meters);
 
 /** The cuts of every material, for the tracks' lists. */

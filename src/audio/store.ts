@@ -93,11 +93,6 @@ channel?.addEventListener("message", (event: MessageEvent<{ tab: string; key: st
   onFrozen?.(key);
 });
 
-/** Whether another tab's write has stopped this one's. */
-export function isFrozen(): boolean {
-  return frozen;
-}
-
 /** Keeps a value under its key (structured clone: typed arrays as they are). Whether it was kept (not when another tab's newer write froze this one). */
 export async function keep(key: string, value: unknown): Promise<boolean> {
   if (frozen) return false;

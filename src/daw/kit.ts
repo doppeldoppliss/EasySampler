@@ -30,9 +30,6 @@ export interface Kit {
 /** The keys a kit shows first: the common GM drums, kick up. */
 export const COMMON_KEYS = [36, 38, 42, 46, 39, 37, 49, 51, 45, 47, 50, 44, 54, 56, 57, 59];
 
-/** Sounds that cut each other off (open / closed / pedal hi-hat). */
-export const CHOKE_GROUPS: readonly (readonly number[])[] = [[42, 44, 46]];
-
 export function emptyKit(): Kit {
   return { slots: [] };
 }

@@ -7,7 +7,7 @@ import type { PreparedSource } from "../engine/engine";
 import { FxChain } from "../fx/chain";
 import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
-import { SongPlayer, type AutoPoint, type PlayerTrack, type TrackSound } from "../song/player";
+import { SongPlayer, type AutoPoint, type PlayerTrack, type Room, type TrackSound } from "../song/player";
 import { BackingSound, ClipSound, EngineSound, SampleSound } from "../song/sounds";
 
 export interface RenderInstrument {
@@ -51,6 +51,8 @@ export interface SongRenderInput {
   masterFx: FxSettings | null;
   /** The tempo map (seconds) the tempo-synced effects follow; absent = `bpm` throughout. */
   tempoMap?: { sec: number; bpm: number }[];
+  /** The song's shared room (absent / null: each track's own reverb). */
+  room?: Room | null;
   /** The master volume line (song seconds; after the master effects). */
   masterAuto?: AutoPoint[];
   /**
@@ -146,6 +148,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
   const player = new SongPlayer(sr);
   player.setTracks(tracks);
   player.setTempo(input.bpm);
+  player.setRoom(input.room ?? null);
   player.setMasterAuto(input.masterAuto ?? []);
   player.setTempoMap(input.tempoMap ?? []);
   player.beatOffset = input.beatOffset ?? 0;

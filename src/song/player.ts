@@ -6,8 +6,8 @@
 // track, and at the loop's end. The page says when (an AudioContext frame) and
 // from where (song seconds).
 
-import { FxChain } from "../fx/chain";
-import type { FxSettings } from "../instrument/types";
+import { canonicalFx, FxChain } from "../fx/chain";
+import { DEFAULT_FX, type FxSettings } from "../instrument/types";
 import type { SeqNote } from "./parts";
 
 /** What a track plays its notes on. `render` fills (does not add to) the buffers. */
@@ -61,6 +61,13 @@ export interface MixSettings {
   volumeAuto?: AutoPoint[];
   /** The pan line: −1…1 in place of `pan`, while the song plays (none = `pan`). */
   panAuto?: AutoPoint[];
+}
+
+/** The song's shared room (共通のリバーブ): one reverb the tracks send to, in place of one in each track. */
+export interface Room {
+  size: number;
+  damping: number;
+  preDelayMs: number;
 }
 
 export interface PlayerTrack extends MixSettings {
@@ -120,6 +127,10 @@ class Lane {
   keyLive = false;
   /** It ducks to the kick (the drum tracks' kick notes), not to a track's sound. */
   kickKeyed = false;
+  /** How much of it goes to the shared room (its reverb's amount; 0: none, or the room is not shared). */
+  send = 0;
+  /** The effects as its chain has them (its reverb left out when the room is shared): what its tail is worked out from. */
+  chainFx: FxSettings | null = null;
 
   constructor(id: string, sound: TrackSound, sampleRate: number) {
     this.id = id;
@@ -128,9 +139,13 @@ class Lane {
     this.mix = { gain: 1, pan: 0, mute: false, solo: false, fx: null };
   }
 
-  setMix(mix: MixSettings): void {
+  /** (`shared`: the song has one room for all — this track's reverb becomes its send to it.) */
+  setMix(mix: MixSettings, shared = false): void {
     this.mix = { ...mix };
-    if (mix.fx) this.fx.set(mix.fx);
+    const sends = shared && mix.fx !== null && mix.fx.reverb.on && mix.fx.reverb.mix > 0;
+    this.send = sends ? mix.fx!.reverb.mix : 0;
+    this.chainFx = sends ? { ...mix.fx!, reverb: { ...mix.fx!.reverb, on: false } } : mix.fx;
+    if (this.chainFx) this.fx.set(this.chainFx);
   }
 
   get fxOn(): boolean {
@@ -157,6 +172,35 @@ export class SongPlayer {
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
+    this.roomFx = new FxChain(sampleRate);
+    this.roomFx.reverbWetOnly = true;
+  }
+
+  // The shared room: the tracks' sends added up (mono), through one reverb, into the mix.
+  private room: Room | null = null;
+  private readonly roomFx: FxChain;
+  private roomL = new Float32Array(128);
+  private roomR = new Float32Array(128);
+  private roomIdle = Infinity;
+  private roomTail = 0;
+
+  /** One room for the whole song (null: each track's own reverb, as before). */
+  setRoom(room: Room | null): void {
+    const was = this.room !== null;
+    this.room = room ? { ...room } : null;
+    if (room) {
+      const fx = canonicalFx(DEFAULT_FX);
+      fx.reverb = { on: true, size: room.size, damping: room.damping, preDelayMs: room.preDelayMs, mix: 1 };
+      this.roomFx.set(fx);
+      this.roomTail = FxChain.tailSec(fx, this.bpm);
+    }
+    if (was !== (room !== null)) {
+      for (const lane of this.lanes) {
+        lane.setMix(lane.mix, room !== null);
+        lane.tail.bpm = Number.NaN;
+      }
+      this.routing = null;
+    }
   }
 
   get playing(): boolean {
@@ -172,7 +216,7 @@ export class SongPlayer {
     this.lanes = tracks.map((t) => {
       const lane = old.get(t.id) ?? new Lane(t.id, t.sound, sr);
       lane.sound = t.sound;
-      lane.setMix(t);
+      lane.setMix(t, this.room !== null);
       lane.fx.setTempo(this.bpm);
       const events: SongEvent[] = [];
       for (const n of t.notes) {
@@ -199,7 +243,7 @@ export class SongPlayer {
   setMix(id: string, mix: MixSettings): void {
     const lane = this.lanes.find((l) => l.id === id);
     if (!lane) return;
-    lane.setMix(mix);
+    lane.setMix(mix, this.room !== null);
     lane.tail.bpm = Number.NaN;
     this.routing = null;
   }
@@ -314,6 +358,8 @@ export class SongPlayer {
     this.positioned = false;
     // The LFOs start with the song.
     for (const lane of this.lanes) lane.fx.reset();
+    this.roomFx.reset();
+    this.roomIdle = Infinity;
   }
 
   stop(): void {
@@ -452,6 +498,14 @@ export class SongPlayer {
     // (A lane whose id starts with "__", the metronome, is never muted by another's solo.)
     const anySolo = this.lanes.some((l) => l.mix.solo && !l.id.startsWith("__"));
     // Sidechains: the tracks others duck to are worked out first, so their level is there for the ones that follow.
+    const room = this.room;
+    if (this.roomL.length < frames) {
+      this.roomL = new Float32Array(frames);
+      this.roomR = new Float32Array(frames);
+    }
+    const roomL = this.roomL;
+    if (room) roomL.fill(0, 0, frames);
+    let sent = false;
     const order = this.routing ?? (this.routing = this.route());
     for (const lane of order) lane.keyLive = false;
     if (order.some((l) => l.kickKeyed)) this.fillKickKey(blockFrame, frames);
@@ -470,7 +524,7 @@ export class SongPlayer {
       const quiet = lane.sound.idle();
       lane.idleFrames = quiet && !fired ? lane.idleFrames + frames : 0;
       // Silent, its effects died away (a delay or a reverb may ring on longer): nothing to do.
-      if (lane.tail.bpm !== this.bpm) lane.tail = { bpm: this.bpm, sec: FxChain.tailSec(lane.fxOn ? lane.mix.fx : null, this.bpm) };
+      if (lane.tail.bpm !== this.bpm) lane.tail = { bpm: this.bpm, sec: FxChain.tailSec(lane.fxOn ? lane.chainFx : null, this.bpm) };
       const idleLimit = Math.max(IDLE_SKIP_SEC, lane.tail.sec + 0.5) * this.sampleRate;
       if (lane.idleFrames > idleLimit && lane.done === 0) continue;
       SongPlayer.fill(lane, frames);
@@ -491,9 +545,12 @@ export class SongPlayer {
       const sl = (gl1 - gl0) / frames;
       const sr = (gr1 - gr0) / frames;
       let peak = lane.peak;
+      const send = room ? lane.send : 0;
+      if (send > 0) sent = true;
       if (outR === outL)
         for (let i = 0; i < frames; i++) {
           const v = (l[i] * (gl0 + sl * i) + r[i] * (gr0 + sr * i)) * 0.5;
+          if (send > 0) roomL[i] += v * send;
           outL[i] += v;
           if (v > peak) peak = v;
           else if (-v > peak) peak = -v;
@@ -502,12 +559,28 @@ export class SongPlayer {
         for (let i = 0; i < frames; i++) {
           const a = l[i] * (gl0 + sl * i);
           const b = r[i] * (gr0 + sr * i);
+          if (send > 0) roomL[i] += (a + b) * 0.5 * send;
           outL[i] += a;
           outR[i] += b;
           const m = Math.max(a, -a, b, -b);
           if (m > peak) peak = m;
         }
       lane.peak = peak;
+    }
+    // The shared room: what was sent, through the one reverb (while it still rings), into the mix.
+    if (room) {
+      this.roomIdle = sent ? 0 : this.roomIdle + frames;
+      if (this.roomIdle <= (this.roomTail + 0.5) * this.sampleRate) {
+        const roomR = this.roomR;
+        roomR.set(roomL.subarray(0, frames));
+        this.roomFx.process(roomL, roomR, frames);
+        if (outR === outL) for (let i = 0; i < frames; i++) outL[i] += (roomL[i] + roomR[i]) * 0.5;
+        else
+          for (let i = 0; i < frames; i++) {
+            outL[i] += roomL[i];
+            outR[i] += roomR[i];
+          }
+      }
     }
   }
 

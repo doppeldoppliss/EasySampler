@@ -307,6 +307,12 @@ export class EngineClient {
     this.post({ type: "masterAuto", points });
   }
 
+  /** The song's shared room (null: each track's own reverb). */
+  setRoom(room: { size: number; damping: number; preDelayMs: number } | null): void {
+    this.pending = this.pending.filter((m) => m.type !== "room");
+    this.post({ type: "room", room });
+  }
+
   setMasterFx(fx: FxSettings | null): void {
     this.pending = this.pending.filter((m) => m.type !== "master");
     this.post({ type: "master", fx });

@@ -254,6 +254,9 @@ class EngineProcessor extends AudioWorkletProcessor {
         this.masterOn = message.fx !== null;
         if (message.fx) this.master.set(message.fx);
         break;
+      case "room":
+        this.song.setRoom(message.room);
+        break;
       case "masterAuto":
         this.song.setMasterAuto(message.points);
         break;

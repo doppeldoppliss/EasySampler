@@ -64,7 +64,7 @@ import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, KEY_FAMILIES, newSlot, renderSlot, slotFor, soundKey, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
 import { MidiInput } from "./audio/midiInput";
-import { autoToSec, BACKING, beatsToSec, clipsToSeq, tempoMapSec, toSeqNotes, trimClips, withHarmony, type Tempo } from "./daw/model";
+import { autoToSec, BACKING, beatsToSec, clipsToSeq, roomOf, tempoMapSec, toSeqNotes, trimClips, withHarmony, type Tempo } from "./daw/model";
 import { autoValue, type AutoPoint } from "./song/player";
 import { zipStore, type ZipEntry } from "./export/zip";
 import { encodeWavBytes } from "./audio/wav";
@@ -1355,7 +1355,7 @@ const fxPanel = el("details", { className: "panel fx-panel" }, [
     fxCheck("ピンポン(左右に跳ね返る)", () => fxNow().delay.pingPong, (f, v) => (f.delay.pingPong = v)),
     fxRange("混ぜる量", 0, 1, 0.01, () => fxNow().delay.mix, (f, v) => (f.delay.mix = v), pct),
   ]),
-  fxGroup("reverb", "リバーブ(響き)", "部屋やホールの響きを足して、音を奥に置いたり曲になじませたりします。モノラルの素材もステレオになります。", [
+  fxGroup("reverb", "リバーブ(響き)", "部屋やホールの響きを足して、音を奥に置いたり曲になじませたりします。モノラルの素材もステレオになります。ミックスの画面で「リバーブ: 共通の 1 つを使う」がオンのとき、トラックでは「混ぜる量」だけが効き(共通の部屋へ送る量)、広さ・こもり・プリディレイはミックスの画面の値が使われます(マスターのリバーブは別です)。", [
     fxRange("広さ", 0, 1, 0.01, () => fxNow().reverb.size, (f, v) => (f.reverb.size = v), pct),
     fxRange("こもり(高域の減衰)", 0, 1, 0.01, () => fxNow().reverb.damping, (f, v) => (f.reverb.damping = v), pct),
     fxRange("プリディレイ", 0, 200, 1, () => fxNow().reverb.preDelayMs, (f, v) => (f.reverb.preDelayMs = v), (v) => `${Math.round(v)} ms`),
@@ -3438,7 +3438,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
         await yieldToScreen();
         // (Rendered off the page: it keeps answering while the WAV is made.)
         const song = await renderOff(
-          { sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, range), tempoMap, window, beatOffset, loudness: loudness ? { targetLufs: loudness.targetLufs, ceilingDb: -1 } : undefined },
+          { sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, range), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, range), room: roomOf(project), tempoMap, window, beatOffset, loudness: loudness ? { targetLufs: loudness.targetLufs, ceilingDb: -1 } : undefined },
           "song",
           (share) => {
             void progress(share);
@@ -3467,7 +3467,7 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
           const tracks = songTracks(project, t.id, range);
           if (!tracks.length) continue;
           say(`作成中… ${i + 1} / ${withNotes.length}(${t.name})`);
-          const song = await renderOff({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null, tempoMap, window, beatOffset, raw: true }, "song", (share) =>
+          const song = await renderOff({ sampleRate: rate, bpm: project.bpm, tracks, masterFx: null, room: roomOf(project), tempoMap, window, beatOffset, raw: true }, "song", (share) =>
             say(`作成中… ${i + 1} / ${withNotes.length}(${t.name})${Math.round(share * 100)}%`),
           );
           let name = `${String(i + 1).padStart(2, "0")}_${safeBaseName(t.name)}.wav`;

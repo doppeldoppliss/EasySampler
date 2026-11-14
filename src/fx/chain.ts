@@ -209,6 +209,8 @@ const STUTTER_FADE_SEC = 0.002;
 export class FxChain {
   private readonly sampleRate: number;
   private fx: FxSettings | null = null;
+  /** The reverb gives only the room, none of what came in (the song's shared room, fed by the tracks' sends). */
+  reverbWetOnly = false;
   /** Both channels have carried the same sound since the last reset (see process). */
   private twin = true;
   private bpm = 120;
@@ -537,6 +539,7 @@ export class FxChain {
     const revDamp = fx.reverb.damping * 0.4;
     const revKeep = 1 - revDamp;
     const reverbOn = fx.reverb.on;
+    const wetOnly = this.reverbWetOnly;
     const revCombs = this.revCombs;
     const revAll = this.revAll;
     const revPreSamples = Math.min((this.revPre?.[0].length ?? 2) - 1, Math.round((fx.reverb.preDelayMs / 1000) * sr));
@@ -804,8 +807,14 @@ export class FxChain {
           if (side === 0) outL = acc;
           else outR = acc;
         }
-        l = l * (1 - v.mix * 0.5) + outL * v.mix * 3;
-        r = r * (1 - v.mix * 0.5) + outR * v.mix * 3;
+        if (wetOnly) {
+          // (The shared room: what comes in is what the tracks sent; only the room goes out.)
+          l = outL * v.mix * 3;
+          r = outR * v.mix * 3;
+        } else {
+          l = l * (1 - v.mix * 0.5) + outL * v.mix * 3;
+          r = r * (1 - v.mix * 0.5) + outR * v.mix * 3;
+        }
       }
 
       if (fx.width.on) {

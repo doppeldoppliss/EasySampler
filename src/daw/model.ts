@@ -265,6 +265,11 @@ export interface Project {
   masterFx: FxSettings;
   /** The master volume line (a factor, 0–2, after the master effects); empty = none. */
   masterAuto: BeatPoint[];
+  /**
+   * 共通のリバーブ (design.md 41): one room for the song. Shared, a track's reverb is its send to it (its 混ぜる量),
+   * and the room's own size, darkness and pre-delay are these; not shared, each track has its own reverb.
+   */
+  room: { shared: boolean; size: number; damping: number; preDelayMs: number };
   /** ベースの強さ: how far over its usual level 音量を合わせる puts the bass (dB; 0, 3 or 6). */
   bassLevelDb: number;
   /** 和音・伴奏の強さ: the same for the chords, the accompaniment and the harmonies (dB; 0, 3 or 6). */
@@ -299,8 +304,16 @@ export function dbToGain(db: number): number {
   return db <= FADER_FLOOR_DB ? 0 : Math.min(MAX_TRACK_GAIN, 10 ** (db / 20));
 }
 
+/** The shared room as a new song has it. */
+export const DEFAULT_ROOM: Project["room"] = { shared: true, size: 0.45, damping: 0.55, preDelayMs: 25 };
+
+/** The room a song's player gets: its shared one, or none (each track's own reverb). */
+export function roomOf(project: Pick<Project, "room">): { size: number; damping: number; preDelayMs: number } | null {
+  return project.room.shared ? { size: project.room.size, damping: project.room.damping, preDelayMs: project.room.preDelayMs } : null;
+}
+
 export function emptyProject(): Project {
-  return { version: 1, bpm: 120, timeSig: { num: 4, den: 4 }, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, tempos: [], masterFx: structuredClone(DEFAULT_FX), masterAuto: [], bassLevelDb: 0, chordsLevelDb: 0, kit: emptyKit(), markers: [] };
+  return { version: 1, bpm: 120, timeSig: { num: 4, den: 4 }, beatsPerBar: 4, tracks: [newTrack("トラック 1")], materials: [], editing: null, loop: { start: 0, end: 16, on: false }, tempos: [], masterFx: structuredClone(DEFAULT_FX), masterAuto: [], room: { ...DEFAULT_ROOM }, bassLevelDb: 0, chordsLevelDb: 0, kit: emptyKit(), markers: [] };
 }
 
 let nextId = 1;
@@ -510,6 +523,11 @@ export function sanitizeProject(raw: unknown): Project {
     loop: end > start ? { start, end, on: loop.on === true } : d.loop,
     masterFx: sanitizeFx(r.masterFx),
     masterAuto: line(r.masterAuto, 0, VOLUME_AUTO_MAX),
+    room: (() => {
+      const q = (r.room && typeof r.room === "object" ? r.room : {}) as Record<string, unknown>;
+      // (A song kept before the room existed gets it shared too: one reverb is far lighter than one a track.)
+      return { shared: q.shared !== false, size: num(q.size, DEFAULT_ROOM.size, 0, 1), damping: num(q.damping, DEFAULT_ROOM.damping, 0, 1), preDelayMs: num(q.preDelayMs, DEFAULT_ROOM.preDelayMs, 0, 200) };
+    })(),
     bassLevelDb: num(r.bassLevelDb, 0, 0, 12),
     chordsLevelDb: num(r.chordsLevelDb, 0, 0, 12),
     markers: Array.isArray(r.markers)

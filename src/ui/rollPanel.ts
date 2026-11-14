@@ -11,6 +11,7 @@ import type { TrackSpec } from "../engine/messages";
 import {
   autoToSec,
   BACKING,
+  roomOf,
   MAX_TRACK_GAIN,
   clampPitch,
   newTrackId,
@@ -457,6 +458,43 @@ export class RollPanel {
     return this.tidyOwnBox.checked;
   }
 
+  // 共通のリバーブ (design.md 41): one room for the song; each track's reverb is how much of it goes there.
+  private readonly roomShared = el("input", { type: "checkbox", ariaLabel: "共通のリバーブを使う" });
+  private readonly roomInputs = ([
+    ["size", "広さ", 0, 1, 0.01, (v: number) => `${Math.round(v * 100)}%`],
+    ["damping", "こもり", 0, 1, 0.01, (v: number) => `${Math.round(v * 100)}%`],
+    ["preDelayMs", "プリディレイ", 0, 200, 1, (v: number) => `${Math.round(v)} ms`],
+  ] as const).map(([key, label, min, max, step, format]) => {
+    const input = el("input", { type: "range", min: String(min), max: String(max), step: String(step), ariaLabel: `共通のリバーブの${label}` });
+    const value = el("output", { className: "num fine" });
+    input.addEventListener("input", () => {
+      this.project.room = { ...this.project.room, [key]: Number(input.value) };
+      value.textContent = format(Number(input.value));
+      this.client.setRoom(roomOf(this.project));
+      this.scheduleSave();
+      this.commitSoon();
+    });
+    return { key, input, value, format, row: el("label", { className: "inline fine" }, [`${label} `, input, value]) };
+  });
+  private readonly roomBox = el("div", { className: "room-box" }, [
+    el("div", { className: "row tight" }, [
+      el("span", { className: "control-label", textContent: "リバーブ" }),
+      el("label", { className: "inline fine", title: "オンのとき、曲全体で 1 つのリバーブ(部屋)を使います。各トラックのエフェクトの「リバーブ」は、その部屋へ送る量(混ぜる量)になり、広さ・こもり・プリディレイはここの値が全トラック共通で使われます。響きがまとまり、処理も軽くなります。オフにすると、トラックごとに別々のリバーブがかかります" }, [this.roomShared, " 共通の 1 つを使う(軽い・響きがまとまる)"]),
+      ...this.roomInputs.map((r) => r.row),
+    ]),
+  ]);
+
+  /** The room's controls from the project. */
+  private showRoom(): void {
+    const room = this.project.room;
+    this.roomShared.checked = room.shared;
+    for (const r of this.roomInputs) {
+      r.input.value = String(room[r.key]);
+      r.value.textContent = r.format(room[r.key]);
+      r.row.hidden = !room.shared;
+    }
+  }
+
   /** ミックスを診断する: its table (empty until run). */
   private readonly diagnosis = el("div", { className: "diagnosis" });
   private readonly balanceCanvas = el("canvas", { className: "balance-chart", ariaLabel: "目安との差(変える前と後)" });
@@ -661,6 +699,7 @@ export class RollPanel {
         this.balanceCanvas,
         this.diagnosis,
       ]),
+      this.roomBox,
       el("div", { className: "spectrum-box" }, [
         el("div", { className: "row tight" }, [
           el("span", { className: "control-label", textContent: "周波数の分布(いま鳴っている音)" }),
@@ -723,6 +762,16 @@ export class RollPanel {
       this.scheduleSave();
       this.commit();
       this.info.textContent = "ベースの強さを変えました。「音量を合わせる」(または「まとめて自動ミックス」)を押すと反映されます。";
+    });
+    this.roomShared.addEventListener("change", () => {
+      this.project.room = { ...this.project.room, shared: this.roomShared.checked };
+      this.showRoom();
+      this.client.setRoom(roomOf(this.project));
+      this.scheduleSave();
+      this.commit();
+      this.info.textContent = this.roomShared.checked
+        ? "共通のリバーブにしました。各トラックのリバーブは、ここへ送る量(混ぜる量)として効きます。"
+        : "トラックごとのリバーブに戻しました(各トラックの広さ・こもり・プリディレイが使われます)。";
     });
     this.chordsLevelSelect.addEventListener("change", () => {
       this.project.chordsLevelDb = Number(this.chordsLevelSelect.value) || 0;
@@ -957,6 +1006,8 @@ export class RollPanel {
     if (this.track.kind === "melodic") this.roll.frame(60);
     this.sendLoop();
     this.client.setMasterFx(this.project.masterFx);
+    this.showRoom();
+    this.client.setRoom(roomOf(this.project));
     this.renderTracks();
     this.refreshButtons();
     this.showPosition(this.from);

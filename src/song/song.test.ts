@@ -209,6 +209,38 @@ describe("SongPlayer", () => {
     expect(at(1040)).toBeGreaterThan(0.45);
   });
 
+  it("shared room: a track's reverb becomes its send — the dry sound untouched, the room ringing on after it, nothing sent while muted", () => {
+    const fx = structuredClone(DEFAULT_FX);
+    fx.reverb = { ...fx.reverb, on: true, mix: 0.3 };
+    const render = (room: boolean, mute = false) => {
+      const player = new SongPlayer(SR);
+      player.setRoom(room ? { size: 0.5, damping: 0.5, preDelayMs: 0 } : null);
+      player.setTracks([track("a", fakeSound([], "", 0.5), [n(0, 0.2, 60)], { fx, mute })]);
+      player.play(0, 0);
+      const out: number[] = [];
+      const l = new Float32Array(128);
+      const r = new Float32Array(128);
+      for (let b = 0; b < 8; b++) {
+        player.render(b * 128, l, r, 128);
+        out.push(...l);
+      }
+      return out;
+    };
+    const shared = render(true);
+    const own = render(false);
+    const energy = (x: number[], from: number, to: number) => x.slice(from, to).reduce((a, v) => a + v * v, 0);
+    // The first sample: the dry sound alone, at its full level when shared (an insert reverb takes a little off it).
+    expect(shared[0]).toBeCloseTo(0.5, 5);
+    expect(own[0]).toBeLessThan(0.5);
+    // After the note (0.2 s = 200 frames): both ring on, about as loud as each other.
+    const tailShared = energy(shared, 300, 900);
+    const tailOwn = energy(own, 300, 900);
+    expect(tailShared).toBeGreaterThan(1e-6);
+    expect(tailShared / tailOwn).toBeGreaterThan(0.25);
+    expect(tailShared / tailOwn).toBeLessThan(4);
+    expect(energy(render(true, true), 0, 1024)).toBe(0);
+  });
+
   it("loops: at the loop's end everything is released and the loop's start plays again, on the exact sample", () => {
     const player = new SongPlayer(SR);
     const log: string[] = [];

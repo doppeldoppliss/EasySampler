@@ -6,7 +6,7 @@
 
 import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
-import type { AutoPoint, MixSettings } from "../song/player";
+import type { AutoPoint, MixSettings, Room } from "../song/player";
 import type { PreparedSource } from "./engine";
 
 export interface TrackSpec extends MixSettings {
@@ -57,6 +57,8 @@ export type ToEngine =
   | { type: "master"; fx: FxSettings | null }
   // The master volume line (song seconds; empty = none).
   | { type: "masterAuto"; points: AutoPoint[] }
+  // The song's shared room (null: each track's own reverb).
+  | { type: "room"; room: Room | null }
   // The song's tempo map (where each tempo starts, song seconds).
   | { type: "tempoMap"; points: { sec: number; bpm: number }[] }
   | { type: "songPlay"; atFrame: number; fromSec: number }

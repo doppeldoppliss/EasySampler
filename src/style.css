@@ -1872,3 +1872,11 @@ button.mix-auto {
 .automix-steps > summary {
   cursor: pointer;
 }
+
+/* 共通のリバーブ (the ミックス view): one row under the strips. */
+.room-box {
+  margin: 10px 0;
+}
+.room-box input[type="range"] {
+  width: 90px;
+}

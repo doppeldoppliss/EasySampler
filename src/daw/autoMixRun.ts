@@ -8,7 +8,7 @@ import { fitBalance, type BalanceStyle } from "../fx/balance";
 import type { AutoPoint } from "../song/player";
 import type { RollPanel } from "../ui/rollPanel";
 import { balanceGains, cleanEq, lowCutFor, madeByAuto, maskingDip } from "./autoMix";
-import { BACKING, MAX_TRACK_GAIN, tempoMapSec, withHarmony, type Tempo } from "./model";
+import { BACKING, MAX_TRACK_GAIN, roomOf, tempoMapSec, withHarmony, type Tempo } from "./model";
 import { renderOff, type RenderMeasure } from "./renderClient";
 import { ROLE_NAMES } from "./roles";
 import type { RenderTrack } from "./songRender";
@@ -44,7 +44,7 @@ export function installAutoMix(deps: AutoMixDeps): void {
     lock.busy = true;
     try {
       const rate = deps.sampleRate();
-      const song = await renderOff({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, "measure", (share) =>
+      const song = await renderOff({ sampleRate: rate, bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: null, room: roomOf(project), tempoMap: tempoMapSec(project), raw: true }, "measure", (share) =>
         rollPanel.balanceSays(share >= 1 ? "周波数の分布を調べています…" : `曲を測っています… ${Math.round(share * 100)}%`),
       );
       const measured = song.bands;
@@ -68,7 +68,7 @@ export function installAutoMix(deps: AutoMixDeps): void {
 
   /** One track as the song plays it (its effects, its volume; no master), offline: what the automatic mixing measures. */
   async function renderTrackAlone(project: Snapshot, id: string, say: (share: number) => void): Promise<RenderMeasure> {
-    return renderOff({ sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, id, null), masterFx: null, tempoMap: tempoMapSec(project), raw: true }, "measure", say);
+    return renderOff({ sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, id, null), masterFx: null, room: roomOf(project), tempoMap: tempoMapSec(project), raw: true }, "measure", say);
   }
 
   /**
@@ -269,7 +269,7 @@ export function installAutoMix(deps: AutoMixDeps): void {
       const lufsOf = new Map<number, number>();
       // The whole song and every heard track alone, side by side.
       const wholeJob = renderOff(
-        { sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, null), tempoMap: tempoMapSec(project), raw: true },
+        { sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, null), room: roomOf(project), tempoMap: tempoMapSec(project), raw: true },
         "measure",
       );
       const measured = await measureTracks(project, [...heard], "診断しています");

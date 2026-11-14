@@ -65,6 +65,12 @@ export interface InstrumentParams {
    */
   unvoicedFollow: boolean;
   /**
+   * 強制シンセ化 (engine/force.ts): a pitch forced onto what has none, at the note played. "comb" rings the sound
+   * at the note (共鳴); "vocoder" lays its spectral envelope on a sawtooth (ボコーダー). `scope`: only the parts
+   * without a pitch (consonants, breath), or the whole voice. `amount` 0–1 mixes it with the sound as it was.
+   */
+  force: { mode: "off" | "comb" | "vocoder"; scope: "unvoiced" | "all"; amount: number };
+  /**
    * 離したら止める: when nothing is held (伸ばさない, or the sustain switched off), letting the key go
    * still ends the note there, over the リリース — instead of the recording playing out. Not a preset's
    * choice either.
@@ -239,6 +245,7 @@ export const DEFAULT_PARAMS: InstrumentParams = {
   flatten: 1,
   tune: { retuneSec: 0 },
   unvoicedFollow: false,
+  force: { mode: "off", scope: "unvoiced", amount: 1 },
   stopOnRelease: false,
   levelEven: 1,
   formantSemitones: 0,

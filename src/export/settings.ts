@@ -149,6 +149,14 @@ function readParams(raw: unknown): InstrumentParams {
     flatten: clamp(num(raw.flatten, d.flatten), 0, 1),
     tune: sanitizeTune(raw.tune, d.tune),
     unvoicedFollow: typeof raw.unvoicedFollow === "boolean" ? raw.unvoicedFollow : d.unvoicedFollow,
+    force: (() => {
+      const f = (raw.force && typeof raw.force === "object" ? raw.force : {}) as Record<string, unknown>;
+      return {
+        mode: f.mode === "comb" || f.mode === "vocoder" ? f.mode : ("off" as const),
+        scope: f.scope === "all" ? ("all" as const) : ("unvoiced" as const),
+        amount: clamp(num(f.amount, d.force.amount), 0, 1),
+      };
+    })(),
     stopOnRelease: raw.stopOnRelease === true,
     transposeOnly: raw.transposeOnly === true,
     driftFix: raw.driftFix !== false,

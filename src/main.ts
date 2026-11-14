@@ -823,6 +823,8 @@ const oneShot = (e: HTMLElement) => (oneShotOnly.push(e), e);
 const shapingOnly: HTMLElement[] = [];
 const shaping = (e: HTMLElement) => (shapingOnly.push(e), e);
 let wavetableRow: HTMLElement;
+let forceScopeRow: HTMLElement;
+let forceAmountRow: HTMLElement;
 // 持続部だけシンセ化 (伸ばす, off by default since 2026-11-03): on, the head keeps its contour, the shaping from the sustain on.
 const sustainOnlyRow = el("div", {}, [
   check("持続部だけシンセ化する(頭部は録音の抑揚のまま)", () => params.keepHeadContour, (p, v) => (p.keepHeadContour = v)),
@@ -898,6 +900,7 @@ function refreshMakeMode(): void {
   for (const e of holdOnly) e.hidden = !hold;
   for (const e of oneShotOnly) e.hidden = hold;
   wavetableRow.hidden = !hold || params.sustainMode !== "wavetable";
+  forceScopeRow.hidden = forceAmountRow.hidden = params.force.mode === "off";
   const decayChoice = decayChoiceNow();
   decayRow.hidden = decayChoice !== "custom";
   sustainLevelRow.hidden = decayHelp.hidden = decayChoice === "none";
@@ -990,8 +993,30 @@ const tunePanel = el("section", { className: "panel tune" }, [
   pitchGroup([
     range("子音・息(音程なし)の音量", -60, 12, 1, () => params.unvoicedGainDb, (p, v) => (p.unvoicedGainDb = v), (v) => (v <= -60 ? "消す" : `${v > 0 ? "+" : ""}${v} dB`)),
     check("子音や息(音程なし)も移調に合わせて変える", () => params.unvoicedFollow, (p, v) => (p.unvoicedFollow = v)),
-    el("p", { className: "fine help", textContent: "子音・息・ノイズなど音程のない部分は、ふつうは移調しても元のまま鳴ります。オンにすると、その部分も鳴らす高さに応じて細く / 太くなります(長さは変わりません)。音程そのものを付けたいときは、選択して「有声に」。" }),
+    el("p", { className: "fine help", textContent: "子音・息・ノイズなど音程のない部分は、ふつうは移調しても元のまま鳴ります。オンにすると、その部分も鳴らす高さに応じて細く / 太くなります(長さは変わりません)。音程そのものを付けたいときは、下の「強制シンセ化」か、選択して「有声に」。" }),
   ]),
+  // 強制シンセ化 (design.md 39): a pitch forced onto what has none — any 作り方.
+  select(
+    "強制シンセ化(子音・息にも音程を付ける)",
+    [
+      ["off", "なし"],
+      ["comb", "共鳴(声のざらつきを残して、鳴らす高さで響かせる)"],
+      ["vocoder", "ボコーダー(すべてシンセの音にする。ロボット声)"],
+    ],
+    () => params.force.mode,
+    (p, v) => (p.force = { ...p.force, mode: v }),
+  ),
+  (forceScopeRow = select(
+    "かける範囲",
+    [
+      ["unvoiced", "子音・息(音程のない部分)だけ"],
+      ["all", "全体(音程のある部分も)"],
+    ],
+    () => params.force.scope,
+    (p, v) => (p.force = { ...p.force, scope: v }),
+  )),
+  (forceAmountRow = range("かける量", 0, 1, 0.05, () => params.force.amount, (p, v) => (p.force = { ...p.force, amount: v }), pct)),
+  el("p", { className: "fine help", textContent: "音程のない音(子音・息・ノイズ・効果音)にも、弾いた鍵・音符の高さを無理やり付けます。「共鳴」は元の音を鳴らす高さで響かせる方式で、言葉やざらつきが残ります。「ボコーダー」は音色の形だけをシンセの音に移す方式で、音程がいちばんはっきり出ます。範囲を「全体」にすると、声全体がその音になります。量を下げると元の音と混ざります。" }),
   volumeShape,
   vibratoPanel,
   timePanel,

@@ -34,6 +34,7 @@
 
 import { normalizeRemoved, playedParts } from "../instrument/layout";
 import type { InstrumentParams, Markers } from "../instrument/types";
+import { ForceState, vocoderBands } from "./force";
 
 export interface PreparedSource {
   /** The engine's sample rate (the material was resampled to it). */
@@ -47,6 +48,7 @@ export interface PreparedSource {
 }
 
 const MAX_GRAINS = 16;
+const FORCE_OFF: InstrumentParams["force"] = { mode: "off", scope: "unvoiced", amount: 0 };
 const BLOCK = 128;
 /** Longest half-grain (seconds): bridges gaps without smearing across them. */
 const MAX_HALF_GRAIN_SEC = 0.025;
@@ -94,6 +96,8 @@ interface Grain {
   alpha: number;
   reverse: boolean;
   gain: number;
+  /** A grain of the material's pitchless part (a consonant, breath): what 強制シンセ化 takes when it is for those only. */
+  noise: boolean;
 }
 
 class Voice {
@@ -141,7 +145,10 @@ class Voice {
   driftTarget = 0;
   driftCountdown = 0;
 
-  readonly grains: Grain[] = Array.from({ length: MAX_GRAINS }, () => ({ active: false, mark: 0, center: 0, left: 1, right: 1, alpha: 1, reverse: false, gain: 0 }));
+  readonly grains: Grain[] = Array.from({ length: MAX_GRAINS }, () => ({ active: false, mark: 0, center: 0, left: 1, right: 1, alpha: 1, reverse: false, gain: 0, noise: false }));
+  /** 強制シンセ化: its state (made at the first note that needs it), and the part of the block that goes through it. */
+  force: ForceState | null = null;
+  readonly forced = new Float32Array(BLOCK);
   readonly bufL = new Float32Array(BLOCK);
   readonly bufR = new Float32Array(BLOCK);
 }
@@ -176,6 +183,9 @@ export class Engine {
   private markRms = new Float32Array(0);
   private sustainLevel = 0;
   private voices: Voice[] = [];
+  /** 強制シンセ化: the vocoder's band filters for this rate, and a scratch block for the mix. */
+  private readonly vocoderBands: Float64Array;
+  private readonly forceDry = new Float32Array(BLOCK);
   private order = 0;
   private seed = 0x2545f491;
   /** The note length (seconds) a "stretch" sustain fills when the note's own is not known (the keyboard). */
@@ -185,6 +195,7 @@ export class Engine {
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
+    this.vocoderBands = vocoderBands(sampleRate);
     this.ensureVoices(24);
   }
 
@@ -513,6 +524,11 @@ export class Engine {
     v.driftTarget = 0;
     v.driftCountdown = 0;
     for (const g of v.grains) g.active = false;
+    // (`force` may be missing from settings kept before it existed: then it is off.)
+    if (params.force && params.force.mode !== "off") {
+      v.force ??= new ForceState(this.sampleRate);
+      v.force.reset();
+    }
     v.nextCenter = 0;
     this.enterPhaseIfDue(v);
     // The first grain starts at the very beginning of the output.
@@ -758,6 +774,7 @@ export class Engine {
     grain.alpha = alpha;
     grain.reverse = reverse;
     grain.gain = gain;
+    grain.noise = !voiced && !Number.isFinite(this.gapPitch[k]);
 
     const step = Math.max(1, spacing);
     v.nextCenter += step;
@@ -841,17 +858,28 @@ export class Engine {
 
     const left = source.channels[0];
     const right = source.channels[1] ?? left;
+    // 強制シンセ化: what goes through it (the pitchless grains, or all of them) is gathered apart, in mono.
+    const fp = params.force ?? FORCE_OFF;
+    const force = fp.mode !== "off" && fp.amount > 0 ? v.force : null;
+    const forced = v.forced;
+    if (force) forced.fill(0, 0, frames);
+    const forceAll = fp.scope === "all";
     let anyGrain = false;
     for (const g of v.grains) {
       if (!g.active) continue;
       const from = Math.max(blockStart, Math.ceil(g.center - g.left));
       const to = Math.min(blockEnd, Math.floor(g.center + g.right) + 1);
+      const apart = force !== null && (forceAll || g.noise);
       for (let t = from; t < to; t++) {
         const d = t - g.center;
         const w = d < 0 ? 0.5 + 0.5 * Math.cos((Math.PI * d) / g.left) : 0.5 + 0.5 * Math.cos((Math.PI * d) / g.right);
         const position = g.mark + (g.reverse ? -d : d) * g.alpha;
         const i = t - blockStart;
         const amount = w * g.gain;
+        if (apart) {
+          forced[i] += amount * (right !== left ? 0.5 * (cubic(left, position) + cubic(right, position)) : cubic(left, position));
+          continue;
+        }
         bufL[i] += amount * cubic(left, position);
         if (right !== left) bufR[i] += amount * cubic(right, position);
       }
@@ -859,6 +887,20 @@ export class Engine {
       else anyGrain = true;
     }
     if (right === left) bufR.set(bufL.subarray(0, frames));
+    if (force) {
+      // At the note as it sounds now (a slide included), mixed with the sound as it was by the amount.
+      const hz = 440 * 2 ** ((v.note + v.bend - 69) / 12);
+      const wet = fp.amount;
+      const dry = this.forceDry;
+      if (wet < 1) dry.set(forced.subarray(0, frames));
+      if (fp.mode === "comb") force.comb(forced, frames, hz);
+      else force.vocoder(forced, frames, hz, this.vocoderBands);
+      for (let i = 0; i < frames; i++) {
+        const y = wet * forced[i] + (wet < 1 ? (1 - wet) * dry[i] : 0);
+        bufL[i] += y;
+        bufR[i] += y;
+      }
+    }
 
     // Envelope, velocity, fades.
     const sr = this.sampleRate;

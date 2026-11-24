@@ -4,10 +4,11 @@
 // Where a worker cannot be made, the render runs here as before (the page
 // pauses, but the result is the same).
 
-import type { RenderJob, RenderMeasure, RenderReply } from "../workers/render.worker";
+import type { RenderJob, RenderMeasure, RenderReply, RoundingAsk } from "../workers/render.worker";
 import { renderSong, type RenderedSong, type SongRenderInput } from "./songRender";
 import { integratedLoudness, stereoImage, truePeak } from "../audio/loudness";
 import { bandSpectrum } from "../fx/balance";
+import { roundingFor } from "../fx/clip";
 
 export type { RenderMeasure };
 
@@ -71,28 +72,28 @@ function pump(): void {
 const dB = (x: number) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
 
 /** The measurements of a rendered song (as the worker takes them). */
-function measure(song: RenderedSong): RenderMeasure {
+function measure(song: RenderedSong, rounding?: RoundingAsk): RenderMeasure {
   const [l, r] = song.channels;
   let peak = 0;
   for (const c of song.channels) for (let i = 0; i < c.length; i++) peak = Math.max(peak, Math.abs(c[i]));
-  return { lufs: integratedLoudness(l, r, song.sampleRate), peakDb: dB(peak), truePeakDb: dB(truePeak(l, r)), bands: bandSpectrum(song.channels, song.sampleRate), ...stereoImage(l, r) };
+  return { lufs: integratedLoudness(l, r, song.sampleRate), peakDb: dB(peak), truePeakDb: dB(truePeak(l, r)), bands: bandSpectrum(song.channels, song.sampleRate), ...stereoImage(l, r), ...(rounding ? { rounding: roundingFor(l, r, song.sampleRate, rounding.targetPlr, rounding.maxUnderPeakDb) } : {}) };
 }
 
 /** Renders a song off the page: its samples. */
 export function renderOff(input: SongRenderInput, want: "song", progress?: (share: number) => void): Promise<RenderedSong>;
 /** Renders a song off the page: only its loudness, peaks and bands. */
-export function renderOff(input: SongRenderInput, want: "measure", progress?: (share: number) => void): Promise<RenderMeasure>;
-export async function renderOff(input: SongRenderInput, want: "song" | "measure", progress?: (share: number) => void): Promise<RenderedSong | RenderMeasure> {
+export function renderOff(input: SongRenderInput, want: "measure", progress?: (share: number) => void, rounding?: RoundingAsk): Promise<RenderMeasure>;
+export async function renderOff(input: SongRenderInput, want: "song" | "measure", progress?: (share: number) => void, rounding?: RoundingAsk): Promise<RenderedSong | RenderMeasure> {
   if (!pool()) {
     const song = await renderSong(input, async (share) => {
       progress?.(share);
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    return want === "song" ? song : measure(song);
+    return want === "song" ? song : measure(song, rounding);
   }
   const id = nextId++;
   return new Promise((resolve, reject) => {
-    queue.push({ id, message: { id, want, input }, progress, resolve, reject });
+    queue.push({ id, message: { id, want, input, rounding }, progress, resolve, reject });
     pump();
   });
 }

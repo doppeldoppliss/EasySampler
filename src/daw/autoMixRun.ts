@@ -15,6 +15,10 @@ import type { RenderTrack } from "./songRender";
 
 type Snapshot = ReturnType<RollPanel["snapshot"]>;
 
+/** 密度を上げる: the peak over the loudness it aims for (dB), and how far under the highest peak the rounding may start at most. */
+const DENSITY_PLR = 12;
+const DENSITY_MAX_DB = 5;
+
 export interface AutoMixDeps {
   rollPanel: RollPanel;
   /** The rate the song is rendered at (the engine's). */
@@ -65,6 +69,35 @@ export function installAutoMix(deps: AutoMixDeps): void {
       await balanceMaster(rollPanel.balanceStyle());
       rollPanel.refitDone();
     })();
+
+  /**
+   * 密度を上げる (design.md 45): the song rendered through the master as it is but for the rounding itself and the
+   * limiter after it, and the master's ピークを丸める set where the peak comes down to DENSITY_PLR over the loudness.
+   */
+  async function densify(): Promise<void> {
+    if (lock.busy) return;
+    const project = rollPanel.snapshot();
+    if (!heardTracks(project).length) {
+      rollPanel.info.textContent = "測れるトラック(音符があり、ミュートしていないもの)がありません。";
+      return;
+    }
+    lock.busy = true;
+    try {
+      const masterFx = structuredClone(project.masterFx);
+      masterFx.clip = { ...masterFx.clip, on: false };
+      masterFx.limiter = { ...masterFx.limiter, on: false };
+      const song = await renderOff(
+        { sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, null, null), masterFx, room: roomOf(project), tempoMap: tempoMapSec(project), raw: true },
+        "measure",
+        (share) => (rollPanel.info.textContent = share >= 1 ? "ピークの出方を調べています…" : `曲を測っています… ${Math.round(share * 100)}%`),
+        { targetPlr: DENSITY_PLR, maxUnderPeakDb: DENSITY_MAX_DB },
+      );
+      rollPanel.applyDensity(song.rounding ?? null, Number.isFinite(song.lufs) ? song.peakDb - song.lufs : null, DENSITY_PLR);
+    } finally {
+      lock.busy = false;
+    }
+  }
+  rollPanel.onDensify = () => void densify();
 
   /** One track as the song plays it (its effects, its volume; no master), offline: what the automatic mixing measures. */
   async function renderTrackAlone(project: Snapshot, id: string, say: (share: number) => void): Promise<RenderMeasure> {

@@ -8,6 +8,7 @@
 // written. Every effect that is off costs nothing.
 
 import { DEFAULT_FX, PATTERN_STEPS, type FxBeats, type FxSettings } from "../instrument/types";
+import { softClip } from "./clip";
 
 const TAU = 2 * Math.PI;
 const dbToGain = (db: number) => 10 ** (db / 20);
@@ -334,7 +335,7 @@ export class FxChain {
   get active(): boolean {
     const fx = this.fx;
     if (!fx) return false;
-    return fx.stutter.on || fx.gate.on || fx.duck.on || fx.transient.on || fx.compressor.on || fx.eq.on || fx.saturation.on || fx.air.on || fx.filter.on || fx.crush.on || fx.chorus.on || fx.delay.on || fx.reverb.on || fx.width.on || fx.pan.on || fx.limiter.on;
+    return fx.stutter.on || fx.gate.on || fx.duck.on || fx.transient.on || fx.compressor.on || fx.eq.on || fx.saturation.on || fx.air.on || fx.filter.on || fx.crush.on || fx.chorus.on || fx.delay.on || fx.reverb.on || fx.width.on || fx.pan.on || fx.clip.on || fx.limiter.on;
   }
 
   /**
@@ -543,6 +544,7 @@ export class FxChain {
     const revCombs = this.revCombs;
     const revAll = this.revAll;
     const revPreSamples = Math.min((this.revPre?.[0].length ?? 2) - 1, Math.round((fx.reverb.preDelayMs / 1000) * sr));
+    const clipKnee = dbToGain(fx.clip.thresholdDb);
     const limIn = dbToGain(fx.limiter.gainDb);
     const ceiling = dbToGain(fx.limiter.ceilingDb);
     const limRelease = Math.exp(-1 / Math.max(1, (fx.limiter.releaseMs / 1000) * sr));
@@ -834,6 +836,11 @@ export class FxChain {
         r *= gr;
         this.panPhase += panStep;
         if (this.panPhase >= 1) this.panPhase -= 1;
+      }
+
+      if (fx.clip.on) {
+        l = softClip(l, clipKnee);
+        r = softClip(r, clipKnee);
       }
 
       if (duck.on) {

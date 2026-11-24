@@ -57,6 +57,7 @@ import { drumRows, keyLabel, soundKey, type Kit } from "../daw/kit";
 import { arrange, type ArrangeKind } from "../daw/arrange";
 import { armOnce, el } from "./dom";
 import { barThickness, sceneLine, scenes } from "../daw/dynamics";
+import type { Rounding } from "../fx/clip";
 import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, ROLE_NAMES, spreadPans, trackRoles, type Role } from "../daw/roles";
 import { kickDuck, madeByAuto, medianLength, octaveFit, roomFor } from "../daw/autoMix";
 import { KICK_KEYS } from "../song/player";
@@ -218,6 +219,8 @@ export class RollPanel {
   /** まとめて自動ミックス / ミックスを診断する: the page runs them (they render). */
   onAutoMixAll: () => void = () => {};
   onDiagnose: () => void = () => {};
+  /** 密度を上げる: the page renders and measures the song, then calls applyDensity. */
+  onDensify: () => void = () => {};
   readonly exportStatus = el("p", { className: "fine", role: "status" });
 
   private project: Project = emptyProject();
@@ -676,6 +679,7 @@ export class RollPanel {
           el("span", { className: "control-label", textContent: "自動ミックス" }),
           button("まとめて自動ミックス", "small primary", () => this.onAutoMixAll(), "トラック名(名前のないものだけ)→ パン(真ん中のままのトラックだけ)→ トラックの EQ → キックに合わせて沈める → 残響 → 音量 → マスター EQ を、この順で続けて行い、最後に診断を出します。下の設定を使います。それぞれ「元に戻す」で 1 段ずつ戻せます"),
           button("ミックスを診断する", "small", () => this.onDiagnose(), "トラックを 1 本ずつと曲全体を書き出して、聞こえの大きさ・ピーク・気になる点を一覧にします(設定は変えません)"),
+          button("密度を上げる", "small", () => this.onDensify(), "市販の曲に比べて音が薄い・ピークばかり高いときに。曲を書き出して測り、飛び出したピーク(ドラムの頭など)だけを丸める高さを決めて、マスターの「ピークを丸める」に入れます(ピークと聞こえの大きさの差を 12 dB まで、最大でもいちばん高いピークの 5 dB 下から)。再生でも書き出しでも効きます。音量や EQ を大きく変えたら押し直してください。元に戻すで戻せます。「まとめて自動ミックス」には入っていません"),
           button("場面の強弱を付ける", "small", () => this.autoDynamics(), "曲全体の音量が一定に聞こえるときに。小節ごとに、鳴っているトラックの数・長さ・強さから厚みを測って場面に分け、薄い場面(鳴っているトラックが少ない所)を最大 3 dB 下げる「マスター音量の線」を引きます。厚い場面の頭には 1 拍前から戻ります。今あるマスター音量の線は置き換えます(元に戻すで戻せます)。「まとめて自動ミックス」には入っていません"),
         ]),
         el("div", { className: "row tight automix-settings" }, [
@@ -1898,6 +1902,22 @@ export class RollPanel {
   /** A line under the 音域のバランス button (progress, or why nothing was done). */
   balanceSays(text: string): void {
     this.balanceStatus.textContent = text;
+  }
+
+  /** 密度を上げる: the measured rounding set on the master (one step to undo), or why nothing was set. */
+  applyDensity(rounding: Rounding | null, plr: number | null, target: number): void {
+    if (!rounding) {
+      this.info.textContent =
+        plr === null
+          ? "曲に音がありませんでした(ミュートやソロも確かめてください)。"
+          : `ピークと聞こえの大きさの差はすでに ${plr.toFixed(1)} dB で、目安(${target} dB)以内です。丸める必要はありませんでした。`;
+      return;
+    }
+    this.updateMasterFx((fx) => {
+      fx.clip = { on: true, thresholdDb: rounding.thresholdDb };
+    });
+    this.onTrackChange();
+    this.info.textContent = `マスターの「ピークを丸める」を ${rounding.thresholdDb.toFixed(1).replace("-", "−")} dBFS(いちばん高いピークの ${rounding.underPeakDb.toFixed(1)} dB 下)に入れました。ピークと聞こえの大きさの差: ${rounding.beforePlr.toFixed(1)} → ${rounding.afterPlr.toFixed(1)} dB${rounding.afterPlr > target + 0.3 ? `(目安の ${target} dB には届いていません。これ以上は歪みが聞こえやすいので止めています)` : ""}。再生して、ドラムの頭が潰れて聞こえたらマスターのエフェクトで高さを上げてください。「元に戻す」(Ctrl + Z)で戻せます。`;
   }
 
   /** The fitted master EQ applied (one step to undo), what it did said, and the chart drawn. */

@@ -1449,6 +1449,9 @@ const fxPanel = el("details", { className: "panel fx-panel" }, [
     fxRange("戻るまでの時間", 20, 1000, 5, () => fxNow().duck.releaseMs, (f, v) => (f.duck.releaseMs = v), (v) => `${Math.round(v)} ms`),
   ]),
   fxHead("仕上げ"),
+  fxGroup("clip", "ピークを丸める(ソフトクリップ)", "飛び出したピーク(ドラムの頭など)だけを丸めて、音の密度を上げます。ここより下の音はそのまま。マスターでは、ミックスの画面の「密度を上げる」が曲を測って高さを決めます。下げすぎると歪みが聞こえます。", [
+    fxRange("丸め始める高さ", -36, 0, 0.1, () => fxNow().clip.thresholdDb, (f, v) => (f.clip.thresholdDb = v), (v) => `${v.toFixed(1)} dBFS`),
+  ]),
   fxGroup("limiter", "リミッター", "最後に音量を上げつつ、天井を超えないように抑えます。", [
     fxRange("入力ゲイン", 0, 18, 0.5, () => fxNow().limiter.gainDb, (f, v) => (f.limiter.gainDb = v), db),
     fxRange("天井", -12, 0, 0.1, () => fxNow().limiter.ceilingDb, (f, v) => (f.limiter.ceilingDb = v), (v) => `${v.toFixed(1)} dBFS`),

@@ -213,6 +213,8 @@ export interface FxSettings {
    */
   duck: { on: boolean; auto?: boolean; source: string; beats: DuckBeats; depthDb: number; releaseMs: number; thresholdDb: number };
   /** Limiter: input gain, ceiling (dBFS), release. */
+  /** ピークを丸める (fx/clip.ts): a soft clip from `thresholdDb` (dBFS) up — the few peaks far over the rest rounded off. Before the sidechain and the limiter. */
+  clip: { on: boolean; thresholdDb: number };
   limiter: { on: boolean; gainDb: number; ceilingDb: number; releaseMs: number };
 }
 
@@ -234,6 +236,7 @@ export const DEFAULT_FX: FxSettings = {
   delay: { on: false, beats: 0.5, feedback: 0.35, highCutHz: 6000, pingPong: true, mix: 0.25 },
   reverb: { on: false, size: 0.6, damping: 0.5, preDelayMs: 20, mix: 0.25 },
   duck: { on: false, source: "beat", beats: 1, depthDb: -12, releaseMs: 250, thresholdDb: -24 },
+  clip: { on: false, thresholdDb: -6 },
   limiter: { on: false, gainDb: 3, ceilingDb: -1, releaseMs: 80 },
 };
 

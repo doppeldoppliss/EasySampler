@@ -224,6 +224,7 @@ export function sanitizeFx(raw: unknown): FxSettings {
   const w = part("width");
   const p = part("pan");
   const l = part("limiter");
+  const cl = part("clip");
   const g = part("gate");
   const du = part("duck");
   const st = part("stutter");
@@ -294,6 +295,7 @@ export function sanitizeFx(raw: unknown): FxSettings {
     chorus: { on: on(ch), rateHz: clamp(num(ch.rateHz, d.chorus.rateHz), 0.05, 8), depthMs: clamp(num(ch.depthMs, d.chorus.depthMs), 0, 15), mix: clamp(num(ch.mix, d.chorus.mix), 0, 1) },
     width: { on: on(w), side: clamp(num(w.side, d.width.side), 0, 3), midDb: clamp(num(w.midDb, d.width.midDb), -24, 12) },
     pan: { on: on(p), depth: clamp(num(p.depth, d.pan.depth), 0, 1), beats: beats(p.beats, d.pan.beats) },
+    clip: { on: on(cl), thresholdDb: clamp(num(cl.thresholdDb, d.clip.thresholdDb), -36, 0) },
     limiter: { on: on(l), gainDb: clamp(num(l.gainDb, d.limiter.gainDb), 0, 24), ceilingDb: clamp(num(l.ceilingDb, d.limiter.ceilingDb), -24, 0), releaseMs: clamp(num(l.releaseMs, d.limiter.releaseMs), 5, 1000) },
   };
 }

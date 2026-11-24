@@ -182,7 +182,8 @@ export interface FxSettings {
   compressor: { on: boolean; thresholdDb: number; ratio: number; attackMs: number; releaseMs: number; makeupDb: number };
   /** EQ: low cut, low shelf, one bell, high shelf, high cut (a cut at 0 / ≥ 20 kHz is off). */
   /** (`auto` on the EQ, the reverb and the sidechain: put in by the automatic mixing, to be replaced or taken out by it; editing it by hand clears it.) */
-  eq: { on: boolean; auto?: boolean; lowCutHz: number; lowDb: number; lowHz: number; midDb: number; midHz: number; midQ: number; highDb: number; highHz: number; highCutHz: number };
+  /** (`mid2…`: a second bell — the master EQ's fit uses both; absent in what was kept before it = flat.) */
+  eq: { on: boolean; auto?: boolean; lowCutHz: number; lowDb: number; lowHz: number; midDb: number; midHz: number; midQ: number; mid2Db?: number; mid2Hz?: number; mid2Q?: number; highDb: number; highHz: number; highCutHz: number };
   /** Saturation (tube-like, asymmetric): drive 0–1, dry/wet. */
   saturation: { on: boolean; drive: number; mix: number };
   /** Air: high-shelf lift plus a little generated top end, 0–1. */
@@ -224,7 +225,7 @@ export const DEFAULT_FX: FxSettings = {
   stutter: { on: false, steps: Array.from({ length: PATTERN_STEPS }, (_, i) => i >= 12), stepBeats: 0.25, sliceBeats: 0.125, fade: 0 },
   transient: { on: false, attackDb: 0, sustainDb: 0 },
   compressor: { on: false, thresholdDb: -18, ratio: 4, attackMs: 10, releaseMs: 120, makeupDb: 4 },
-  eq: { on: false, lowCutHz: 0, lowDb: 0, lowHz: 150, midDb: 0, midHz: 1500, midQ: 1, highDb: 0, highHz: 6000, highCutHz: 20000 },
+  eq: { on: false, lowCutHz: 0, lowDb: 0, lowHz: 150, midDb: 0, midHz: 1500, midQ: 1, mid2Db: 0, mid2Hz: 300, mid2Q: 1, highDb: 0, highHz: 6000, highCutHz: 20000 },
   saturation: { on: false, drive: 0.3, mix: 1 },
   air: { on: false, amount: 0.3 },
   filter: { on: false, type: "lowpass", cutoffHz: 2000, resonance: 0.3, lfoOctaves: 2, lfoBeats: 1 },

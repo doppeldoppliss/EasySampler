@@ -1977,7 +1977,7 @@ export class RollPanel {
     const toward = style === "reference" ? `参照曲「${this.reference?.name ?? ""}」` : `「${BALANCE_STYLES[style]}」`;
     // (Which style the song is nearest to as it is: said when another was chosen.)
     const hint = nearest && style !== "reference" && nearest !== style ? `この曲にいま一番近い目安は「${BALANCE_STYLES[nearest]}」です。` : "";
-    this.balanceStatus.textContent = `${toward}に寄せて、マスター EQ を ローカット ${hz(e.lowCutHz)}・低音(${hz(e.lowHz)} 以下)${signed(e.lowDb)} dB・中音(${hz(e.midHz)})${signed(e.midDb)} dB・高音(${hz(e.highHz)} 以上)${signed(e.highDb)} dB にしました。${hint}「元に戻す」で戻せます。`;
+    this.balanceStatus.textContent = `${toward}に寄せて、マスター EQ を ローカット ${hz(e.lowCutHz)}・低音(${hz(e.lowHz)} 以下)${signed(e.lowDb)} dB・中音(${hz(e.midHz)})${signed(e.midDb)} dB${(e.mid2Db ?? 0) !== 0 ? `・中音 2(${hz(e.mid2Hz ?? 300)})${signed(e.mid2Db ?? 0)} dB` : ""}・高音(${hz(e.highHz)} 以上)${signed(e.highDb)} dB にしました。${hint}「元に戻す」で戻せます。`;
     this.balanceShown = { result, style };
     this.drawBalance();
     // The lows still well short after the EQ (50–100 Hz, 6 dB and more under the target): the EQ cannot do it.

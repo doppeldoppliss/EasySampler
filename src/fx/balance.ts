@@ -167,6 +167,8 @@ const MID_HZ = BAND_HZ.filter((hz) => hz >= 160 && hz <= 6300);
 const MID_Q = [0.7, 1, 1.4];
 /** How far it goes: about halfway to the target (the rest is for the ear). */
 const STRENGTH = 0.5;
+/** The most the second bell lifts (dB). */
+const BELL_LIFT_DB = 3;
 /** Every dB asked for costs a little: of two near fits, the gentler wins. */
 const GAIN_COST = 0.03;
 
@@ -182,7 +184,7 @@ export function fitBalance(measured: readonly number[], style: BalanceStyle | re
   const weights = BAND_HZ.map(weightOf);
   const lowCutHz = Math.max(30, current.lowCutHz);
   const highCutHz = 20000;
-  const plain: FxSettings["eq"] = { on: true, lowCutHz: 0, lowDb: 0, lowHz: 150, midDb: 0, midHz: 1000, midQ: 1, highDb: 0, highHz: 6000, highCutHz: 20000 };
+  const plain: FxSettings["eq"] = { on: true, lowCutHz: 0, lowDb: 0, lowHz: 150, midDb: 0, midHz: 1000, midQ: 1, mid2Db: 0, mid2Hz: 300, mid2Q: 1, highDb: 0, highHz: 6000, highCutHz: 20000 };
   const curve = (part: Partial<FxSettings["eq"]>) => BAND_HZ.map((hz) => eqResponseDb({ ...plain, ...part }, sampleRate, hz));
   // The low cut is fixed; its own curve, then every choice of each part, worked out once.
   const cut = curve({ lowCutHz });
@@ -193,23 +195,27 @@ export function fitBalance(measured: readonly number[], style: BalanceStyle | re
     db: number;
     curve: number[];
   }
-  const pick = { low: lows.find((c) => c.db === 0)!, high: highs.find((c) => c.db === 0)!, mid: mids.find((c) => c.db === 0)! };
-  const cost = (low: Choice, mid: Choice, high: Choice) => {
+  // (The second bell: the same choices, but lifting no more than BELL_LIFT_DB — a hole where no track plays is not
+  // to be filled by the EQ, which would only bring up what little is there.)
+  const mids2 = mids.filter((c) => c.db <= BELL_LIFT_DB).map((c) => ({ ...c, set: { mid2Hz: c.set.midHz, mid2Q: c.set.midQ, mid2Db: c.set.midDb } }));
+  const pick = { low: lows.find((c) => c.db === 0)!, high: highs.find((c) => c.db === 0)!, mid: mids.find((c) => c.db === 0)!, mid2: mids2.find((c) => c.db === 0)! };
+  const cost = (low: Choice, mid: Choice, high: Choice, mid2: Choice = pick.mid2) => {
     let e = 0;
     for (let j = 0; j < BAND_HZ.length; j++) {
-      const miss = low.curve[j] + mid.curve[j] + high.curve[j] + cut[j] - want[j];
+      const miss = low.curve[j] + mid.curve[j] + mid2.curve[j] + high.curve[j] + cut[j] - want[j];
       // (Under the low cut, falling short is what the cut is for: the shelf is not to lift it back.)
       if (cut[j] < -1 && miss < 0) continue;
       e += weights[j] * miss * miss;
     }
-    return e + GAIN_COST * (low.db * low.db + mid.db * mid.db + high.db * high.db);
+    return e + GAIN_COST * (low.db * low.db + mid.db * mid.db + mid2.db * mid2.db + high.db * high.db);
   };
   for (let round = 0; round < 4; round++) {
     pick.low = lows.reduce((a, b) => (cost(b, pick.mid, pick.high) < cost(a, pick.mid, pick.high) ? b : a));
     pick.high = highs.reduce((a, b) => (cost(pick.low, pick.mid, b) < cost(pick.low, pick.mid, a) ? b : a));
     pick.mid = mids.reduce((a, b) => (cost(pick.low, b, pick.high) < cost(pick.low, a, pick.high) ? b : a));
+    pick.mid2 = mids2.reduce((a, b) => (cost(pick.low, pick.mid, pick.high, b) < cost(pick.low, pick.mid, pick.high, a) ? b : a));
   }
-  const eq: FxSettings["eq"] = { ...plain, lowCutHz, highCutHz, ...pick.low.set, ...pick.mid.set, ...pick.high.set };
+  const eq: FxSettings["eq"] = { ...plain, lowCutHz, highCutHz, ...pick.low.set, ...pick.mid.set, ...pick.mid2.set, ...pick.high.set };
   const applied = BAND_HZ.map((hz) => eqResponseDb(eq, sampleRate, hz));
   const after = deviation(
     measured.map((m, j) => m + applied[j]),

@@ -54,6 +54,10 @@ export function eqResponseDb(e: FxSettings["eq"], sampleRate: number, hz: number
     b.set("peaking", e.midHz, e.midQ, e.midDb, sampleRate);
     db += b.responseDb(hz, sampleRate);
   }
+  if ((e.mid2Db ?? 0) !== 0) {
+    b.set("peaking", e.mid2Hz ?? 300, e.mid2Q ?? 1, e.mid2Db ?? 0, sampleRate);
+    db += b.responseDb(hz, sampleRate);
+  }
   if (e.highDb !== 0) {
     b.set("highshelf", e.highHz, 0.707, e.highDb, sampleRate);
     db += b.responseDb(hz, sampleRate);
@@ -253,6 +257,7 @@ export class FxChain {
   private readonly eqLowCut = new Biquad();
   private readonly eqLow = new Biquad();
   private readonly eqMid = new Biquad();
+  private readonly eqMid2 = new Biquad();
   private readonly eqHigh = new Biquad();
   private readonly eqHighCut = new Biquad();
 
@@ -425,6 +430,7 @@ export class FxChain {
     this.eqLowCut.set("highpass", Math.max(10, e.lowCutHz), 0.707, 0, sr);
     this.eqLow.set("lowshelf", e.lowHz, 0.707, e.lowDb, sr);
     this.eqMid.set("peaking", e.midHz, e.midQ, e.midDb, sr);
+    this.eqMid2.set("peaking", e.mid2Hz ?? 300, e.mid2Q ?? 1, e.mid2Db ?? 0, sr);
     this.eqHigh.set("highshelf", e.highHz, 0.707, e.highDb, sr);
     this.eqHighCut.set("lowpass", Math.min(e.highCutHz, sr * 0.45), 0.707, 0, sr);
     this.airShelf.set("highshelf", 9000, 0.707, fx.air.amount * 8, sr);
@@ -447,7 +453,7 @@ export class FxChain {
   reset(): void {
     this.twin = true;
     this.envFast = this.envSlow = 0;
-    for (const b of [this.eqLowCut, this.eqLow, this.eqMid, this.eqHigh, this.eqHighCut, this.airShelf, this.airBand]) b.reset();
+    for (const b of [this.eqLowCut, this.eqLow, this.eqMid, this.eqMid2, this.eqHigh, this.eqHighCut, this.airShelf, this.airBand]) b.reset();
     this.dcX.fill(0);
     this.dcY.fill(0);
     this.svfIc1.fill(0);
@@ -498,7 +504,7 @@ export class FxChain {
       }
       if (!twin) {
         this.twin = false;
-        for (const b of [this.eqLowCut, this.eqLow, this.eqMid, this.eqHigh, this.eqHighCut, this.airShelf, this.airBand]) b.mirror();
+        for (const b of [this.eqLowCut, this.eqLow, this.eqMid, this.eqMid2, this.eqHigh, this.eqHighCut, this.airShelf, this.airBand]) b.mirror();
         this.dcX[1] = this.dcX[0];
         this.dcY[1] = this.dcY[0];
         this.svfIc1[1] = this.svfIc1[0];
@@ -640,6 +646,7 @@ export class FxChain {
           if (e.lowCutHz > 0) x = this.eqLowCut.tick(x, ch);
           if (e.lowDb !== 0) x = this.eqLow.tick(x, ch);
           if (e.midDb !== 0) x = this.eqMid.tick(x, ch);
+          if (e.mid2Db !== 0) x = this.eqMid2.tick(x, ch);
           if (e.highDb !== 0) x = this.eqHigh.tick(x, ch);
           if (e.highCutHz < 20000) x = this.eqHighCut.tick(x, ch);
           if (ch === 0) l = x;

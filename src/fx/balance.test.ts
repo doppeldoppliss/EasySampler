@@ -86,4 +86,22 @@ describe("master EQ toward a tonal balance", () => {
     expect(same.eq.highDb).toBe(0);
     for (const style of ["standard", "electronic", "acoustic"] as BalanceStyle[]) expect(nearestStyle(targetDb(style).map((x) => x - 30))).toBe(style);
   });
+
+  it("uses a second bell for what one cannot reach: a hole and a bump apart from each other, the hole lifted by 3 dB at most", () => {
+    const flat = { on: false, lowCutHz: 0, lowDb: 0, lowHz: 150, midDb: 0, midHz: 1000, midQ: 1, highDb: 0, highHz: 6000, highCutHz: 20000 };
+    // The target with a 9 dB hole around 250 Hz and a 5 dB bump around 2 kHz.
+    const song = targetDb("standard").map((x, j) => x - 9 * Math.exp(-((Math.log2(BAND_HZ[j] / 250) / 0.4) ** 2)) + 5 * Math.exp(-((Math.log2(BAND_HZ[j] / 2000) / 0.5) ** 2)));
+    const fit = fitBalance(song, "standard", 48000, flat);
+    const bells = [
+      { hz: fit.eq.midHz, db: fit.eq.midDb },
+      { hz: fit.eq.mid2Hz ?? 0, db: fit.eq.mid2Db ?? 0 },
+    ];
+    const lift = bells.find((b) => b.db > 0);
+    const dip = bells.find((b) => b.db < 0);
+    expect(lift && lift.hz > 180 && lift.hz < 350).toBe(true);
+    expect(dip && dip.hz > 1400 && dip.hz < 2800).toBe(true);
+    expect(fit.eq.mid2Db ?? 0).toBeLessThanOrEqual(3);
+    const at250 = BAND_HZ.findIndex((hz) => hz > 240 && hz < 260);
+    expect(Math.abs(fit.after[at250])).toBeLessThan(Math.abs(fit.before[at250]));
+  });
 });

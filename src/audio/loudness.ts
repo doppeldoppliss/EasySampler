@@ -316,9 +316,11 @@ export class ShortTermMeter {
  * out of phase) and the side (L−R) against the mid (L+R) in dB — a finished mix sits around 0.7–0.9 and −12 to −8 dB.
  * And which side it leans to: the left's power against the right's (dB, + = left) over about 400 Hz and up — the
  * lows sit in the middle and would hide a lean in what the ear places (a mix measured −1.6 dB as a whole was −5 dB
- * between 500 Hz and 4 kHz); a finished mix is within 1 dB.
+ * between 500 Hz and 4 kHz); a finished mix is within 1 dB. `sideUpDb` is the side against the mid over the same
+ * 400 Hz and up: the width that is heard (the lows, in the middle, pull the whole figure down by 3–4 dB); finished
+ * songs measured −3.5 to −10.5 dB by band there.
  */
-export function stereoImage(left: Float32Array, right: Float32Array, sampleRate = 48000): { correlation: number; sideDb: number; balanceDb: number } {
+export function stereoImage(left: Float32Array, right: Float32Array, sampleRate = 48000): { correlation: number; sideDb: number; balanceDb: number; sideUpDb: number } {
   let lr = 0;
   let ll = 0;
   let rr = 0;
@@ -336,6 +338,8 @@ export function stereoImage(left: Float32Array, right: Float32Array, sampleRate 
   let qr = 0;
   let upL = 0;
   let upR = 0;
+  let upMid = 0;
+  let upSide = 0;
   for (let i = 0; i < left.length; i++) {
     const l = left[i];
     const r = right[i];
@@ -349,11 +353,13 @@ export function stereoImage(left: Float32Array, right: Float32Array, sampleRate 
     qr = hr;
     upL += gl * gl;
     upR += gr * gr;
+    upMid += (gl + gr) * (gl + gr);
+    upSide += (gl - gr) * (gl - gr);
     lr += l * r;
     ll += l * l;
     rr += r * r;
     mid += (l + r) * (l + r);
     side += (l - r) * (l - r);
   }
-  return { correlation: ll > 0 && rr > 0 ? lr / Math.sqrt(ll * rr) : 1, sideDb: mid > 0 ? 10 * Math.log10(Math.max(side, 1e-20) / mid) : -Infinity, balanceDb: upL > 0 && upR > 0 ? 10 * Math.log10(upL / upR) : 0 };
+  return { correlation: ll > 0 && rr > 0 ? lr / Math.sqrt(ll * rr) : 1, sideDb: mid > 0 ? 10 * Math.log10(Math.max(side, 1e-20) / mid) : -Infinity, balanceDb: upL > 0 && upR > 0 ? 10 * Math.log10(upL / upR) : 0, sideUpDb: upMid > 0 ? 10 * Math.log10(Math.max(upSide, 1e-20) / upMid) : -Infinity };
 }

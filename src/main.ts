@@ -1436,6 +1436,7 @@ const fxPanel = el("details", { className: "panel fx-panel" }, [
   fxGroup("width", "ステレオ幅(ミッド/サイド)", "左右の広がり(サイド)と中央(ミッド)を別々に調整します。モノラルの素材は広がらないので、コーラスと組み合わせます。", [
     fxRange("広がり(サイド)", 0, 3, 0.01, () => fxNow().width.side, (f, v) => (f.width.side = v), (v) => (v === 0 ? "モノラル" : pct(v))),
     fxRange("中央(ミッド)", -12, 6, 0.5, () => fxNow().width.midDb, (f, v) => (f.width.midDb = v), db),
+    fxRange("ここから上だけ広げる", 0, 4000, 50, () => fxNow().width.fromHz, (f, v) => (f.width.fromHz = v), (v) => (v === 0 ? "全体" : `${Math.round(v)} Hz から上`)),
   ]),
   fxGroup("pan", "オートパン", "音を拍に合わせて左右に振ります。アルペジオなどに。", [
     fxRange("深さ", 0, 1, 0.01, () => fxNow().pan.depth, (f, v) => (f.pan.depth = v), pct),

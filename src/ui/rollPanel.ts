@@ -699,7 +699,7 @@ export class RollPanel {
             button("キックに合わせて沈める", "small", () => this.autoDuck(), "ベース(−3 dB、16 分音符で戻る)と、1 拍以上伸ばす音が中心の和音・伴奏・ハモリ(−2 dB)に、ドラムトラックのキック(35・36 番)で沈むサイドチェーンを入れます(サイドチェーンを自分で入れたトラックはそのまま)"),
             button("残響を付ける", "small", () => this.autoRooms(), "メロディは少し(6%)、和音・伴奏・ハモリはやや多め(11〜14%)に、テンポに合った長さのリバーブを入れます。ベース・ドラム・原曲と、16 分音符以下の短い音が中心の速いパートにはなし(リバーブを自分で入れたトラックはそのまま)"),
             button("音量を合わせる", "small", () => this.onAutoLevels(), "トラックを 1 本ずつ書き出して聞こえの大きさ(LUFS)を測り、役割ごとの目安(原曲・伴奏かメロディを基準に、ベース ±0(上の「ベースの強さ」を足す)・ドラム −1・和音 −5・伴奏 −6・ハモリ −8 dB。同じ役割が複数なら分け合う)に音量を合わせます"),
-            button("広がりを寄せる", "small", () => this.onAutoWidth(), "曲を書き出して左右の広がり(横の成分)を測り、狭ければマスターの「ステレオ幅」で目安(横の成分 −9.5 dB)へ寄せます(最大 150%)。もともとある広がりを持ち上げるだけなので、ほぼモノラルの曲には効きません(パンを広げてください)。元に戻すで戻せます"),
+            button("広がりを寄せる", "small", () => this.onAutoWidth(), "曲を書き出して中高域(400 Hz より上)の左右の広がりを測り、狭ければマスターの「ステレオ幅」で目安(横の成分 −6.5 dB)へ寄せます(最大 150%、400 Hz から上だけ。低音は真ん中のまま)。もともとある広がりを持ち上げるだけなので、ほぼモノラルの曲には効きません(パンを広げてください)。元に戻すで戻せます"),
             button("マスター EQ を目安に寄せる", "small", () => this.onBalance(this.balanceSelect.value as BalanceStyle), "曲をマスターなしで書き出して周波数の分布を測り、上の「音域の目安」の形へ半分ほど近づくよう、マスターの EQ(ローカット・低音・中音・高音)を設定します。元に戻すで戻せます"),
           ]),
           el("p", { className: "fine", textContent: "マスター EQ: 仕上がった曲の平均は、低音から高音へなだらかに下がる形になります。その目安との差を測って半分ほど寄せます(各 ±6 dB まで)。直せるのは全体の傾きだけで、トラック同士のぶつかりは各トラックの EQ で。最後は耳で調整してください。" }),
@@ -1908,11 +1908,11 @@ export class RollPanel {
   }
 
   /** 広がりを寄せる: the master's ステレオ幅 set (one step to undo; null: wide enough, taken off if it was on; 0: as good as mono). */
-  applyWidth(side: number | null, sideDb: number, target: number): void {
+  applyWidth(side: number | null, sideDb: number, target: number, fromHz: number): void {
     const f = (db: number) => (Number.isFinite(db) ? `${db.toFixed(1).replace("-", "−")} dB` : "なし");
     const on = this.project.masterFx.width.on;
     if (side === 0) {
-      this.info.textContent = `曲がほぼモノラルです(横の成分 ${f(sideDb)})。ステレオ幅では広がらないので、「パンを広げる」で和音・伴奏を左右に振ってください。`;
+      this.info.textContent = `曲がほぼモノラルです(中高域の横の成分 ${f(sideDb)})。ステレオ幅では広がらないので、「パンを広げる」で和音・伴奏を左右に振ってください。`;
       return;
     }
     if (side === null) {
@@ -1920,14 +1920,14 @@ export class RollPanel {
         this.updateMasterFx((fx) => {
           fx.width = { ...fx.width, on: false };
         });
-      this.info.textContent = `広がりは十分です(横の成分 ${f(sideDb)}、目安 ${f(target)})。${on ? "マスターのステレオ幅を外しました。" : "何も変えていません。"}`;
+      this.info.textContent = `広がりは十分です(中高域の横の成分 ${f(sideDb)}、目安 ${f(target)})。${on ? "マスターのステレオ幅を外しました。" : "何も変えていません。"}`;
       return;
     }
     this.updateMasterFx((fx) => {
-      fx.width = { on: true, side, midDb: 0 };
+      fx.width = { on: true, side, midDb: 0, fromHz };
     });
     this.onTrackChange();
-    this.info.textContent = `マスターの「ステレオ幅」を ${Math.round(side * 100)}% にしました(横の成分 ${f(sideDb)} → 約 ${f(sideDb + 20 * Math.log10(side))}、目安 ${f(target)})。「元に戻す」(Ctrl + Z)で戻せます。`;
+    this.info.textContent = `マスターの「ステレオ幅」を ${Math.round(side * 100)}%(${fromHz} Hz から上だけ。低音は真ん中のまま)にしました(中高域の横の成分 ${f(sideDb)} → 約 ${f(sideDb + 20 * Math.log10(side))}、目安 ${f(target)})。「元に戻す」(Ctrl + Z)で戻せます。`;
   }
 
   /** 密度を上げる: the measured rounding set on the master (one step to undo), or why nothing was set. */

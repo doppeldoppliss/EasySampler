@@ -294,4 +294,24 @@ describe("FxChain: sidechain (ducking)", () => {
     // (Arrays copied: the chain never shares a pattern with the settings it was given.)
     expect(shaped.gate.steps).not.toBe(a.gate.steps);
   });
+
+  it("widens from a frequency up: the side's lows stay, its highs take the gain", () => {
+    const sr = 48000;
+    const run = (hz: number) => {
+      const chain = new FxChain(sr);
+      const fx = structuredClone(DEFAULT_FX);
+      fx.width = { on: true, side: 2, midDb: 0, fromHz: 400 };
+      chain.set(fx);
+      // All side: left and right opposite.
+      const l = Float32Array.from({ length: sr }, (_, i) => 0.3 * Math.sin((2 * Math.PI * hz * i) / sr));
+      const r = l.map((x) => -x);
+      for (let at = 0; at < l.length; at += 128) chain.process(l.subarray(at, at + 128), r.subarray(at, at + 128), 128);
+      let peak = 0;
+      for (let i = sr / 2; i < sr; i++) peak = Math.max(peak, Math.abs(l[i]));
+      return peak / 0.3;
+    };
+    expect(run(40)).toBeLessThan(1.1);
+    expect(run(5003)).toBeGreaterThan(1.9);
+    expect(run(5003)).toBeLessThanOrEqual(2.01);
+  });
 });

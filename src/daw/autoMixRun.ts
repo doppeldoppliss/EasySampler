@@ -15,12 +15,17 @@ import type { RenderTrack } from "./songRender";
 
 type Snapshot = ReturnType<RollPanel["snapshot"]>;
 
-/** 広がりを寄せる: the side against the mid it aims for (dB), the most the side is raised (×), and the side under which a mix is taken for mono (nothing to raise). */
-const WIDTH_SIDE_DB = -9.5;
+/**
+ * 広がりを寄せる: the side against the mid over 400 Hz it aims for (dB), the most the side is raised (×), the side
+ * under which a mix is taken for mono (nothing to raise), and from where up the master's ステレオ幅 works (the lows
+ * keep to the middle, as finished songs have them).
+ */
+const WIDTH_SIDE_DB = -6.5;
 const WIDTH_MOST = 1.5;
-const WIDTH_MONO_DB = -22;
+const WIDTH_MONO_DB = -20;
+export const WIDTH_FROM_HZ = 400;
 
-/** The master's ステレオ幅 (the side's gain) for a mix with this much side: null when it is wide enough, 0 when it is as good as mono. */
+/** The master's ステレオ幅 (the side's gain) for a mix with this much side over 400 Hz: null when it is wide enough, 0 when it is as good as mono. */
 export function widthFor(sideDb: number): number | null {
   if (!(sideDb > WIDTH_MONO_DB)) return 0;
   const gain = 10 ** ((WIDTH_SIDE_DB - sideDb) / 20);
@@ -105,7 +110,7 @@ export function installAutoMix(deps: AutoMixDeps): void {
       const masterFx = structuredClone(project.masterFx);
       masterFx.width = { ...masterFx.width, on: false };
       const song = await renderOff({ sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, null, null), masterFx, room: roomOf(project), tempoMap: tempoMapSec(project), raw: true }, "measure", (share) => (rollPanel.info.textContent = `広がりを測っています… ${Math.round(share * 100)}%`));
-      rollPanel.applyWidth(widthFor(song.sideDb), song.sideDb, WIDTH_SIDE_DB);
+      rollPanel.applyWidth(widthFor(song.sideUpDb), song.sideUpDb, WIDTH_SIDE_DB, WIDTH_FROM_HZ);
     } finally {
       lock.busy = false;
     }

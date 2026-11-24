@@ -216,12 +216,12 @@ describe("自動ミックス", () => {
 
 describe("広がりを寄せる", () => {
   it("raises the side of a narrow mix toward the target, no further than 150%, and leaves a wide or a mono one", () => {
-    // −12.5 dB of side (the automatic mixing's result on a real song): 3 dB short of −9.5.
-    expect(widthFor(-12.5)).toBe(1.4);
-    expect(widthFor(-11)).toBe(1.2);
-    expect(widthFor(-18)).toBe(1.5);
-    expect(widthFor(-9.5)).toBeNull();
-    expect(widthFor(-6)).toBeNull();
+    // −8.5 dB of side over 400 Hz (the automatic mixing's result on a real song): 2 dB short of −6.5.
+    expect(widthFor(-8.5)).toBe(1.25);
+    expect(widthFor(-8)).toBe(1.2);
+    expect(widthFor(-15)).toBe(1.5);
+    expect(widthFor(-6.5)).toBeNull();
+    expect(widthFor(-4)).toBeNull();
     expect(widthFor(-40)).toBe(0);
     expect(widthFor(-Infinity)).toBe(0);
   });

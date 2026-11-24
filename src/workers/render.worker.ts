@@ -22,8 +22,9 @@ export interface RenderMeasure {
   /** How wide it is (stereoImage). */
   correlation: number;
   sideDb: number;
-  /** The left against the right over 400 Hz (dB, + = left). */
+  /** The left against the right over 400 Hz (dB, + = left), and the side against the mid there. */
   balanceDb: number;
+  sideUpDb: number;
   /** Asked for with the job's `rounding`: where a soft clip would start to bring the peak that near the loudness (null: none needed). */
   rounding?: Rounding | null;
 }

@@ -194,7 +194,8 @@ export interface FxSettings {
   /** Chorus: speed (Hz), depth (ms), dry/wet. */
   chorus: { on: boolean; rateHz: number; depthMs: number; mix: number };
   /** Mid/side: side level (1 = as is, 0 = mono, 2 = twice as wide) and mid level. */
-  width: { on: boolean; side: number; midDb: number };
+  /** (`fromHz`: the side is changed only from about there up — the lows keep their place; 0 = the whole of it.) */
+  width: { on: boolean; side: number; midDb: number; fromHz: number };
   /**
    * Gate (トランスゲート): the sound cut to a pattern on the song's beats (16 steps, each `stepBeats` long); the
    * off steps go down by `depth` (1 = silent), each edge smoothed over `smoothMs`.
@@ -229,7 +230,7 @@ export const DEFAULT_FX: FxSettings = {
   filter: { on: false, type: "lowpass", cutoffHz: 2000, resonance: 0.3, lfoOctaves: 2, lfoBeats: 1 },
   crush: { on: false, bits: 8, downsample: 4, mix: 1 },
   chorus: { on: false, rateHz: 0.8, depthMs: 4, mix: 0.4 },
-  width: { on: false, side: 1.4, midDb: 0 },
+  width: { on: false, side: 1.4, midDb: 0, fromHz: 0 },
   // (Sixteenths, on and off in turn.)
   gate: { on: false, steps: Array.from({ length: PATTERN_STEPS }, (_, i) => i % 2 === 0), stepBeats: 0.25, depth: 1, smoothMs: 4 },
   pan: { on: false, depth: 0.6, beats: 1 },

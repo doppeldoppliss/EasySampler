@@ -260,6 +260,8 @@ export class FxChain {
   private dcX = [0, 0];
   private dcY = [0, 0];
   private readonly dcR: number;
+  /** ステレオ幅 from a frequency up: the side's lows (a one-pole low pass). */
+  private widthLow = 0;
 
   // air
   private readonly airShelf = new Biquad();
@@ -523,6 +525,7 @@ export class FxChain {
     const chorusStep = fx.chorus.rateHz / sr;
     const chorusLen = this.chorusBuf[0].length;
     const sideGain = fx.width.side;
+    const widthK = fx.width.fromHz > 0 ? 1 - Math.exp((-TAU * fx.width.fromHz) / sr) : 0;
     const midGain = dbToGain(fx.width.midDb);
     const panStep = beatHz(fx.pan.beats) / sr;
     const filterStep = beatHz(fx.filter.lfoBeats) / sr;
@@ -821,7 +824,10 @@ export class FxChain {
 
       if (fx.width.on) {
         const mid = ((l + r) / 2) * midGain;
-        const side = ((l - r) / 2) * sideGain;
+        // (From a frequency up: the side under it — a one-pole low pass — stays as it is, the rest takes the gain.)
+        const raw = (l - r) / 2;
+        this.widthLow += widthK * (raw - this.widthLow);
+        const side = widthK > 0 ? this.widthLow + (raw - this.widthLow) * sideGain : raw * sideGain;
         l = mid + side;
         r = mid - side;
       }

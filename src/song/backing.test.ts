@@ -90,4 +90,31 @@ describe("簡易シンセ presets", () => {
     b.renderAdd(y, y, 512, 1);
     expect(Array.from(x)).toEqual(Array.from(y));
   });
+
+  it("the drums' noise falls away at the top: a hat and a snare hold little over 16 kHz, and keep what is heard", () => {
+    // Power in a band, by a plain transform of the hit's first 4096 samples.
+    const bands = (key: number) => {
+      const synth = new BackingSynth(SR);
+      synth.noteOn(key, 1, true);
+      const out = new Float32Array(4096);
+      for (let at = 0; at < out.length; at += 128) synth.renderAdd(out.subarray(at, at + 128), new Float32Array(128), 128, 1);
+      const power = [0, 0, 0];
+      for (let k = 1; k < 2048; k += 5) {
+        let re = 0;
+        let im = 0;
+        for (let n = 0; n < 4096; n++) {
+          re += out[n] * Math.cos((2 * Math.PI * k * n) / 4096);
+          im += out[n] * Math.sin((2 * Math.PI * k * n) / 4096);
+        }
+        const hz = (k * SR) / 4096;
+        power[hz < 4000 ? 2 : hz < 12000 ? 0 : hz > 16000 ? 1 : 2] += re * re + im * im;
+      }
+      return { heard: power[0], over: power[1] };
+    };
+    for (const key of [42, 46, 49, 38]) {
+      const b = bands(key);
+      // (4–12 kHz against over 16 kHz: bare noise had the top the stronger by 5 dB and more on the hats.)
+      expect(10 * Math.log10(b.over / b.heard)).toBeLessThan(-4);
+    }
+  });
 });

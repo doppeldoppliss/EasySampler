@@ -7,6 +7,12 @@
 
 const MAX_VOICES = 48;
 const DRUM_LEVEL = 0.35;
+/**
+ * Where the drums' noise starts to fall away (Hz). Plain white noise (the snare) is as strong at 24 kHz as at 5, and
+ * its first difference (the hats, the cymbals) strongest there: a song's drum track held all of its sound over
+ * 16 kHz — unheard, but 0.2 LU of its measured loudness and 0.2 dB of its peak. A real hat falls away over 10–12 kHz.
+ */
+const NOISE_TOP_HZ = 14000;
 
 type Wave = "tri" | "saw" | "square" | "chip" | "organ" | "fm" | "bass";
 
@@ -119,8 +125,24 @@ export class BackingSynth {
   /** The tones' preset (the drums are the same whichever it is). */
   private preset: Preset = SYNTH_PRESETS[DEFAULT_SYNTH];
 
+  /** The drums' noise low-pass (a biquad, a0 = 1). */
+  private readonly nb0: number;
+  private readonly nb1: number;
+  private readonly nb2: number;
+  private readonly na1: number;
+  private readonly na2: number;
+
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
+    // (12 dB an octave from NOISE_TOP_HZ, and nothing at half the rate.)
+    const w = (2 * Math.PI * Math.min(NOISE_TOP_HZ, 0.42 * sampleRate)) / sampleRate;
+    const alpha = Math.sin(w) / (2 * Math.SQRT1_2);
+    const a0 = 1 + alpha;
+    this.nb0 = (1 - Math.cos(w)) / 2 / a0;
+    this.nb1 = (1 - Math.cos(w)) / a0;
+    this.nb2 = this.nb0;
+    this.na1 = (-2 * Math.cos(w)) / a0;
+    this.na2 = (1 - alpha) / a0;
     for (let i = 0; i < MAX_VOICES; i++) {
       this.voices.push({
         active: false,
@@ -164,6 +186,15 @@ export class BackingSynth {
     return this.seed / 2147483648 - 1;
   }
 
+  /** A drum's noise: white, its top rounded off (the voice's lp1 / lp2 hold the filter). */
+  private drumNoise(v: BackingVoice): number {
+    const x = this.noise();
+    const y = this.nb0 * x + v.lp1;
+    v.lp1 = this.nb1 * x - this.na1 * y + v.lp2;
+    v.lp2 = this.nb2 * x - this.na2 * y;
+    return y;
+  }
+
   noteOn(note: number, velocity: number, drum: boolean): void {
     const v = this.voices.find((x) => !x.active) ?? this.voices.reduce((a, b) => (b.order < a.order ? b : a));
     const sr = this.sampleRate;
@@ -178,6 +209,8 @@ export class BackingSynth {
       const kind = drumKind(note);
       v.drum = kind;
       v.preset = null;
+      v.lp1 = 0;
+      v.lp2 = 0;
       v.level = DRUM_LEVEL * velocity * (kind === "hat" || kind === "click" ? 0.5 : kind === "cymbal" ? 0.4 : 1);
       v.env = 1;
       v.decay = Math.exp(Math.log(0.001) / (DECAY[kind] * sr));
@@ -250,11 +283,11 @@ export class BackingSynth {
               s = Math.sin(2 * Math.PI * v.phase);
               v.phase += v.step;
               v.step = v.stepEnd + (v.step - v.stepEnd) * sweep;
-              if (v.drum === "tom") s = 0.8 * s + 0.2 * this.noise();
+              if (v.drum === "tom") s = 0.8 * s + 0.2 * this.drumNoise(v);
               break;
             }
             case "snare": {
-              s = 0.7 * this.noise() + 0.3 * Math.sin(2 * Math.PI * v.phase);
+              s = 0.7 * this.drumNoise(v) + 0.3 * Math.sin(2 * Math.PI * v.phase);
               v.phase += 190 / this.sampleRate;
               break;
             }
@@ -263,7 +296,7 @@ export class BackingSynth {
             case "cymbal":
             case "click": {
               // First difference: noise tilted toward the highs.
-              const n = this.noise();
+              const n = this.drumNoise(v);
               s = (n - v.last) * 0.5;
               v.last = n;
               break;

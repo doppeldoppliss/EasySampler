@@ -1962,7 +1962,7 @@ export class RollPanel {
       fx.clip = { on: true, thresholdDb: rounding.thresholdDb };
     });
     this.onTrackChange();
-    this.info.textContent = `マスターの「ピークを丸める」を ${rounding.thresholdDb.toFixed(1).replace("-", "−")} dBFS(いちばん高いピークの ${rounding.underPeakDb.toFixed(1)} dB 下)に入れました。ピークと聞こえの大きさの差: ${rounding.beforePlr.toFixed(1)} → ${rounding.afterPlr.toFixed(1)} dB${rounding.afterPlr > target + 0.3 ? `(目安の ${target} dB には届いていません。これ以上は歪みが聞こえやすいので止めています)` : ""}。再生して、ドラムの頭が潰れて聞こえたらマスターのエフェクトで高さを上げてください。「元に戻す」(Ctrl + Z)で戻せます。`;
+    this.info.textContent = `マスターの「ピークを丸める」を ${rounding.thresholdDb.toFixed(1).replace("-", "−")} dBFS(いちばん高いピークの ${rounding.underPeakDb.toFixed(1)} dB 下)に入れました。ピークと聞こえの大きさの差: ${rounding.beforePlr.toFixed(1)} → ${rounding.afterPlr.toFixed(1)} dB${rounding.afterPlr > target + 0.3 ? `(目安の ${target} dB には届いていません。これ以上は歪みが聞こえやすいので止めています)` : ""}。${this.project.masterAuto.length ? "マスター音量の線(場面の強弱)がある曲なので、書き出した曲全体で測ると差はこれより大きく出ます(線が薄い場面を下げるぶん。この数字は線をかける前のものです)。" : ""}再生して、ドラムの頭が潰れて聞こえたらマスターのエフェクトで高さを上げてください。「元に戻す」(Ctrl + Z)で戻せます。`;
   }
 
   /** The fitted master EQ applied (one step to undo), what it did said, and the chart drawn. */

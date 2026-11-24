@@ -8,6 +8,7 @@
 // once as a zip. The settings (never the audio) are kept per material and
 // can be saved as JSON. One column, phone first.
 
+import { bandSpectrum } from "./fx/balance";
 import { applyCorrections, CORRECTION_LABELS, correctionLabel, type CorrectionKind, type PitchCorrection } from "./analysis/corrections";
 import { midiToHz, pitchLabel } from "./analysis/pitch";
 import { EngineClient } from "./audio/engineClient";
@@ -3583,6 +3584,25 @@ async function exportSong(kind: "wav" | "stems" | "mid"): Promise<void> {
 rollPanel.onExport = (kind) => void exportSong(kind);
 
 installAutoMix({ rollPanel, sampleRate: () => client.sampleRate, songTracks, renderLine, lock: renderLock });
+
+// 参照曲を開く (research3.md 3): a finished song decoded here, its third-octave bands measured, and those kept as a
+// target for the master EQ (the audio itself is not kept).
+rollPanel.onOpenReference = (file) =>
+  void (async () => {
+    rollPanel.balanceSays(`「${file.name}」を測っています…`);
+    try {
+      const audio = await decode(file);
+      const bands = bandSpectrum(audio.channels, audio.sampleRate);
+      if (!bands) {
+        rollPanel.balanceSays(`「${file.name}」には音がありませんでした。`);
+        return;
+      }
+      rollPanel.setReference({ name: file.name.replace(/\.[^.]+$/, ""), bands });
+      rollPanel.balanceSays(`参照曲「${file.name}」の音域の形を「音域の目安」に入れました。「マスター EQ を目安に寄せる」(または「まとめて自動ミックス」)で使います。`);
+    } catch (error) {
+      rollPanel.balanceSays(`読み込めませんでした: ${error instanceof Error ? error.message : error}`);
+    }
+  })();
 client.onMeters = (meters) => rollPanel.showMeters(meters);
 
 /** The cuts of every material, for the tracks' lists. */

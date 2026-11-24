@@ -4,7 +4,7 @@
 // gathers the measurements (off the page, side by side) and applies the results through the panel.
 
 import { DEFAULT_FX, type FxSettings } from "../instrument/types";
-import { fitBalance, type BalanceStyle } from "../fx/balance";
+import { fitBalance, nearestStyle, type BalanceChoice } from "../fx/balance";
 import type { AutoPoint } from "../song/player";
 import type { RollPanel } from "../ui/rollPanel";
 import { balanceGains, cleanEq, lowCutFor, madeByAuto, maskingDip } from "./autoMix";
@@ -56,7 +56,7 @@ export function installAutoMix(deps: AutoMixDeps): void {
    * 音域のバランス: the song rendered without the master (offline, as the WAV would be), its long-term spectrum
    * measured, and the master EQ set toward the style's target (design.md 35).
    */
-  async function balanceMaster(style: BalanceStyle): Promise<void> {
+  async function balanceMaster(style: BalanceChoice): Promise<void> {
     if (lock.busy) return;
     const project = rollPanel.snapshot();
     if (!project.tracks.some((t) => t.notes.length)) {
@@ -74,7 +74,10 @@ export function installAutoMix(deps: AutoMixDeps): void {
         rollPanel.balanceSays("曲に音がありませんでした(ミュートやソロも確かめてください)。");
         return;
       }
-      rollPanel.applyBalance(fitBalance(measured, style, rate, project.masterFx.eq), style);
+      // (参照曲: its own bands are the target; without one loaded, the standard style.)
+      const reference = style === "reference" ? rollPanel.reference : null;
+      const toward = style === "reference" ? (reference ? reference.bands : "standard") : style;
+      rollPanel.applyBalance(fitBalance(measured, toward, rate, project.masterFx.eq), reference ? "reference" : style === "reference" ? "standard" : style, nearestStyle(measured));
     } finally {
       lock.busy = false;
     }

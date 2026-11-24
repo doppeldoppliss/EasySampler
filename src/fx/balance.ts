@@ -10,6 +10,9 @@ import { eqResponseDb } from "./chain";
 
 export type BalanceStyle = "standard" | "electronic" | "acoustic";
 
+/** What the master EQ may be fitted toward: one of the styles, or the song opened as a reference (参照曲). */
+export type BalanceChoice = BalanceStyle | "reference";
+
 export const BALANCE_STYLES: Record<BalanceStyle, string> = {
   standard: "標準",
   electronic: "電子音・ボカロ系",
@@ -171,8 +174,9 @@ const GAIN_COST = 0.03;
  * The master EQ for `measured` (bandSpectrum of the mix before the master) toward `style`: low cut at 30 Hz (or
  * higher where it was), a low shelf, one bell and a high shelf, found by trying each part's settings in turn.
  */
-export function fitBalance(measured: readonly number[], style: BalanceStyle, sampleRate: number, current: FxSettings["eq"]): BalanceResult {
-  const target = targetDb(style);
+export function fitBalance(measured: readonly number[], style: BalanceStyle | readonly number[], sampleRate: number, current: FxSettings["eq"]): BalanceResult {
+  // (A reference song's own bands — bandSpectrum of it — are a target as they are: only the shape counts.)
+  const target = typeof style === "string" ? targetDb(style) : [...style];
   const before = deviation(measured, target);
   const want = before.map((d) => -STRENGTH * d);
   const weights = BAND_HZ.map(weightOf);
@@ -212,4 +216,28 @@ export function fitBalance(measured: readonly number[], style: BalanceStyle, sam
     target,
   );
   return { eq, before, after, target };
+}
+
+/**
+ * The style a mix is nearest to as it is (the weighted mean of its bands' distances from each target, the overall
+ * level taken out) — what a mastering assistant does when it picks a genre's curve for a song.
+ */
+export function nearestStyle(measured: readonly number[]): BalanceStyle {
+  const weights = BAND_HZ.map(weightOf);
+  let best: BalanceStyle = "standard";
+  let least = Infinity;
+  for (const style of Object.keys(TARGET_POINTS) as BalanceStyle[]) {
+    const d = deviation(measured, targetDb(style));
+    let sum = 0;
+    let n = 0;
+    d.forEach((x, j) => {
+      sum += weights[j] * Math.abs(x);
+      n += weights[j];
+    });
+    if (sum / n < least) {
+      least = sum / n;
+      best = style;
+    }
+  }
+  return best;
 }

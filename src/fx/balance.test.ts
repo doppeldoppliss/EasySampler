@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BAND_HZ, bandSpectrum, fitBalance, targetDb, type BalanceStyle } from "./balance";
+import { BAND_HZ, bandSpectrum, fitBalance, nearestStyle, targetDb, type BalanceStyle } from "./balance";
 import { DEFAULT_FX } from "../instrument/types";
 
 const SR = 48000;
@@ -69,5 +69,21 @@ describe("master EQ toward a tonal balance", () => {
     // Electronic wants more lows and more highs than standard has; acoustic less of both.
     expect(e.lowDb).toBeGreaterThan(a.lowDb);
     expect(e.highDb).toBeGreaterThan(a.highDb);
+  });
+
+  it("fits toward a reference song's own bands, and says which style a mix is nearest to", () => {
+    const flat = { on: false, lowCutHz: 0, lowDb: 0, lowHz: 150, midDb: 0, midHz: 1000, midQ: 1, highDb: 0, highHz: 6000, highCutHz: 20000 };
+    // A reference brighter than the song by 6 dB from 4 kHz up (whatever its level): the fit lifts the highs.
+    const song = targetDb("standard");
+    const reference = song.map((x, j) => x + 20 + (BAND_HZ[j] >= 4000 ? 6 : 0));
+    const fit = fitBalance(song, reference, 48000, flat);
+    expect(fit.eq.highDb).toBeGreaterThan(1.5);
+    expect(Math.abs(fit.eq.lowDb)).toBeLessThan(1.1);
+    // A song that already has the reference's shape is left alone.
+    const same = fitBalance(reference, reference, 48000, flat);
+    expect(Math.abs(same.eq.lowDb)).toBeLessThanOrEqual(0.5);
+    expect(same.eq.midDb).toBe(0);
+    expect(same.eq.highDb).toBe(0);
+    for (const style of ["standard", "electronic", "acoustic"] as BalanceStyle[]) expect(nearestStyle(targetDb(style).map((x) => x - 30))).toBe(style);
   });
 });

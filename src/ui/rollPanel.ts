@@ -63,7 +63,7 @@ import { kickDuck, madeByAuto, medianLength, octaveFit, roomFor } from "../daw/a
 import { KICK_KEYS } from "../song/player";
 import { PianoRoll } from "./pianoRoll";
 import { isSynthPreset, SYNTH_PRESETS } from "../song/backing";
-import { BALANCE_STYLES, BAND_HZ, type BalanceResult, type BalanceStyle } from "../fx/balance";
+import { BALANCE_STYLES, BAND_HZ, type BalanceChoice, type BalanceResult, type BalanceStyle } from "../fx/balance";
 
 /** Where the song is kept until the page says which project is open (useStore). */
 const DEFAULT_STORE_KEY = "project";
@@ -99,6 +99,7 @@ const HARMONY_VOICES: [number, string][] = [
 
 /** Where 書き出す音量 is kept (this browser). */
 const LOUDNESS_KEY = "easysampler.exportLoudness";
+const REFERENCE_KEY = "easysampler.balanceReference";
 /** 場面の強弱を付ける: how far the thinnest scenes come down (dB). */
 const DYNAMICS_DB = 3;
 /** A fader's dB in words (−∞ at the bottom). */
@@ -212,7 +213,9 @@ export class RollPanel {
   /** 書き出し: the whole song as a WAV, each track as its own WAV (zip), or the notes as MIDI. */
   onExport: (kind: "wav" | "stems" | "mid") => void = () => {};
   /** マスター EQ を目安に寄せる: the page renders and measures the song, then calls applyBalance. */
-  onBalance: (style: BalanceStyle) => void = () => {};
+  onBalance: (style: BalanceChoice) => void = () => {};
+  /** 参照曲を開く: the page decodes the file and measures its bands, then calls setReference. */
+  onOpenReference: (file: File) => void = () => {};
   /** 音量を合わせる / トラックの EQ (自動): the page renders and measures, then calls applyGains / applyTrackFx. */
   onAutoLevels: () => void = () => {};
   onAutoEq: () => void = () => {};
@@ -440,6 +443,9 @@ export class RollPanel {
     (Object.entries(BALANCE_STYLES) as [BalanceStyle, string][]).map(([id, label]) => el("option", { value: id, textContent: label })),
   );
   private readonly balanceStatus = el("p", { className: "fine", role: "status" });
+  /** 参照曲: a finished song's bands as the master EQ's target (kept in this browser), and the file input that opens one. */
+  reference: { name: string; bands: number[] } | null = null;
+  private readonly referenceInput = el("input", { type: "file", accept: "audio/*,video/*", className: "visually-hidden" });
   /** Shown when the master EQ cannot make up for missing lows: a synth bass under the bass line. */
   // (Two ways out, by whether a synth bass is there yet: one is layered, or the bass is made stronger and refitted.)
   private readonly bassFillText = el("span", { className: "warn fine" });
@@ -506,7 +512,7 @@ export class RollPanel {
   /** ミックスを診断する: its table (empty until run). */
   private readonly diagnosis = el("div", { className: "diagnosis" });
   private readonly balanceCanvas = el("canvas", { className: "balance-chart", ariaLabel: "目安との差(変える前と後)" });
-  private balanceShown: { result: BalanceResult; style: BalanceStyle } | null = null;
+  private balanceShown: { result: BalanceResult; style: BalanceChoice } | null = null;
   // The spectrum of what plays (the ミックス view), drawn while that view is on screen.
   private readonly spectrumCanvas = el("canvas", { className: "spectrum", ariaLabel: "周波数の分布" });
   private spectrumFrame = 0;
@@ -700,7 +706,9 @@ export class RollPanel {
             button("残響を付ける", "small", () => this.autoRooms(), "メロディは少し(6%)、和音・伴奏・ハモリはやや多め(11〜14%)に、テンポに合った長さのリバーブを入れます。ベース・ドラム・原曲と、16 分音符以下の短い音が中心の速いパートにはなし(リバーブを自分で入れたトラックはそのまま)"),
             button("音量を合わせる", "small", () => this.onAutoLevels(), "トラックを 1 本ずつ書き出して聞こえの大きさ(LUFS)を測り、役割ごとの目安(原曲・伴奏かメロディを基準に、ベース ±0(上の「ベースの強さ」を足す)・ドラム −1・和音 −5・伴奏 −6・ハモリ −8 dB。同じ役割が複数なら分け合う)に音量を合わせます"),
             button("広がりを寄せる", "small", () => this.onAutoWidth(), "曲を書き出して中高域(400 Hz より上)の左右の広がりを測り、狭ければマスターの「ステレオ幅」で目安(横の成分 −6.5 dB)へ寄せます(最大 150%、400 Hz から上だけ。低音は真ん中のまま)。もともとある広がりを持ち上げるだけなので、ほぼモノラルの曲には効きません(パンを広げてください)。元に戻すで戻せます"),
-            button("マスター EQ を目安に寄せる", "small", () => this.onBalance(this.balanceSelect.value as BalanceStyle), "曲をマスターなしで書き出して周波数の分布を測り、上の「音域の目安」の形へ半分ほど近づくよう、マスターの EQ(ローカット・低音・中音・高音)を設定します。元に戻すで戻せます"),
+            button("参照曲を開く", "small", () => this.referenceInput.click(), "手本にしたい仕上がった曲(WAV・MP3 など)を開くと、その曲の音域の形を「音域の目安」に選べるようになります(この端末の中で測るだけで、どこにも送りません。形だけを覚え、音は保存しません)。編成が大きく違う曲だと、こちらにない帯域を持ち上げようとするので、近い曲を選んでください"),
+            this.referenceInput,
+            button("マスター EQ を目安に寄せる", "small", () => this.onBalance(this.balanceSelect.value as BalanceChoice), "曲をマスターなしで書き出して周波数の分布を測り、上の「音域の目安」の形へ半分ほど近づくよう、マスターの EQ(ローカット・低音・中音・高音)を設定します。元に戻すで戻せます"),
           ]),
           el("p", { className: "fine", textContent: "マスター EQ: 仕上がった曲の平均は、低音から高音へなだらかに下がる形になります。その目安との差を測って半分ほど寄せます(各 ±6 dB まで)。直せるのは全体の傾きだけで、トラック同士のぶつかりは各トラックの EQ で。最後は耳で調整してください。" }),
         ]),
@@ -752,6 +760,17 @@ export class RollPanel {
     for (const mark of this.clipMarks) {
       mark.hidden = true;
       mark.addEventListener("click", () => this.clipMarks.forEach((m) => (m.hidden = true)));
+    }
+    this.referenceInput.addEventListener("change", () => {
+      const file = this.referenceInput.files?.[0];
+      this.referenceInput.value = "";
+      if (file) this.onOpenReference(file);
+    });
+    try {
+      const ref = JSON.parse(localStorage.getItem(REFERENCE_KEY) ?? "null") as { name?: unknown; bands?: unknown } | null;
+      if (ref && typeof ref.name === "string" && Array.isArray(ref.bands) && ref.bands.length === BAND_HZ.length && ref.bands.every((x) => typeof x === "number" && Number.isFinite(x))) this.setReference({ name: ref.name, bands: ref.bands as number[] }, false);
+    } catch {
+      // (Not kept, or not readable: no reference.)
     }
     try {
       const kept = localStorage.getItem(LOUDNESS_KEY);
@@ -1947,7 +1966,7 @@ export class RollPanel {
   }
 
   /** The fitted master EQ applied (one step to undo), what it did said, and the chart drawn. */
-  applyBalance(result: BalanceResult, style: BalanceStyle): void {
+  applyBalance(result: BalanceResult, style: BalanceChoice, nearest?: BalanceStyle): void {
     this.updateMasterFx((fx) => {
       fx.eq = result.eq;
     });
@@ -1955,7 +1974,10 @@ export class RollPanel {
     const e = result.eq;
     const signed = (db: number) => (db === 0 ? "±0" : `${db > 0 ? "+" : "−"}${Math.abs(db).toFixed(1)}`);
     const hz = (v: number) => (v >= 1000 ? `${+(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz`);
-    this.balanceStatus.textContent = `「${BALANCE_STYLES[style]}」に寄せて、マスター EQ を ローカット ${hz(e.lowCutHz)}・低音(${hz(e.lowHz)} 以下)${signed(e.lowDb)} dB・中音(${hz(e.midHz)})${signed(e.midDb)} dB・高音(${hz(e.highHz)} 以上)${signed(e.highDb)} dB にしました。「元に戻す」で戻せます。`;
+    const toward = style === "reference" ? `参照曲「${this.reference?.name ?? ""}」` : `「${BALANCE_STYLES[style]}」`;
+    // (Which style the song is nearest to as it is: said when another was chosen.)
+    const hint = nearest && style !== "reference" && nearest !== style ? `この曲にいま一番近い目安は「${BALANCE_STYLES[nearest]}」です。` : "";
+    this.balanceStatus.textContent = `${toward}に寄せて、マスター EQ を ローカット ${hz(e.lowCutHz)}・低音(${hz(e.lowHz)} 以下)${signed(e.lowDb)} dB・中音(${hz(e.midHz)})${signed(e.midDb)} dB・高音(${hz(e.highHz)} 以上)${signed(e.highDb)} dB にしました。${hint}「元に戻す」で戻せます。`;
     this.balanceShown = { result, style };
     this.drawBalance();
     // The lows still well short after the EQ (50–100 Hz, 6 dB and more under the target): the EQ cannot do it.
@@ -2010,8 +2032,24 @@ export class RollPanel {
   }
 
   /** The style chosen for the master EQ (まとめて自動ミックス uses it too). */
-  balanceStyle(): BalanceStyle {
-    return this.balanceSelect.value as BalanceStyle;
+  balanceStyle(): BalanceChoice {
+    return this.balanceSelect.value as BalanceChoice;
+  }
+
+  /** 参照曲 set (its name and bands; null takes it away): an entry in 音域の目安, chosen at once, kept in this browser. */
+  setReference(reference: { name: string; bands: number[] } | null, choose = true): void {
+    this.reference = reference;
+    [...this.balanceSelect.options].find((o) => o.value === "reference")?.remove();
+    if (reference) {
+      this.balanceSelect.append(el("option", { value: "reference", textContent: `参照曲: ${reference.name.slice(0, 24)}` }));
+      if (choose) this.balanceSelect.value = "reference";
+    }
+    try {
+      if (reference) localStorage.setItem(REFERENCE_KEY, JSON.stringify(reference));
+      else localStorage.removeItem(REFERENCE_KEY);
+    } catch {
+      // (No storage: it lasts until the page is closed.)
+    }
   }
 
   /**

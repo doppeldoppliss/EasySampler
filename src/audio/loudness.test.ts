@@ -70,6 +70,19 @@ describe("loudness (BS.1770)", () => {
     expect(Math.abs(x[SR + SR / 2 + 27])).toBeCloseTo(Math.abs(0.5 * Math.sin((2 * Math.PI * 440 * (SR + SR / 2 + 27)) / SR)), 2);
   });
 
+  it("reaches the target when the limiter has to work: what it takes off is made up", () => {
+    let seed = 3;
+    const noise = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31) * 2 - 1;
+    // Noise with a burst five times as loud for 20 ms every half second: the plain gain to −11 LUFS puts the bursts well over.
+    const make = () => Float32Array.from({ length: SR * 6 }, (_, i) => (i % (SR / 2) < SR / 50 ? 0.25 : 0.05) * noise());
+    const l = make();
+    const r = make();
+    const out = matchLoudness(l, r, SR, -11, -1);
+    expect(out.gainDb).toBeGreaterThan(-11 - out.beforeLufs + 0.2);
+    expect(Math.abs(out.afterLufs + 11)).toBeLessThan(0.15);
+    expect(out.truePeakDb).toBeLessThanOrEqual(-0.95);
+  });
+
   it("meters live: the short-term loudness of a steady sine", () => {
     const meter = new ShortTermMeter(SR);
     const x = sine(997, 0.1, 4);

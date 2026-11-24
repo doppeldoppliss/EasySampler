@@ -513,6 +513,7 @@ export class RollPanel {
     el("option", { value: "none", textContent: "音量: そのまま(音割れだけ防ぐ)" }),
     el("option", { value: "niconico", textContent: "音量: ニコニコ動画向け(-15 LUFS)" }),
     el("option", { value: "youtube", textContent: "音量: YouTube・配信向け(-14 LUFS)" }),
+    el("option", { value: "loud", textContent: "音量: 大きめ(-11 LUFS。X・Discord など音量を揃えない場所向け)" }),
   ]);
   private seeking = false;
   private seekTimer = 0;
@@ -713,7 +714,7 @@ export class RollPanel {
         button("トラック別の WAV(zip)", "small", () => this.onExport("stems"), "トラックごとに 1 本ずつ(各トラックのエフェクト込み、マスターなし)"),
         button("MIDI(.mid)", "small", () => this.onExport("mid"), "音符だけを MIDI ファイルに(別の DAW へ持っていく用)"),
         el("label", { className: "inline fine", title: "ループ範囲だけを、つなぎ目なくループできる長さで書き出します(WAV・トラック別)" }, [this.loopOnlyBox, " ループ範囲だけ"]),
-        el("label", { className: "inline", title: "曲の WAV を、投稿先がそろえる聞こえの大きさ(LUFS)に合わせて書き出します。上限はトゥルーピーク -1 dB(リミッター)。トラック別の WAV はそのままです" }, [this.loudnessSelect]),
+        el("label", { className: "inline", title: "曲の WAV を、投稿先がそろえる聞こえの大きさ(LUFS)に合わせて書き出します。上限はトゥルーピーク -1 dB(リミッター)。「大きめ」は音量を揃えない場所で市販の曲に近い大きさに聞こえるよう、リミッターで数 dB 抑えて持ち上げます(YouTube やニコニコでは下げられるだけなので、そちら向けを選んでください)。トラック別の WAV はそのままです" }, [this.loudnessSelect]),
       ]),
       this.exportStatus,
     ]);
@@ -3134,7 +3135,7 @@ export class RollPanel {
   /** The song WAV's loudness target (LUFS), or null to leave it as it is. */
   get exportLoudness(): { targetLufs: number; label: string } | null {
     const v = this.loudnessSelect.value;
-    return v === "niconico" ? { targetLufs: -15, label: "ニコニコ動画向け" } : v === "youtube" ? { targetLufs: -14, label: "YouTube・配信向け" } : null;
+    return v === "niconico" ? { targetLufs: -15, label: "ニコニコ動画向け" } : v === "youtube" ? { targetLufs: -14, label: "YouTube・配信向け" } : v === "loud" ? { targetLufs: -11, label: "大きめ" } : null;
   }
 
   /**

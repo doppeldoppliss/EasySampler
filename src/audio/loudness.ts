@@ -221,16 +221,38 @@ export function matchLoudness(
 ): { beforeLufs: number; afterLufs: number; gainDb: number; truePeakDb: number } {
   const beforeLufs = integratedLoudness(left, right, sampleRate);
   if (!Number.isFinite(beforeLufs)) return { beforeLufs, afterLufs: beforeLufs, gainDb: 0, truePeakDb: -Infinity };
-  const gainDb = targetLufs - beforeLufs;
-  const g = 10 ** (gainDb / 20);
-  for (let i = 0; i < left.length; i++) {
-    left[i] *= g;
-    right[i] *= g;
-  }
+  let gainDb = targetLufs - beforeLufs;
   const ceiling = 10 ** (ceilingDb / 20);
-  for (let pass = 0; pass < 3 && truePeak(left, right) > ceiling * 1.0005; pass++) limit(left, right, sampleRate, ceiling * 0.999);
-  return { beforeLufs, afterLufs: integratedLoudness(left, right, sampleRate), gainDb, truePeakDb: 20 * Math.log10(Math.max(1e-9, truePeak(left, right))) };
+  // (Kept only when the limiter has work to do: what it takes off is then made up by going in louder.)
+  let dryL: Float32Array | null = null;
+  let dryR: Float32Array | null = null;
+  let afterLufs = beforeLufs;
+  for (let attempt = 0; ; attempt++) {
+    const g = 10 ** (gainDb / 20);
+    for (let i = 0; i < left.length; i++) {
+      left[i] = (dryL ? dryL[i] : left[i]) * g;
+      right[i] = (dryR ? dryR[i] : right[i]) * g;
+    }
+    const over = truePeak(left, right) > ceiling * 1.0005;
+    if (over && !dryL && attempt === 0) {
+      const back = 1 / g;
+      dryL = left.map((x) => x * back);
+      dryR = right.map((x) => x * back);
+    }
+    for (let pass = 0; pass < 3 && truePeak(left, right) > ceiling * 1.0005; pass++) limit(left, right, sampleRate, ceiling * 0.999);
+    afterLufs = over ? integratedLoudness(left, right, sampleRate) : targetLufs;
+    // Short of the target by what the limiter took: once more from the dry mix, that much louder (within 0.1 LU,
+    // four tries, and never more than MAX_PUSH_DB into the limiter over the plain gain — past that it only crushes).
+    const short = targetLufs - afterLufs;
+    const pushed = gainDb - (targetLufs - beforeLufs);
+    if (!dryL || short <= 0.1 || attempt >= 3 || pushed >= MAX_PUSH_DB) break;
+    gainDb += Math.min(short * 1.2, MAX_PUSH_DB - pushed);
+  }
+  return { beforeLufs, afterLufs, gainDb, truePeakDb: 20 * Math.log10(Math.max(1e-9, truePeak(left, right))) };
 }
+
+/** The most the loudness matching goes into the limiter over the plain gain to make up what the limiter takes off (dB). */
+const MAX_PUSH_DB = 4;
 
 /** The live loudness: momentary (400 ms) and short-term (3 s), from blocks pushed as they play. */
 export class ShortTermMeter {

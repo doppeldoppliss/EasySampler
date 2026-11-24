@@ -26,12 +26,14 @@ export const BAND_HZ: number[] = (() => {
 /**
  * The target shapes: each band's power (dB) against 1 kHz, as finished mixes average out — a peak around
  * 60–100 Hz, then down about 2.5 dB an octave (in third-octave bands; a little steeper than pink noise), faster
- * past 10 kHz. Electronic: more sub and more air; acoustic: less sub, a fuller middle, softer top.
+ * past 10 kHz. Electronic: more sub and more air; acoustic: less sub, a fuller middle, softer top. Under 63 Hz it
+ * falls away fast (finished songs measured 17–19 dB under the first targets at 31.5 Hz, which held the lows up
+ * down to 25 Hz).
  */
 const TARGET_POINTS: Record<BalanceStyle, [number, number][]> = {
-  standard: [[25, 1], [40, 6], [63, 8], [100, 7.5], [250, 4.5], [500, 2], [1000, 0], [2000, -2.5], [4000, -5], [8000, -8], [12500, -11], [16000, -15]],
-  electronic: [[25, 4], [40, 9], [63, 10.5], [100, 9.5], [250, 5], [500, 2], [1000, 0], [2000, -2], [4000, -4], [8000, -6.5], [12500, -9], [16000, -12.5]],
-  acoustic: [[25, -4], [40, 1], [63, 4], [100, 5.5], [250, 4.5], [500, 2.5], [1000, 0], [2000, -2.5], [4000, -5.5], [8000, -9], [12500, -13], [16000, -18]],
+  standard: [[25, -9], [40, 2], [63, 8], [100, 7.5], [250, 4.5], [500, 2], [1000, 0], [2000, -2.5], [4000, -5], [8000, -8], [12500, -11], [16000, -15]],
+  electronic: [[25, -6], [40, 5], [63, 10.5], [100, 9.5], [250, 5], [500, 2], [1000, 0], [2000, -2], [4000, -4], [8000, -6.5], [12500, -9], [16000, -12.5]],
+  acoustic: [[25, -13], [40, -2], [63, 4], [100, 5.5], [250, 4.5], [500, 2.5], [1000, 0], [2000, -2.5], [4000, -5.5], [8000, -9], [12500, -13], [16000, -18]],
 };
 
 /** A style's target for each band (BAND_HZ), interpolated along log frequency. */

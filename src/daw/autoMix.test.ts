@@ -215,14 +215,19 @@ describe("自動ミックス", () => {
 });
 
 describe("広がりを寄せる", () => {
-  it("raises the side of a narrow mix toward the target, no further than 150%, and leaves a wide or a mono one", () => {
+  it("raises the side of a narrow mix toward the target, no further than 180% nor past a correlation of about 0.75 as a whole, and leaves a wide or a mono one", () => {
     // −8.5 dB of side over 400 Hz (the automatic mixing's result on a real song): 2 dB short of −6.5.
     expect(widthFor(-8.5)).toBe(1.25);
     expect(widthFor(-8)).toBe(1.2);
-    expect(widthFor(-15)).toBe(1.5);
+    expect(widthFor(-15)).toBe(1.8);
     expect(widthFor(-6.5)).toBeNull();
     expect(widthFor(-4)).toBeNull();
     expect(widthFor(-40)).toBe(0);
+    // The real song with six melodies in the middle: −11.7 dB over 400 Hz, −14.5 over all — 180% reaches it.
+    expect(widthFor(-11.7, -14.5)).toBe(1.8);
+    // Already wide as a whole (−10 dB: correlation about 0.82): only up to −8.5 dB as a whole.
+    expect(widthFor(-11.7, -10)).toBe(1.2);
+    expect(widthFor(-11.7, -8)).toBeNull();
     expect(widthFor(-Infinity)).toBe(0);
   });
 });

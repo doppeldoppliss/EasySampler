@@ -18,17 +18,25 @@ type Snapshot = ReturnType<RollPanel["snapshot"]>;
 /**
  * 広がりを寄せる: the side against the mid over 400 Hz it aims for (dB), the most the side is raised (×), the side
  * under which a mix is taken for mono (nothing to raise), and from where up the master's ステレオ幅 works (the lows
- * keep to the middle, as finished songs have them).
+ * keep to the middle, as finished songs have them). And how wide the whole may end (the side against the mid over
+ * all of it, dB): −8.5 dB is a correlation of about 0.75, the low end of finished mixes (0.66–0.92 measured) — past it
+ * a song begins to thin on one speaker. (At 150% at most, a real song whose six melodies sit in the middle stopped
+ * 3 dB short; 180% reaches it.)
  */
 const WIDTH_SIDE_DB = -6.5;
-const WIDTH_MOST = 1.5;
+const WIDTH_MOST = 1.8;
 const WIDTH_MONO_DB = -20;
+const WIDTH_WHOLE_MOST_DB = -8.5;
 export const WIDTH_FROM_HZ = 400;
 
-/** The master's ステレオ幅 (the side's gain) for a mix with this much side over 400 Hz: null when it is wide enough, 0 when it is as good as mono. */
-export function widthFor(sideDb: number): number | null {
-  if (!(sideDb > WIDTH_MONO_DB)) return 0;
-  const gain = 10 ** ((WIDTH_SIDE_DB - sideDb) / 20);
+/**
+ * The master's ステレオ幅 (the side's gain) for a mix with this much side over 400 Hz (`sideUpDb`) and over all of it
+ * (`sideDb`; the raise is taken as all of it, the side under 400 Hz being little): null when it is wide enough, 0
+ * when it is as good as mono.
+ */
+export function widthFor(sideUpDb: number, sideDb = -Infinity): number | null {
+  if (!(sideUpDb > WIDTH_MONO_DB)) return 0;
+  const gain = Math.min(10 ** ((WIDTH_SIDE_DB - sideUpDb) / 20), 10 ** ((WIDTH_WHOLE_MOST_DB - sideDb) / 20));
   if (gain < 1.05) return null;
   return Math.round(Math.min(WIDTH_MOST, gain) * 20) / 20;
 }
@@ -113,7 +121,7 @@ export function installAutoMix(deps: AutoMixDeps): void {
       const masterFx = structuredClone(project.masterFx);
       masterFx.width = { ...masterFx.width, on: false };
       const song = await renderOff({ sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, null, null), masterFx, room: roomOf(project), tempoMap: tempoMapSec(project), raw: true }, "measure", (share) => (rollPanel.info.textContent = `広がりを測っています… ${Math.round(share * 100)}%`));
-      rollPanel.applyWidth(widthFor(song.sideUpDb), song.sideUpDb, WIDTH_SIDE_DB, WIDTH_FROM_HZ);
+      rollPanel.applyWidth(widthFor(song.sideUpDb, song.sideDb), song.sideUpDb, WIDTH_SIDE_DB, WIDTH_FROM_HZ);
     } finally {
       lock.busy = false;
     }
@@ -300,8 +308,9 @@ export function installAutoMix(deps: AutoMixDeps): void {
 
   /**
    * まとめて自動ミックス (design.md 37): the automatic steps in the order they build on — the clean-up EQ, the ducking,
-   * the rooms (what the volumes are then measured through), the volumes, and the master EQ last (on the mix as it
-   * now is). Each stays its own step to undo.
+   * the rooms (what the volumes are then measured through), the volumes, and the master EQ (on the mix as it now
+   * is), the width, and 密度を上げる last (its height is in dBFS: everything before it changes it). Each stays its
+   * own step to undo. 場面の強弱 is not in it: it changes what the song is, not how it is mixed.
    */
   async function autoMixAll(): Promise<void> {
     if (lock.busy) return;
@@ -321,6 +330,8 @@ export function installAutoMix(deps: AutoMixDeps): void {
     if (tidy) {
       rollPanel.tidyOwnEffects();
       note("エフェクトの整理");
+      // (A compressor on the master widens the gap between the peak and the loudness that 密度を上げる narrows.)
+      if (rollPanel.masterCompressorOff()) said.push("マスターのコンプ: 自分で入れていたマスターのコンプを外しました(ドラムの頭を通してほかを下げ、ピークと聞こえの大きさの差を広げるため。密度は最後の「密度を上げる」で詰めます)。");
     }
     await autoLevels();
     note("音量");
@@ -328,6 +339,8 @@ export function installAutoMix(deps: AutoMixDeps): void {
     said.push("マスター EQ: 下の「音域のバランス」に結果があります。");
     await autoWidth();
     note("広がり");
+    await densify();
+    note("密度");
     // Last, the diagnosis of what came out (it changes nothing).
     await diagnoseMix();
     said.push(`診断: ${rollPanel.info.textContent}`);
@@ -385,6 +398,8 @@ export function installAutoMix(deps: AutoMixDeps): void {
         const other = whole.balanceDb > 0 ? "右" : "左";
         points.push(`音が${to}に寄っています(中高域で${to}が ${Math.abs(whole.balanceDb).toFixed(1)} dB 大きい)。${to}に振ったトラックのうち大きいものを${other}へ移すと釣り合います。目安は 1 dB 以内。`);
       }
+      // A compressor on the master (the automatic mixing never puts one there).
+      if (project.masterFx.compressor.on) points.push(`マスターにコンプが入っています(レシオ ${project.masterFx.compressor.ratio}:1)。マスターのコンプはドラムの頭を通してほかを下げるので、ピークと聞こえの大きさの差を広げがちです(2 曲で測って 0.1〜1.0 dB 広がりました)。音を詰めたいなら、外して「密度を上げる」を使ってください(「自分で入れたエフェクトも整える」をオンにした「まとめて自動ミックス」は外します)。`);
       if (song.peakDb > 0) points.push(`曲全体が 0 dB を超えます(トゥルーピーク +${song.peakDb.toFixed(1)} dB)。再生と書き出しでは抑えますが、そのぶん潰れます。全体の音量(フェーダー)かマスターのコンプのメイクアップを下げると素直な音になります。`);
       const leads = [...lufsOf].filter(([i]) => roles[i] === "lead" || roles[i] === "audio").map(([, l]) => l);
       const lead = leads.length ? Math.max(...leads) : null;

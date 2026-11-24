@@ -685,7 +685,7 @@ export class RollPanel {
       el("div", { className: "automix-box" }, [
         el("div", { className: "row tight" }, [
           el("span", { className: "control-label", textContent: "自動ミックス" }),
-          button("まとめて自動ミックス", "small primary", () => this.onAutoMixAll(), "トラック名(名前のないものだけ)→ パン(真ん中のままのトラックだけ)→ トラックの EQ → キックに合わせて沈める → 残響 → 音量 → マスター EQ を、この順で続けて行い、最後に診断を出します。下の設定を使います。それぞれ「元に戻す」で 1 段ずつ戻せます"),
+          button("まとめて自動ミックス", "small primary", () => this.onAutoMixAll(), "トラック名(名前のないものだけ)→ パン(真ん中のままのトラックだけ)→ トラックの EQ → キックに合わせて沈める → 残響 → 音量 → マスター EQ → 広がり → 密度を上げる を、この順で続けて行い、最後に診断を出します(「自分で入れたエフェクトも整える」がオンなら、マスターのコンプも外します。場面の強弱は入りません)。下の設定を使います。それぞれ「元に戻す」で 1 段ずつ戻せます"),
           button("ミックスを診断する", "small", () => this.onDiagnose(), "トラックを 1 本ずつと曲全体を書き出して、聞こえの大きさ・ピーク・気になる点を一覧にします(設定は変えません)"),
           button("密度を上げる", "small", () => this.onDensify(), "市販の曲に比べて音が薄い・ピークばかり高いときに。曲を書き出して測り、飛び出したピーク(ドラムの頭など)だけを丸める高さを決めて、マスターの「ピークを丸める」に入れます(ピークと聞こえの大きさの差を 12 dB まで、最大でもいちばん高いピークの 5 dB 下から)。再生でも書き出しでも効きます。音量や EQ を大きく変えたら押し直してください。元に戻すで戻せます。「まとめて自動ミックス」には入っていません"),
           button("場面の強弱を付ける", "small", () => this.autoDynamics(), "曲全体の音量が一定に聞こえるときに。小節ごとに、鳴っているトラックの数・長さ・強さから厚みを測って場面に分け、薄い場面(鳴っているトラックが少ない所)を最大 3 dB 下げる「マスター音量の線」を引きます。厚い場面の頭には 1 拍前から戻ります。今あるマスター音量の線は置き換えます(元に戻すで戻せます)。「まとめて自動ミックス」には入っていません"),
@@ -705,7 +705,7 @@ export class RollPanel {
             button("キックに合わせて沈める", "small", () => this.autoDuck(), "ベース(−3 dB、16 分音符で戻る)と、1 拍以上伸ばす音が中心の和音・伴奏・ハモリ(−2 dB)に、ドラムトラックのキック(35・36 番)で沈むサイドチェーンを入れます(サイドチェーンを自分で入れたトラックはそのまま)"),
             button("残響を付ける", "small", () => this.autoRooms(), "メロディは少し(6%)、和音・伴奏・ハモリはやや多め(11〜14%)に、テンポに合った長さのリバーブを入れます。ベース・ドラム・原曲と、16 分音符以下の短い音が中心の速いパートにはなし(リバーブを自分で入れたトラックはそのまま)"),
             button("音量を合わせる", "small", () => this.onAutoLevels(), "トラックを 1 本ずつ書き出して聞こえの大きさ(LUFS)を測り、役割ごとの目安(原曲・伴奏かメロディを基準に、ベース ±0(上の「ベースの強さ」を足す)・ドラム −1・和音 −5・伴奏 −6・ハモリ −8 dB。同じ役割が複数なら分け合う)に音量を合わせます"),
-            button("広がりを寄せる", "small", () => this.onAutoWidth(), "曲を書き出して中高域(400 Hz より上)の左右の広がりを測り、狭ければマスターの「ステレオ幅」で目安(横の成分 −6.5 dB)へ寄せます(最大 150%、400 Hz から上だけ。低音は真ん中のまま)。もともとある広がりを持ち上げるだけなので、ほぼモノラルの曲には効きません(パンを広げてください)。元に戻すで戻せます"),
+            button("広がりを寄せる", "small", () => this.onAutoWidth(), "曲を書き出して中高域(400 Hz より上)の左右の広がりを測り、狭ければマスターの「ステレオ幅」で目安(横の成分 −6.5 dB)へ寄せます(最大 180%、400 Hz から上だけ。低音は真ん中のまま。曲全体の左右の相関が 0.75 を下回るほどには広げません)。もともとある広がりを持ち上げるだけなので、ほぼモノラルの曲には効きません(パンを広げてください)。元に戻すで戻せます"),
             button("参照曲を開く", "small", () => this.referenceInput.click(), "手本にしたい仕上がった曲(WAV・MP3 など)を開くと、その曲の音域の形を「音域の目安」に選べるようになります(この端末の中で測るだけで、どこにも送りません。形だけを覚え、音は保存しません)。編成が大きく違う曲だと、こちらにない帯域を持ち上げようとするので、近い曲を選んでください"),
             this.referenceInput,
             button("マスター EQ を目安に寄せる", "small", () => this.onBalance(this.balanceSelect.value as BalanceChoice), "曲をマスターなしで書き出して周波数の分布を測り、上の「音域の目安」の形へ半分ほど近づくよう、マスターの EQ(ローカット・低音・中音・高音)を設定します。元に戻すで戻せます"),
@@ -1924,6 +1924,16 @@ export class RollPanel {
   /** A line under the 音域のバランス button (progress, or why nothing was done). */
   balanceSays(text: string): void {
     this.balanceStatus.textContent = text;
+  }
+
+  /** The master's compressor switched off (one step to undo); false when it was off already. */
+  masterCompressorOff(): boolean {
+    if (!this.project.masterFx.compressor.on) return false;
+    this.updateMasterFx((fx) => {
+      fx.compressor = { ...fx.compressor, on: false };
+    });
+    this.onTrackChange();
+    return true;
   }
 
   /** 広がりを寄せる: the master's ステレオ幅 set (one step to undo; null: wide enough, taken off if it was on; 0: as good as mono). */

@@ -314,21 +314,46 @@ export class ShortTermMeter {
 /**
  * How wide a stereo mix is: the correlation of left and right (1 = the same on both, mono; 0 = unrelated; below 0 =
  * out of phase) and the side (L−R) against the mid (L+R) in dB — a finished mix sits around 0.7–0.9 and −12 to −8 dB.
+ * And which side it leans to: the left's power against the right's (dB, + = left) over about 400 Hz and up — the
+ * lows sit in the middle and would hide a lean in what the ear places (a mix measured −1.6 dB as a whole was −5 dB
+ * between 500 Hz and 4 kHz); a finished mix is within 1 dB.
  */
-export function stereoImage(left: Float32Array, right: Float32Array): { correlation: number; sideDb: number } {
+export function stereoImage(left: Float32Array, right: Float32Array, sampleRate = 48000): { correlation: number; sideDb: number; balanceDb: number } {
   let lr = 0;
   let ll = 0;
   let rr = 0;
   let mid = 0;
   let side = 0;
+  // (Two one-pole high passes at 400 Hz on each side, for the lean: 12 dB an octave, a bass at 60 Hz 33 dB down.)
+  const a = 1 / (1 + (2 * Math.PI * 400) / sampleRate);
+  let hl = 0;
+  let hr = 0;
+  let pl = 0;
+  let pr = 0;
+  let gl = 0;
+  let gr = 0;
+  let ql = 0;
+  let qr = 0;
+  let upL = 0;
+  let upR = 0;
   for (let i = 0; i < left.length; i++) {
     const l = left[i];
     const r = right[i];
+    hl = a * (hl + l - pl);
+    hr = a * (hr + r - pr);
+    pl = l;
+    pr = r;
+    gl = a * (gl + hl - ql);
+    gr = a * (gr + hr - qr);
+    ql = hl;
+    qr = hr;
+    upL += gl * gl;
+    upR += gr * gr;
     lr += l * r;
     ll += l * l;
     rr += r * r;
     mid += (l + r) * (l + r);
     side += (l - r) * (l - r);
   }
-  return { correlation: ll > 0 && rr > 0 ? lr / Math.sqrt(ll * rr) : 1, sideDb: mid > 0 ? 10 * Math.log10(Math.max(side, 1e-20) / mid) : -Infinity };
+  return { correlation: ll > 0 && rr > 0 ? lr / Math.sqrt(ll * rr) : 1, sideDb: mid > 0 ? 10 * Math.log10(Math.max(side, 1e-20) / mid) : -Infinity, balanceDb: upL > 0 && upR > 0 ? 10 * Math.log10(upL / upR) : 0 };
 }

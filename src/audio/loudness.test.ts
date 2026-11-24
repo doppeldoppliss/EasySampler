@@ -101,4 +101,17 @@ describe("loudness (BS.1770)", () => {
     expect(stereoImage(a, b).sideDb).toBeCloseTo(0, 0);
     expect(stereoImage(a, a.map((x) => -x)).correlation).toBeCloseTo(-1, 5);
   });
+
+  it("says which side a mix leans to, by what the ear places: the lows in the middle do not hide it", () => {
+    // A bass in the middle, far louder than a voice-range tone that is 6 dB stronger on the right.
+    const bass = sine(60, 0.5, 2);
+    const mid = sine(1500, 0.1, 2);
+    const l = bass.map((x, i) => x + mid[i] * 0.5);
+    const r = bass.map((x, i) => x + mid[i]);
+    const image = stereoImage(l, r, SR);
+    expect(image.balanceDb).toBeLessThan(-4);
+    expect(image.balanceDb).toBeGreaterThan(-6.5);
+    expect(stereoImage(r, l, SR).balanceDb).toBeCloseTo(-image.balanceDb, 5);
+    expect(Math.abs(stereoImage(l, l, SR).balanceDb)).toBeLessThan(1e-6);
+  });
 });

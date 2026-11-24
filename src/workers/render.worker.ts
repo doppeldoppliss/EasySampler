@@ -22,6 +22,8 @@ export interface RenderMeasure {
   /** How wide it is (stereoImage). */
   correlation: number;
   sideDb: number;
+  /** The left against the right over 400 Hz (dB, + = left). */
+  balanceDb: number;
   /** Asked for with the job's `rounding`: where a soft clip would start to bring the peak that near the loudness (null: none needed). */
   rounding?: Rounding | null;
 }
@@ -57,7 +59,7 @@ self.onmessage = async (event: MessageEvent<RenderJob>) => {
     const [l, r] = song.channels;
     let peak = 0;
     for (const c of song.channels) for (let i = 0; i < c.length; i++) peak = Math.max(peak, Math.abs(c[i]));
-    post({ id, measure: { lufs: integratedLoudness(l, r, song.sampleRate), peakDb: dB(peak), truePeakDb: dB(truePeak(l, r)), bands: bandSpectrum(song.channels, song.sampleRate), ...stereoImage(l, r), ...(rounding ? { rounding: roundingFor(l, r, song.sampleRate, rounding.targetPlr, rounding.maxUnderPeakDb) } : {}) } });
+    post({ id, measure: { lufs: integratedLoudness(l, r, song.sampleRate), peakDb: dB(peak), truePeakDb: dB(truePeak(l, r)), bands: bandSpectrum(song.channels, song.sampleRate), ...stereoImage(l, r, song.sampleRate), ...(rounding ? { rounding: roundingFor(l, r, song.sampleRate, rounding.targetPlr, rounding.maxUnderPeakDb) } : {}) } });
   } catch (error) {
     post({ id, error: error instanceof Error ? error.message : String(error) });
   }

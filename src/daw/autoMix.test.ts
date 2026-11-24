@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { widthFor } from "./autoMixRun";
 import { balanceGains, cleanEq, kickDuck, madeByAuto, together, lowCutFor, maskingDip, octaveFit, roomFor } from "./autoMix";
 import { BAND_HZ } from "../fx/balance";
 import { DEFAULT_FX } from "../instrument/types";
@@ -210,5 +211,18 @@ describe("自動ミックス", () => {
     );
     // −5 under the lead, +3: −16 from −20.
     expect(20 * Math.log10(gains[1]!)).toBeCloseTo(4, 5);
+  });
+});
+
+describe("広がりを寄せる", () => {
+  it("raises the side of a narrow mix toward the target, no further than 150%, and leaves a wide or a mono one", () => {
+    // −12.5 dB of side (the automatic mixing's result on a real song): 3 dB short of −9.5.
+    expect(widthFor(-12.5)).toBe(1.4);
+    expect(widthFor(-11)).toBe(1.2);
+    expect(widthFor(-18)).toBe(1.5);
+    expect(widthFor(-9.5)).toBeNull();
+    expect(widthFor(-6)).toBeNull();
+    expect(widthFor(-40)).toBe(0);
+    expect(widthFor(-Infinity)).toBe(0);
   });
 });

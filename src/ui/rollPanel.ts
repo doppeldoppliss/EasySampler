@@ -219,6 +219,8 @@ export class RollPanel {
   /** まとめて自動ミックス / ミックスを診断する: the page runs them (they render). */
   onAutoMixAll: () => void = () => {};
   onDiagnose: () => void = () => {};
+  /** 広がりを寄せる: the page renders and measures the song, then calls applyWidth. */
+  onAutoWidth: () => void = () => {};
   /** 密度を上げる: the page renders and measures the song, then calls applyDensity. */
   onDensify: () => void = () => {};
   readonly exportStatus = el("p", { className: "fine", role: "status" });
@@ -697,6 +699,7 @@ export class RollPanel {
             button("キックに合わせて沈める", "small", () => this.autoDuck(), "ベース(−3 dB、16 分音符で戻る)と、1 拍以上伸ばす音が中心の和音・伴奏・ハモリ(−2 dB)に、ドラムトラックのキック(35・36 番)で沈むサイドチェーンを入れます(サイドチェーンを自分で入れたトラックはそのまま)"),
             button("残響を付ける", "small", () => this.autoRooms(), "メロディは少し(6%)、和音・伴奏・ハモリはやや多め(11〜14%)に、テンポに合った長さのリバーブを入れます。ベース・ドラム・原曲と、16 分音符以下の短い音が中心の速いパートにはなし(リバーブを自分で入れたトラックはそのまま)"),
             button("音量を合わせる", "small", () => this.onAutoLevels(), "トラックを 1 本ずつ書き出して聞こえの大きさ(LUFS)を測り、役割ごとの目安(原曲・伴奏かメロディを基準に、ベース ±0(上の「ベースの強さ」を足す)・ドラム −1・和音 −5・伴奏 −6・ハモリ −8 dB。同じ役割が複数なら分け合う)に音量を合わせます"),
+            button("広がりを寄せる", "small", () => this.onAutoWidth(), "曲を書き出して左右の広がり(横の成分)を測り、狭ければマスターの「ステレオ幅」で目安(横の成分 −9.5 dB)へ寄せます(最大 150%)。もともとある広がりを持ち上げるだけなので、ほぼモノラルの曲には効きません(パンを広げてください)。元に戻すで戻せます"),
             button("マスター EQ を目安に寄せる", "small", () => this.onBalance(this.balanceSelect.value as BalanceStyle), "曲をマスターなしで書き出して周波数の分布を測り、上の「音域の目安」の形へ半分ほど近づくよう、マスターの EQ(ローカット・低音・中音・高音)を設定します。元に戻すで戻せます"),
           ]),
           el("p", { className: "fine", textContent: "マスター EQ: 仕上がった曲の平均は、低音から高音へなだらかに下がる形になります。その目安との差を測って半分ほど寄せます(各 ±6 dB まで)。直せるのは全体の傾きだけで、トラック同士のぶつかりは各トラックの EQ で。最後は耳で調整してください。" }),
@@ -1904,6 +1907,29 @@ export class RollPanel {
     this.balanceStatus.textContent = text;
   }
 
+  /** 広がりを寄せる: the master's ステレオ幅 set (one step to undo; null: wide enough, taken off if it was on; 0: as good as mono). */
+  applyWidth(side: number | null, sideDb: number, target: number): void {
+    const f = (db: number) => (Number.isFinite(db) ? `${db.toFixed(1).replace("-", "−")} dB` : "なし");
+    const on = this.project.masterFx.width.on;
+    if (side === 0) {
+      this.info.textContent = `曲がほぼモノラルです(横の成分 ${f(sideDb)})。ステレオ幅では広がらないので、「パンを広げる」で和音・伴奏を左右に振ってください。`;
+      return;
+    }
+    if (side === null) {
+      if (on)
+        this.updateMasterFx((fx) => {
+          fx.width = { ...fx.width, on: false };
+        });
+      this.info.textContent = `広がりは十分です(横の成分 ${f(sideDb)}、目安 ${f(target)})。${on ? "マスターのステレオ幅を外しました。" : "何も変えていません。"}`;
+      return;
+    }
+    this.updateMasterFx((fx) => {
+      fx.width = { on: true, side, midDb: 0 };
+    });
+    this.onTrackChange();
+    this.info.textContent = `マスターの「ステレオ幅」を ${Math.round(side * 100)}% にしました(横の成分 ${f(sideDb)} → 約 ${f(sideDb + 20 * Math.log10(side))}、目安 ${f(target)})。「元に戻す」(Ctrl + Z)で戻せます。`;
+  }
+
   /** 密度を上げる: the measured rounding set on the master (one step to undo), or why nothing was set. */
   applyDensity(rounding: Rounding | null, plr: number | null, target: number): void {
     if (!rounding) {
@@ -2076,7 +2102,7 @@ export class RollPanel {
   }
 
   /** ミックスを診断する: the table of what was measured, and what stands out. */
-  showDiagnosis(rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[], song: { lufs: number; peakDb: number; correlation?: number; sideDb?: number } | null, points: string[]): void {
+  showDiagnosis(rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[], song: { lufs: number; peakDb: number; correlation?: number; sideDb?: number; balanceDb?: number } | null, points: string[]): void {
     const f = (x: number | null, unit: string) => (x === null || !Number.isFinite(x) ? "—" : `${x.toFixed(1)} ${unit}`);
     const table = el("table", { className: "diagnosis-table fine" }, [
       el("tr", {}, ["トラック", "役割", "大きさ", "ピーク", "気になる点"].map((h) => el("th", { textContent: h }))),
@@ -2084,7 +2110,7 @@ export class RollPanel {
     ]);
     this.diagnosis.replaceChildren(
       el("details", { open: true }, [
-        el("summary", { textContent: `診断の結果${song ? `(曲全体 ${f(song.lufs, "LUFS")}・ピーク ${f(song.peakDb, "dBTP")}${song.correlation !== undefined ? `・左右の相関 ${song.correlation.toFixed(2)}・横の成分 ${f(song.sideDb ?? null, "dB")}` : ""})` : ""}` }),
+        el("summary", { textContent: `診断の結果${song ? `(曲全体 ${f(song.lufs, "LUFS")}・ピーク ${f(song.peakDb, "dBTP")}${song.correlation !== undefined ? `・左右の相関 ${song.correlation.toFixed(2)}・横の成分 ${f(song.sideDb ?? null, "dB")}${song.balanceDb !== undefined ? `・左右の差 ${Math.abs(song.balanceDb) < 0.05 ? "なし" : `${song.balanceDb > 0 ? "左" : "右"}に ${Math.abs(song.balanceDb).toFixed(1)} dB`}` : ""}` : ""})` : ""}` }),
         ...(points.length ? [el("ul", { className: "fine" }, points.map((p) => el("li", { textContent: p })))] : [el("p", { className: "fine", textContent: "目立った問題は見つかりませんでした。" })]),
         el("div", { className: "diagnosis-scroll" }, [table]),
       ]),

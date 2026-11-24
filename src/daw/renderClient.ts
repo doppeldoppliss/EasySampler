@@ -76,7 +76,7 @@ function measure(song: RenderedSong, rounding?: RoundingAsk): RenderMeasure {
   const [l, r] = song.channels;
   let peak = 0;
   for (const c of song.channels) for (let i = 0; i < c.length; i++) peak = Math.max(peak, Math.abs(c[i]));
-  return { lufs: integratedLoudness(l, r, song.sampleRate), peakDb: dB(peak), truePeakDb: dB(truePeak(l, r)), bands: bandSpectrum(song.channels, song.sampleRate), ...stereoImage(l, r), ...(rounding ? { rounding: roundingFor(l, r, song.sampleRate, rounding.targetPlr, rounding.maxUnderPeakDb) } : {}) };
+  return { lufs: integratedLoudness(l, r, song.sampleRate), peakDb: dB(peak), truePeakDb: dB(truePeak(l, r)), bands: bandSpectrum(song.channels, song.sampleRate), ...stereoImage(l, r, song.sampleRate), ...(rounding ? { rounding: roundingFor(l, r, song.sampleRate, rounding.targetPlr, rounding.maxUnderPeakDb) } : {}) };
 }
 
 /** Renders a song off the page: its samples. */

@@ -15,6 +15,19 @@ import type { RenderTrack } from "./songRender";
 
 type Snapshot = ReturnType<RollPanel["snapshot"]>;
 
+/** 広がりを寄せる: the side against the mid it aims for (dB), the most the side is raised (×), and the side under which a mix is taken for mono (nothing to raise). */
+const WIDTH_SIDE_DB = -9.5;
+const WIDTH_MOST = 1.5;
+const WIDTH_MONO_DB = -22;
+
+/** The master's ステレオ幅 (the side's gain) for a mix with this much side: null when it is wide enough, 0 when it is as good as mono. */
+export function widthFor(sideDb: number): number | null {
+  if (!(sideDb > WIDTH_MONO_DB)) return 0;
+  const gain = 10 ** ((WIDTH_SIDE_DB - sideDb) / 20);
+  if (gain < 1.05) return null;
+  return Math.round(Math.min(WIDTH_MOST, gain) * 20) / 20;
+}
+
 /** 密度を上げる: the peak over the loudness it aims for (dB), and how far under the highest peak the rounding may start at most. */
 const DENSITY_PLR = 12;
 const DENSITY_MAX_DB = 5;
@@ -69,6 +82,35 @@ export function installAutoMix(deps: AutoMixDeps): void {
       await balanceMaster(rollPanel.balanceStyle());
       rollPanel.refitDone();
     })();
+
+  /**
+   * 広がりを寄せる (design.md 46): the song through the master without its ステレオ幅, how much side it has
+   * measured, and the master's ステレオ幅 set to bring it toward WIDTH_SIDE_DB — no more than WIDTH_MOST, and only
+   * for a mix that has some width to bring up (panning is what makes it; this only raises what is there).
+   */
+  async function autoWidth(): Promise<void> {
+    if (lock.busy) return;
+    const project = rollPanel.snapshot();
+    if (!heardTracks(project).length) {
+      rollPanel.info.textContent = "測れるトラック(音符があり、ミュートしていないもの)がありません。";
+      return;
+    }
+    // (A width set by hand — its middle moved too — is kept.)
+    if (project.masterFx.width.on && project.masterFx.width.midDb !== 0) {
+      rollPanel.info.textContent = "マスターのステレオ幅は自分で入れてあるので、そのままにしました。";
+      return;
+    }
+    lock.busy = true;
+    try {
+      const masterFx = structuredClone(project.masterFx);
+      masterFx.width = { ...masterFx.width, on: false };
+      const song = await renderOff({ sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, null, null), masterFx, room: roomOf(project), tempoMap: tempoMapSec(project), raw: true }, "measure", (share) => (rollPanel.info.textContent = `広がりを測っています… ${Math.round(share * 100)}%`));
+      rollPanel.applyWidth(widthFor(song.sideDb), song.sideDb, WIDTH_SIDE_DB);
+    } finally {
+      lock.busy = false;
+    }
+  }
+  rollPanel.onAutoWidth = () => void autoWidth();
 
   /**
    * 密度を上げる (design.md 45): the song rendered through the master as it is but for the rounding itself and the
@@ -276,6 +318,8 @@ export function installAutoMix(deps: AutoMixDeps): void {
     note("音量");
     await balanceMaster(rollPanel.balanceStyle());
     said.push("マスター EQ: 下の「音域のバランス」に結果があります。");
+    await autoWidth();
+    note("広がり");
     // Last, the diagnosis of what came out (it changes nothing).
     await diagnoseMix();
     said.push(`診断: ${rollPanel.info.textContent}`);
@@ -320,13 +364,19 @@ export function installAutoMix(deps: AutoMixDeps): void {
       }
       rollPanel.info.textContent = "診断しています…(曲全体)";
       const whole = await wholeJob;
-      const song = { lufs: whole.lufs, peakDb: whole.truePeakDb, correlation: whole.correlation, sideDb: whole.sideDb };
+      const song = { lufs: whole.lufs, peakDb: whole.truePeakDb, correlation: whole.correlation, sideDb: whole.sideDb, balanceDb: whole.balanceDb };
       // How wide: nearly mono, or so wide it falls apart on one speaker.
       const wide = `左右の相関 ${whole.correlation.toFixed(2)}・横の成分 ${whole.sideDb.toFixed(1)} dB`;
       // What stands out.
       const points: string[] = [];
       if (whole.correlation > 0.95) points.push(`左右の広がりがほとんどありません(${wide})。和音・伴奏を左右に振るか、リバーブを少し足すと広がります。目安は相関 0.7〜0.9。`);
       else if (whole.correlation < 0.5) points.push(`左右が広がりすぎています(${wide})。スマホのスピーカーなど 1 つで鳴らすと音が痩せます。ステレオ幅のエフェクトやパンを控えめにしてください。`);
+      // Leaning to one side (over 400 Hz, where the ear places a sound): the panned tracks are not shared out.
+      if (Math.abs(whole.balanceDb) > 1.5) {
+        const to = whole.balanceDb > 0 ? "左" : "右";
+        const other = whole.balanceDb > 0 ? "右" : "左";
+        points.push(`音が${to}に寄っています(中高域で${to}が ${Math.abs(whole.balanceDb).toFixed(1)} dB 大きい)。${to}に振ったトラックのうち大きいものを${other}へ移すと釣り合います。目安は 1 dB 以内。`);
+      }
       if (song.peakDb > 0) points.push(`曲全体が 0 dB を超えます(トゥルーピーク +${song.peakDb.toFixed(1)} dB)。再生と書き出しでは抑えますが、そのぶん潰れます。全体の音量(フェーダー)かマスターのコンプのメイクアップを下げると素直な音になります。`);
       const leads = [...lufsOf].filter(([i]) => roles[i] === "lead" || roles[i] === "audio").map(([, l]) => l);
       const lead = leads.length ? Math.max(...leads) : null;

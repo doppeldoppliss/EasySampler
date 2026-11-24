@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { integratedLoudness, matchLoudness, ShortTermMeter, truePeak, stereoImage } from "./loudness";
+import { integratedLoudness, limit, matchLoudness, ShortTermMeter, truePeak, stereoImage } from "./loudness";
 
 const SR = 48000;
 const sine = (hz: number, amp: number, sec: number, phase = 0) => Float32Array.from({ length: Math.round(sec * SR) }, (_, i) => amp * Math.sin((2 * Math.PI * hz * i) / SR + phase));
@@ -39,6 +39,35 @@ describe("loudness (BS.1770)", () => {
     expect(out.afterLufs).toBeGreaterThan(-14.5);
     expect(out.afterLufs).toBeLessThan(-13.5);
     expect(out.truePeakDb).toBeLessThanOrEqual(-0.95);
+  });
+
+  it("limits a bass note without bending its wave: the gain stays down through the note, not following each half wave", () => {
+    // 55 Hz, 3 dB over the ceiling: what is left once the 55 Hz is taken out (a hard clip leaves about −17 dB).
+    const ceiling = 10 ** (-1 / 20);
+    const l = sine(55, ceiling * 10 ** (3 / 20), 3);
+    const r = l.slice();
+    limit(l, r, SR, ceiling);
+    expect(truePeak(l, r)).toBeLessThanOrEqual(ceiling * 1.0005);
+    const from = SR;
+    const n = SR;
+    let a = 0;
+    let b = 0;
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+      const p = (2 * Math.PI * 55 * i) / SR;
+      a += l[from + i] * Math.cos(p);
+      b += l[from + i] * Math.sin(p);
+      total += l[from + i] ** 2;
+    }
+    const tone = (a * a + b * b) * (2 / n);
+    expect(10 * Math.log10(Math.max(1e-12, total - tone) / total)).toBeLessThan(-60);
+    // And it lets go: half a second after a single spike, the gain is back.
+    const x = sine(440, 0.5, 2);
+    const y = x.slice();
+    x[SR] = y[SR] = 2;
+    limit(x, y, SR, ceiling);
+    expect(Math.abs(x[SR])).toBeLessThanOrEqual(ceiling);
+    expect(Math.abs(x[SR + SR / 2 + 27])).toBeCloseTo(Math.abs(0.5 * Math.sin((2 * Math.PI * 440 * (SR + SR / 2 + 27)) / SR)), 2);
   });
 
   it("meters live: the short-term loudness of a steady sine", () => {

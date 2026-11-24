@@ -149,9 +149,12 @@ export function truePeak(left: Float32Array, right: Float32Array): number {
   return peak;
 }
 
+/** How long the limiter keeps a reduction before letting it go. */
+const LIMIT_HOLD_SEC = 0.01;
+
 /**
  * A look-ahead limiter, offline: the gain comes down over `lookaheadSec` before each sample whose true peak would
- * pass `ceiling` (linear), and recovers over `releaseSec`. In place.
+ * pass `ceiling` (linear), stays for 10 ms, and recovers with the time constant `releaseSec`. In place.
  */
 export function limit(left: Float32Array, right: Float32Array, sampleRate: number, ceiling: number, lookaheadSec = 0.005, releaseSec = 0.08): void {
   const n = left.length;
@@ -162,13 +165,43 @@ export function limit(left: Float32Array, right: Float32Array, sampleRate: numbe
     const peak = Math.max(tl[i], tr[i]);
     gain[i] = peak > ceiling ? ceiling / peak : 1;
   }
-  const ahead = Math.max(1, Math.round(lookaheadSec * sampleRate));
-  const down = 1 / ahead;
-  // Backwards: reach each reduction by a straight ramp over the look-ahead before it.
-  for (let i = n - 2; i >= 0; i--) gain[i] = Math.min(gain[i], gain[i + 1] + down);
-  // Forwards: let go slowly after it.
-  const up = 1 / Math.max(1, releaseSec * sampleRate);
-  for (let i = 1; i < n; i++) gain[i] = Math.min(gain[i], gain[i - 1] + up);
+  // (Times, not slopes: a ramp of a fixed slope reached a 1 dB reduction in half a millisecond and let it go in 9,
+  // so the gain followed a bass note's own wave — as much distortion as clipping it.)
+  // (The look-ahead in two halves: the two averages below, one after the other, add up to it.)
+  const half = Math.max(1, Math.round((lookaheadSec * sampleRate) / 2));
+  const ahead = 2 * half;
+  // Held: the lowest gain asked for from 10 ms back (half a period of 50 Hz: a bass note's next half wave finds the
+  // gain still down) to the look-ahead on, by a sliding minimum.
+  const hold = Math.round(LIMIT_HOLD_SEC * sampleRate);
+  const held = new Float32Array(n);
+  const queue = new Int32Array(n);
+  let head = 0;
+  let tail = 0;
+  let next = 0;
+  for (let i = 0; i < n; i++) {
+    for (const to = Math.min(n - 1, i + ahead); next <= to; next++) {
+      while (tail > head && gain[queue[tail - 1]] >= gain[next]) tail--;
+      queue[tail++] = next;
+    }
+    while (queue[head] < i - hold) head++;
+    held[i] = gain[queue[head]];
+  }
+  // Let go: back toward 1 with the release's time constant.
+  const release = Math.exp(-1 / Math.max(1, releaseSec * sampleRate));
+  for (let i = 1; i < n; i++) held[i] = Math.min(held[i], 1 - (1 - held[i - 1]) * release);
+  // Smoothed over the look-ahead behind each sample (twice, over half of it: an S-shaped way down). Every value
+  // averaged is a minimum over a window that reaches this sample, so the gain never ends over what it needs.
+  for (let pass = 0; pass < 2; pass++) {
+    const from = pass === 0 ? held : gain;
+    const to = pass === 0 ? gain : held;
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      sum += from[i];
+      if (i > half) sum -= from[i - half - 1];
+      to[i] = sum / Math.min(i + 1, half + 1);
+    }
+  }
+  gain.set(held);
   for (let i = 0; i < n; i++) {
     left[i] *= gain[i];
     right[i] *= gain[i];

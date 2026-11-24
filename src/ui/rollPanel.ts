@@ -56,6 +56,7 @@ import { songParts } from "../song/parts";
 import { drumRows, keyLabel, soundKey, type Kit } from "../daw/kit";
 import { arrange, type ArrangeKind } from "../daw/arrange";
 import { armOnce, el } from "./dom";
+import { barThickness, sceneLine, scenes } from "../daw/dynamics";
 import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, ROLE_NAMES, spreadPans, trackRoles, type Role } from "../daw/roles";
 import { kickDuck, madeByAuto, medianLength, octaveFit, roomFor } from "../daw/autoMix";
 import { KICK_KEYS } from "../song/player";
@@ -97,6 +98,8 @@ const HARMONY_VOICES: [number, string][] = [
 
 /** Where 書き出す音量 is kept (this browser). */
 const LOUDNESS_KEY = "easysampler.exportLoudness";
+/** 場面の強弱を付ける: how far the thinnest scenes come down (dB). */
+const DYNAMICS_DB = 3;
 /** A fader's dB in words (−∞ at the bottom). */
 const dbText = (db: number) => (db <= FADER_FLOOR_DB ? "−∞ dB" : `${db > 0 ? "+" : db < 0 ? "−" : ""}${Math.abs(db).toFixed(1)} dB`);
 
@@ -673,6 +676,7 @@ export class RollPanel {
           el("span", { className: "control-label", textContent: "自動ミックス" }),
           button("まとめて自動ミックス", "small primary", () => this.onAutoMixAll(), "トラック名(名前のないものだけ)→ パン(真ん中のままのトラックだけ)→ トラックの EQ → キックに合わせて沈める → 残響 → 音量 → マスター EQ を、この順で続けて行い、最後に診断を出します。下の設定を使います。それぞれ「元に戻す」で 1 段ずつ戻せます"),
           button("ミックスを診断する", "small", () => this.onDiagnose(), "トラックを 1 本ずつと曲全体を書き出して、聞こえの大きさ・ピーク・気になる点を一覧にします(設定は変えません)"),
+          button("場面の強弱を付ける", "small", () => this.autoDynamics(), "曲全体の音量が一定に聞こえるときに。小節ごとに、鳴っているトラックの数・長さ・強さから厚みを測って場面に分け、薄い場面(鳴っているトラックが少ない所)を最大 3 dB 下げる「マスター音量の線」を引きます。厚い場面の頭には 1 拍前から戻ります。今あるマスター音量の線は置き換えます(元に戻すで戻せます)。「まとめて自動ミックス」には入っていません"),
         ]),
         el("div", { className: "row tight automix-settings" }, [
           el("label", { className: "inline fine", title: "マスター EQ で寄せる音域の形。標準 / 電子音・ボカロ系は低音と高音が多め / 生楽器系はなだらか" }, ["音域の目安 ", this.balanceSelect]),
@@ -1845,6 +1849,33 @@ export class RollPanel {
     this.info.textContent = moved
       ? `${moved} 本のトラックのパンを動かしました(ドラム・ベース・メロディは中央、和音と伴奏を左右へ)。「元に戻す」(Ctrl + Z)で戻せます。`
       : "動かすトラックはありませんでした(左右に振る和音・伴奏のトラックがないか、すでにその位置です)。";
+  }
+
+  /**
+   * 場面の強弱を付ける (design.md 43): the master volume line drawn from the arrangement — the thin scenes (few
+   * tracks sounding) down by up to DYNAMICS_DB, the full ones as they are. It replaces the line there is.
+   */
+  autoDynamics(): void {
+    const p = this.project;
+    const soloing = p.tracks.some((t) => t.solo);
+    const heard = p.tracks.filter((t) => t.notes.length && !t.mute && (!soloing || t.solo));
+    const list = scenes(barThickness(heard.map((t) => t.notes), p.beatsPerBar), DYNAMICS_DB);
+    const line = sceneLine(list, p.beatsPerBar);
+    if (!line.length) {
+      this.info.textContent = heard.length
+        ? "場面ごとの厚み(鳴っているトラックの数)にほとんど差がないので、線は引きませんでした。強弱を付けるには、静かにしたい場面でトラックを休ませるか、曲の画面の下の欄「マスター音量の線」を手で引いてください。"
+        : "測れるトラック(音符があり、ミュートしていないもの)がありません。";
+      return;
+    }
+    const had = p.masterAuto.length > 0;
+    p.masterAuto = line;
+    this.sendMasterAuto();
+    this.showLane();
+    this.scheduleSave();
+    this.commit();
+    const down = list.filter((s) => s.db < 0);
+    const said = down.slice(0, 6).map((s) => `${s.from + 1}〜${s.to} 小節 ${s.db.toFixed(1).replace("-", "−")} dB`);
+    this.info.textContent = `曲を ${list.length} つの場面に分け、薄い場面 ${down.length} か所を下げるマスター音量の線を引きました(${said.join("、")}${down.length > said.length ? " ほか" : ""})。${had ? "前のマスター音量の線は置き換えました。" : ""}曲の画面の下の欄を「マスター音量の線」にすると見えて、手で直せます。「元に戻す」(Ctrl + Z)で戻せます。`;
   }
 
   /** トラック名を自動で付ける: the nameless tracks named by what they play. */

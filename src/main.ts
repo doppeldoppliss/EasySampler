@@ -174,8 +174,9 @@ const piano = new OnScreenKeyboard(sink, 48, SMALL_SCREEN ? 72 : 84);
 const pcKeys = new PcKeyboard(sink);
 // 打ち込み: the song (written on the piano roll, or opened from a MIDI file), played by the materials.
 const rollPanel = new RollPanel(client);
-// (Development only: a handle for checking playback where the page's animation frames do not run.)
-if (import.meta.env.DEV) Object.assign(window, { __easysampler: { client, rollPanel } });
+// (Development only: a handle for checking playback where the page's animation frames do not run, and for measuring
+// a project's tracks offline as the automatic mixing does.)
+if (import.meta.env.DEV) Object.assign(window, { __easysampler: { client, rollPanel, songTracks, renderOff, roomOf, tempoMapSec } });
 rollPanel.onTrackChange = () => {
   showFxTarget();
   routeKeyboard();

@@ -104,4 +104,20 @@ describe("master EQ toward a tonal balance", () => {
     const at250 = BAND_HZ.findIndex((hz) => hz > 240 && hz < 260);
     expect(Math.abs(fit.after[at250])).toBeLessThan(Math.abs(fit.before[at250]));
   });
+
+  it("reads the bands an octave at a time: one third octave left thin by the song's notes is not a hole to fill", () => {
+    const flat = { on: false, lowCutHz: 0, lowDb: 0, lowHz: 150, midDb: 0, midHz: 1000, midQ: 1, highDb: 0, highHz: 6000, highCutHz: 20000 };
+    // A song in G: on the target but for the 250 Hz band, 9 dB under both neighbours (measured on a real one).
+    const at250 = BAND_HZ.findIndex((hz) => hz > 240 && hz < 260);
+    const song = targetDb("standard").map((x, j) => (j === at250 ? x - 9 : x));
+    const fit = fitBalance(song, "standard", 48000, flat);
+    for (const db of [fit.eq.midDb, fit.eq.mid2Db ?? 0]) expect(db).toBeLessThanOrEqual(1);
+    expect(Math.abs(fit.eq.lowDb)).toBeLessThanOrEqual(1);
+    // (Its octave reads about 3 dB short, not 9.)
+    expect(fit.before[at250]).toBeGreaterThan(-4);
+    // Its own notes' gaps in a reference song are not asked of the mix either.
+    const reference = song.map((x) => x + 12);
+    const toward = fitBalance(targetDb("standard"), reference, 48000, flat);
+    for (const db of [toward.eq.midDb, toward.eq.mid2Db ?? 0]) expect(db).toBeGreaterThanOrEqual(-1);
+  });
 });

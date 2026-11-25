@@ -133,6 +133,24 @@ export function bandSpectrum(channels: readonly Float32Array[], sampleRate: numb
   });
 }
 
+/**
+ * Bands as the fit reads them: each the mean power of itself and its neighbours (an octave). A song's notes leave
+ * single third octaves thin — one in G puts its roots and their overtones at 196, 294 and 392 Hz, and the band
+ * between (224–281 Hz) measured 6–10 dB under both neighbours in every track, the bass with no EQ too — and the
+ * master EQ's bells, an octave wide, cannot fill one band without lifting the two beside it (design.md 49).
+ */
+export function smoothBands(db: readonly number[]): number[] {
+  return db.map((_, j) => {
+    let p = 0;
+    let n = 0;
+    for (let k = Math.max(0, j - 1); k <= Math.min(db.length - 1, j + 1); k++) {
+      p += 10 ** (db[k] / 10);
+      n++;
+    }
+    return 10 * Math.log10(p / n);
+  });
+}
+
 /** How much a band counts in the fit: the ends (where little is heard, or the EQ's cuts work) less. */
 const weightOf = (hz: number) => (hz < 30 ? 0 : hz < 50 || hz > 12000 ? 0.5 : 1);
 
@@ -173,12 +191,14 @@ const BELL_LIFT_DB = 3;
 const GAIN_COST = 0.03;
 
 /**
- * The master EQ for `measured` (bandSpectrum of the mix before the master) toward `style`: low cut at 30 Hz (or
+ * The master EQ for `bands` (bandSpectrum of the mix before the master) toward `style`: low cut at 30 Hz (or
  * higher where it was), a low shelf, one bell and a high shelf, found by trying each part's settings in turn.
  */
-export function fitBalance(measured: readonly number[], style: BalanceStyle | readonly number[], sampleRate: number, current: FxSettings["eq"]): BalanceResult {
-  // (A reference song's own bands — bandSpectrum of it — are a target as they are: only the shape counts.)
-  const target = typeof style === "string" ? targetDb(style) : [...style];
+export function fitBalance(bands: readonly number[], style: BalanceStyle | readonly number[], sampleRate: number, current: FxSettings["eq"]): BalanceResult {
+  // (Both read an octave at a time: the mix, and a reference song's own bands — bandSpectrum of it, a target as it
+  // is but for its own notes' gaps; only the shape counts.)
+  const measured = smoothBands(bands);
+  const target = typeof style === "string" ? targetDb(style) : smoothBands(style);
   const before = deviation(measured, target);
   const want = before.map((d) => -STRENGTH * d);
   const weights = BAND_HZ.map(weightOf);
@@ -228,7 +248,8 @@ export function fitBalance(measured: readonly number[], style: BalanceStyle | re
  * The style a mix is nearest to as it is (the weighted mean of its bands' distances from each target, the overall
  * level taken out) — what a mastering assistant does when it picks a genre's curve for a song.
  */
-export function nearestStyle(measured: readonly number[]): BalanceStyle {
+export function nearestStyle(bands: readonly number[]): BalanceStyle {
+  const measured = smoothBands(bands);
   const weights = BAND_HZ.map(weightOf);
   let best: BalanceStyle = "standard";
   let least = Infinity;

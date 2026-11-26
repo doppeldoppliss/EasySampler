@@ -260,7 +260,11 @@ export function installAutoMix(deps: AutoMixDeps): void {
     lock.busy = true;
     try {
       const lufs: (number | null)[] = project.tracks.map(() => null);
-      const measured = await measureTracks(project, heard, "音量を測っています");
+      // (Measured without the transient キックの立ち上がり put in: it sets it again after the volumes, and measured
+      // with it the drums came down a dB more on each run of まとめて自動ミックス — +1.0, −0.2, −1.1 dB on a real song.)
+      const plain = structuredClone(project);
+      for (const t of plain.tracks) if (t.fx.transient.auto) t.fx.transient = { ...DEFAULT_FX.transient };
+      const measured = await measureTracks(plain, heard, "音量を測っています");
       for (const i of heard) {
         const l = measured.get(i)!.lufs;
         lufs[i] = Number.isFinite(l) && l > -70 ? l : null;

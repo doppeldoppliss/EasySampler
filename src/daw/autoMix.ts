@@ -19,8 +19,9 @@ export const LEVEL_FROM_LEAD: Record<Role, number> = { audio: 0, lead: 0, bass: 
 /**
  * 強調 (design.md 52): a track marked so sits this much over the others of its part (dB). A real song's two melodies
  * that play together at one level covered each other (each heard 6.6–8.1%); the one marked stands out of the other.
+ * (At 3 dB the user brought the two tracks they marked up by hand to 5.3 and 6.6 dB over their parts.)
  */
-export const EMPHASIS_DB = 3;
+export const EMPHASIS_DB = 6;
 
 export interface LevelIn {
   role: Role;

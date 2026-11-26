@@ -56,13 +56,15 @@ export function buriedPoints(tracks: readonly HeardTrack[]): string[] {
       : `音量を上げるか、要らなければミュートしてください。`;
     points.push(`${who}(${when})。${fix}`);
   });
-  // Two tracks of one part, each the other's cover: the same notes' range twice.
+  // Two tracks of one part, each the other's cover: the same notes' range twice. (Not the basses: layered, they are
+  // one low sound by design — a synth bass under a voice bass takes its share of the part's level for that; nor the
+  // drums.)
   tracks.forEach((t, i) => {
     const a = t.heard;
     const j = a?.coveredBy;
     if (!a || j === null || j === undefined || j <= i || a.playing < MIN_PLAYING) return;
     const o = tracks[j];
-    if (!o?.heard || o.heard.coveredBy !== i || o.role !== t.role || t.role === "drum" || t.emphasis !== o.emphasis || (said.has(i) && said.has(j))) return;
+    if (!o?.heard || o.heard.coveredBy !== i || o.role !== t.role || t.role === "drum" || t.role === "bass" || t.emphasis !== o.emphasis || (said.has(i) && said.has(j))) return;
     points.push(`「${t.name}」と「${o.name}」(どちらも${ROLE_NAMES[t.role]})が同じ音域(${hzText(a.worstHz)} あたり)で同時に鳴り、互いを隠しています。片方の EQ でその辺りを下げるか、オクターブや鳴らす場所を分けると、両方はっきりします。`);
   });
   return points;

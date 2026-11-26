@@ -380,6 +380,15 @@ export function installAutoMix(deps: AutoMixDeps): void {
     if (lock.busy) return;
     const said: string[] = [];
     const note = (label: string) => said.push(`${label}: ${rollPanel.info.textContent}`);
+    // (The transient キックの立ち上がり put in last time comes out first: it puts it back near the end, and left in,
+    // the master EQ, the width and the punch were measured with it — a second run set a stronger attack, another
+    // master EQ and another rounding.)
+    const project = rollPanel.snapshot();
+    if (project.tracks.some((t) => t.fx.transient.on && t.fx.transient.auto))
+      rollPanel.applyTrackFx(
+        project.tracks.map((t) => (t.fx.transient.on && t.fx.transient.auto ? { ...structuredClone(t.fx), transient: { ...DEFAULT_FX.transient } } : null)),
+        "",
+      );
     rollPanel.nameTracks();
     note("トラック名");
     rollPanel.spreadPans(true);

@@ -22,7 +22,7 @@ describe("埋もれ diagnosis", () => {
     expect(heardCell(tracks[0], tracks)).toBe("0.1%(「ベース 2」・660 Hz)");
   });
 
-  it("says when two tracks of one part cover each other, once", () => {
+  it("says when two tracks of one part cover each other, once; not of layered basses", () => {
     const tracks: HeardTrack[] = [
       { name: "ベース 1", role: "bass", heard: a(0.028, 1, 660) },
       { name: "ベース 2", role: "bass", heard: a(0.105, 0, 570) },
@@ -30,12 +30,11 @@ describe("埋もれ diagnosis", () => {
       { name: "メロディ 6", role: "lead", heard: a(0.086, 2, 1666) },
     ];
     const points = buriedPoints(tracks);
-    expect(points).toHaveLength(2);
-    expect(points[0]).toContain("「ベース 1」と「ベース 2」(どちらもベース)が同じ音域(660 Hz あたり)");
-    expect(points[1]).toContain("「メロディ 5」と「メロディ 6」");
+    expect(points).toHaveLength(1);
+    expect(points[0]).toContain("「メロディ 5」と「メロディ 6」(どちらもメロディ)が同じ音域(1.7 kHz あたり)");
     // One of them marked 強調: which wins is chosen, nothing to say.
     const marked = tracks.map((t) => (t.name === "メロディ 6" ? { ...t, emphasis: true } : t));
-    expect(buriedPoints(marked)).toHaveLength(1);
+    expect(buriedPoints(marked)).toHaveLength(0);
   });
 
   it("leaves out what was not measured or barely plays", () => {

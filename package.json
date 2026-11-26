@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "listen": "tsx tools/eval/listen.ts",
-    "e2e": "tsx tools/e2e/smoke.ts"
+    "e2e": "tsx tools/e2e/smoke.ts && tsx tools/e2e/automix.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

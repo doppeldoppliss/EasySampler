@@ -56,6 +56,8 @@ export interface Track {
   role: Role | null;
   /** The main one of its part, set by hand (ベース(メイン)): 音量を合わせる gives it the largest share of the part. */
   main: boolean;
+  /** 強調, set by hand (ミックス view): 音量を合わせる puts it a little over the others of its part (EMPHASIS_DB). */
+  emphasis: boolean;
   /** ハモリ (a melodic track): notes added in the key, played by the same cut. */
   harmony: Harmony;
   /** What a note placed on this track gets: its length (beats) and velocity (0–1) (Domino's default Gate / Velocity). */
@@ -220,7 +222,7 @@ export function setTimeSig(project: Project, num: number, den: number): void {
 export const BACKING = "backing";
 
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, synth: DEFAULT_SYNTH, role: null, main: false, harmony: structuredClone(DEFAULT_HARMONY), noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
+  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, synth: DEFAULT_SYNTH, role: null, main: false, emphasis: false, harmony: structuredClone(DEFAULT_HARMONY), noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
 }
 
 /** An audio track: clips of materials on the timeline (a new clip plays `material`). */
@@ -493,6 +495,7 @@ export function sanitizeProject(raw: unknown): Project {
           synth: isSynthPreset(tr.synth) ? tr.synth : DEFAULT_SYNTH,
           role: typeof tr.role === "string" && ROLES.includes(tr.role as Role) ? (tr.role as Role) : null,
           main: tr.main === true,
+          emphasis: tr.emphasis === true,
           harmony: sanitizeHarmony(tr.harmony),
           noteLength: num(tr.noteLength, 1, MIN_LENGTH, 64),
           noteVelocity: num(tr.noteVelocity, DEFAULT_VELOCITY, 0.01, 1),

@@ -7,7 +7,7 @@ import { DEFAULT_FX, type FxSettings } from "../instrument/types";
 import { fitBalance, nearestStyle, type BalanceChoice } from "../fx/balance";
 import type { AutoPoint } from "../song/player";
 import type { RollPanel } from "../ui/rollPanel";
-import { balanceGains, cleanEq, lowCutFor, madeByAuto, maskingDip, PUNCH_DB, PUNCH_STEPS, punchAttack } from "./autoMix";
+import { balanceGains, EMPHASIS_DB, cleanEq, lowCutFor, madeByAuto, maskingDip, PUNCH_DB, PUNCH_STEPS, punchAttack } from "./autoMix";
 import { KICK_KEYS } from "../song/player";
 import { BACKING, MAX_TRACK_GAIN, roomOf, tempoMapSec, withHarmony, type Tempo } from "./model";
 import { renderOff, type RenderMeasure } from "./renderClient";
@@ -268,7 +268,7 @@ export function installAutoMix(deps: AutoMixDeps): void {
       const { gains, reference, loweredDb } = balanceGains(
         // (The bass set as the main one takes three times a plain voice bass's share; a bass on the 簡易シンセ, the
         // floor of the lows, twice.)
-        project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain, notes: t.notes, weight: roles[i] !== "bass" ? 1 : t.main ? 3 : t.instrument === BACKING ? 2 : 1 })),
+        project.tracks.map((t, i) => ({ role: roles[i], lufs: lufs[i], gain: t.gain, notes: t.notes, weight: roles[i] !== "bass" ? 1 : t.main ? 3 : t.instrument === BACKING ? 2 : 1, liftDb: t.emphasis ? EMPHASIS_DB : 0 })),
         MAX_TRACK_GAIN,
         { bass: project.bassLevelDb, chords: project.chordsLevelDb, backing: project.chordsLevelDb, harmony: project.chordsLevelDb },
       );
@@ -443,7 +443,7 @@ export function installAutoMix(deps: AutoMixDeps): void {
       await new Promise((resolve) => setTimeout(resolve, 0));
       const order = [...heard];
       const ears = audibility(order.map((i) => measured.get(i)?.ear ?? null), whole.lufs);
-      const listened = project.tracks.map((t, i) => ({ name: t.name, role: roles[i], heard: ears[order.indexOf(i)] ?? null }));
+      const listened = project.tracks.map((t, i) => ({ name: t.name, role: roles[i], heard: ears[order.indexOf(i)] ?? null, emphasis: t.emphasis }));
       // (Its cover named by track: the ear model counts among the heard ones only.)
       for (const h of listened) if (h.heard && h.heard.coveredBy !== null) h.heard = { ...h.heard, coveredBy: order[h.heard.coveredBy] };
       for (const [i, t] of project.tracks.entries()) {

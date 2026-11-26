@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { widthFor } from "./autoMixRun";
-import { balanceGains, cleanEq, kickDuck, madeByAuto, together, lowCutFor, maskingDip, octaveFit, roomFor } from "./autoMix";
+import { balanceGains, EMPHASIS_DB, cleanEq, kickDuck, madeByAuto, together, lowCutFor, maskingDip, octaveFit, roomFor } from "./autoMix";
 import { BAND_HZ } from "../fx/balance";
 import { DEFAULT_FX } from "../instrument/types";
 import type { Note } from "./model";
@@ -29,6 +29,32 @@ describe("自動ミックス", () => {
     // Two accompaniments: each −6 − 3 = −9 under the lead.
     expect(db(gains[2])).toBeCloseTo(-9, 1);
     expect(db(gains[3])).toBeCloseTo(-9, 1);
+  });
+
+  it("volumes: a track marked 強調 sits EMPHASIS_DB over the others of its part, the reference marked or not", () => {
+    const db = (g: number | null) => 20 * Math.log10(g!);
+    // Two melodies together, the second marked: it comes out 3 dB over the first (the reference, which stays).
+    const second = balanceGains(
+      [
+        { role: "lead", lufs: -14, gain: 1, notes: [note(60)] },
+        { role: "lead", lufs: -14, gain: 1, notes: [note(64)], liftDb: EMPHASIS_DB },
+        { role: "chords", lufs: -14, gain: 1, notes: [note(48)] },
+      ],
+      4,
+    ).gains;
+    expect(db(second[1])).toBeCloseTo(EMPHASIS_DB, 5);
+    // The reference itself marked: the others come down by it instead.
+    const first = balanceGains(
+      [
+        { role: "lead", lufs: -14, gain: 1, notes: [note(60)], liftDb: EMPHASIS_DB },
+        { role: "lead", lufs: -14, gain: 1, notes: [note(64)] },
+        { role: "chords", lufs: -14, gain: 1, notes: [note(48)] },
+      ],
+      4,
+    ).gains;
+    expect(first[0]).toBeNull();
+    expect(db(first[1])).toBeCloseTo(-EMPHASIS_DB, 5);
+    expect(db(first[2]) - db(second[2])).toBeCloseTo(-EMPHASIS_DB, 5);
   });
 
   it("volumes: an audio track (原曲) is the reference when there is one; no gain past the fader", () => {

@@ -16,6 +16,12 @@ import type { Role } from "./roles";
 // (The bass as loud as the lead, as electronic music and 音MAD have it: at −2 it was heard as weak.)
 export const LEVEL_FROM_LEAD: Record<Role, number> = { audio: 0, lead: 0, bass: 0, drum: -1, chords: -5, backing: -6, harmony: -8 };
 
+/**
+ * 強調 (design.md 52): a track marked so sits this much over the others of its part (dB). A real song's two melodies
+ * that play together at one level covered each other (each heard 6.6–8.1%); the one marked stands out of the other.
+ */
+export const EMPHASIS_DB = 3;
+
 export interface LevelIn {
   role: Role;
   /** Its notes: tracks of one part share its level only where they play together (a melody passed from track to track by section does not). */
@@ -25,6 +31,8 @@ export interface LevelIn {
    * is the floor of the lows, so it takes 2 — half the bass's power with one voice bass beside it, not a third.
    */
   weight?: number;
+  /** 強調: dB over its part's level (EMPHASIS_DB when the track is marked; 0 or absent: none). */
+  liftDb?: number;
   /** Its loudness as it plays now (integrated LUFS, with its gain), null when it was not measured (silent, muted). */
   lufs: number | null;
   gain: number;
@@ -52,11 +60,12 @@ export function balanceGains(tracks: readonly LevelIn[], maxGain: number, extraD
   const meanWeight = new Map([...groups].map(([role, g]) => [role, g.reduce((a, t) => a + (t.weight ?? 1), 0) / g.length]));
   const tilt = (t: LevelIn) => 10 * Math.log10((t.weight ?? 1) / (meanWeight.get(t.role) ?? 1));
   // The lead's level, from the reference's (which is where its part says it is).
-  const lead = ref.lufs - levelOf(ref.role) + share(ref.role) - tilt(ref);
+  const lift = (t: LevelIn) => t.liftDb ?? 0;
+  const lead = ref.lufs - levelOf(ref.role) + share(ref.role) - tilt(ref) - lift(ref);
   const wanted = tracks.map(() => null as number | null);
   for (const t of measured) {
     if (t === ref) continue;
-    const want = lead + levelOf(t.role) - share(t.role) + tilt(t);
+    const want = lead + levelOf(t.role) - share(t.role) + tilt(t) + lift(t);
     wanted[t.i] = t.gain * 10 ** ((want - t.lufs) / 20);
   }
   // A track that would need more than the fader gives: everything (the reference too) comes down by the

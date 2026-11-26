@@ -20,6 +20,8 @@ export interface HeardTrack {
   name: string;
   role: Role;
   heard: Audibility | null;
+  /** Marked 強調: of two that cover each other, the one meant to win (nothing to say of the pair). */
+  emphasis?: boolean;
 }
 
 export const hzText = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(1)} kHz` : `${Math.round(hz / 10) * 10} Hz`);
@@ -60,7 +62,7 @@ export function buriedPoints(tracks: readonly HeardTrack[]): string[] {
     const j = a?.coveredBy;
     if (!a || j === null || j === undefined || j <= i || a.playing < MIN_PLAYING) return;
     const o = tracks[j];
-    if (!o?.heard || o.heard.coveredBy !== i || o.role !== t.role || t.role === "drum" || (said.has(i) && said.has(j))) return;
+    if (!o?.heard || o.heard.coveredBy !== i || o.role !== t.role || t.role === "drum" || t.emphasis !== o.emphasis || (said.has(i) && said.has(j))) return;
     points.push(`「${t.name}」と「${o.name}」(どちらも${ROLE_NAMES[t.role]})が同じ音域(${hzText(a.worstHz)} あたり)で同時に鳴り、互いを隠しています。片方の EQ でその辺りを下げるか、オクターブや鳴らす場所を分けると、両方はっきりします。`);
   });
   return points;

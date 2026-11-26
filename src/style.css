@@ -1762,6 +1762,12 @@ button.recording { background: var(--warn); color: var(--accent-text); border-co
   font-size: 11px;
   text-align: center;
 }
+.mix-emphasis {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+}
 button.mix-far {
   min-height: 0;
   padding: 1px 4px;

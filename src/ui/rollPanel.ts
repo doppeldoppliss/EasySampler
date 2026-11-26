@@ -59,7 +59,7 @@ import { armOnce, el } from "./dom";
 import { barThickness, sceneLine, scenes } from "../daw/dynamics";
 import type { Rounding } from "../fx/clip";
 import { autoNames, FAR_ABOVE, FAR_BELOW, rangeFromRoot, ROLE_NAMES, spreadPans, trackRoles, type Role } from "../daw/roles";
-import { kickDuck, madeByAuto, medianLength, octaveFit, roomFor } from "../daw/autoMix";
+import { EMPHASIS_DB, kickDuck, madeByAuto, medianLength, octaveFit, roomFor } from "../daw/autoMix";
 import { KICK_KEYS } from "../song/player";
 import { PianoRoll } from "./pianoRoll";
 import { isSynthPreset, SYNTH_PRESETS } from "../song/backing";
@@ -2295,7 +2295,18 @@ export class RollPanel {
       const far = this.farWarning(t);
       const shift = far ? this.octaveFitOf(t) : 0;
       // What the automatic mixing put in (its own, not hand-set): a mark that opens the effects.
-      const autos = (["eq", "duck", "reverb"] as const).filter((k) => t.fx[k].on && madeByAuto(t.fx, k, this.project.bpm)).map((k) => ({ eq: "EQ", duck: "沈め", reverb: "残響" })[k]);
+      const autos = [
+        ...(["eq", "duck", "reverb"] as const).filter((k) => t.fx[k].on && madeByAuto(t.fx, k, this.project.bpm)).map((k) => ({ eq: "EQ", duck: "沈め", reverb: "残響" })[k]),
+        ...(t.fx.transient.on && t.fx.transient.auto ? ["立ち上がり"] : []),
+      ];
+      // 強調: a little over the others of its part when the volumes are matched.
+      const emphasis = el("input", { type: "checkbox", checked: t.emphasis });
+      emphasis.addEventListener("change", () => {
+        t.emphasis = emphasis.checked;
+        this.scheduleSave();
+        this.commit();
+      });
+      const emphasisLabel = el("label", { className: "fine mix-emphasis", title: `「音量を合わせる」「まとめて自動ミックス」で、同じ役割のほかのトラックより ${EMPHASIS_DB} dB 大きくします(主役にしたいメロディ、目立たせたい和音など)` }, [emphasis, "強調"]);
       const autoMark = autos.length
         ? button(`自動 ${autos.join("・")}`, "small mix-auto", () => {
             this.selectTrack(i);
@@ -2311,6 +2322,7 @@ export class RollPanel {
             : el("span", { className: "warn fine mix-far", textContent: "⚠ 音域", title: far })
           : el("span", { className: "mix-far" }),
         this.roleSelect(t, roles[i].role),
+        emphasisLabel,
         autoMark,
         el("span", { className: "row tight mix-ms" }, [c.mute, c.solo]),
         el("label", { className: "mix-pan fine" }, ["パン", c.pan]),

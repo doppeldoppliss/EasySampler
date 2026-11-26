@@ -33,6 +33,9 @@ describe("埋もれ diagnosis", () => {
     expect(points).toHaveLength(2);
     expect(points[0]).toContain("「ベース 1」と「ベース 2」(どちらもベース)が同じ音域(660 Hz あたり)");
     expect(points[1]).toContain("「メロディ 5」と「メロディ 6」");
+    // One of them marked 強調: which wins is chosen, nothing to say.
+    const marked = tracks.map((t) => (t.name === "メロディ 6" ? { ...t, emphasis: true } : t));
+    expect(buriedPoints(marked)).toHaveLength(1);
   });
 
   it("leaves out what was not measured or barely plays", () => {

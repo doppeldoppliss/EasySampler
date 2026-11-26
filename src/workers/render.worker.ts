@@ -6,43 +6,16 @@
 // only what is measured from them ("measure": loudness, peaks, the
 // third-octave bands), so a long render need not come back whole.
 
-import { integratedLoudness, stereoImage, truePeak } from "../audio/loudness";
 import { renderSong, type RenderedSong, type SongRenderInput } from "../daw/songRender";
-import { bandSpectrum } from "../fx/balance";
-import { roundingFor, type Rounding } from "../fx/clip";
+import { measureSong, type MeasureAsk, type RenderMeasure } from "../daw/measureSong";
 
-export interface RenderMeasure {
-  /** Integrated loudness (LUFS; −Infinity when silent). */
-  lufs: number;
-  /** The highest sample and the true peak (dBFS / dBTP). */
-  peakDb: number;
-  truePeakDb: number;
-  /** Third-octave band levels (BAND_HZ), null when silent. */
-  bands: number[] | null;
-  /** How wide it is (stereoImage). */
-  correlation: number;
-  sideDb: number;
-  /** The left against the right over 400 Hz (dB, + = left), and the side against the mid there. */
-  balanceDb: number;
-  sideUpDb: number;
-  /** Asked for with the job's `rounding`: where a soft clip would start to bring the peak that near the loudness (null: none needed). */
-  rounding?: Rounding | null;
-}
-
-/** What a measuring job may also work out: ピークを丸める for this peak over the loudness, no further under the peak than this. */
-export interface RoundingAsk {
-  targetPlr: number;
-  maxUnderPeakDb: number;
-}
-
-export type RenderJob = { id: number; want: "song" | "measure"; input: SongRenderInput; rounding?: RoundingAsk };
+export type RenderJob = { id: number; want: "song" | "measure"; input: SongRenderInput; ask?: MeasureAsk };
 export type RenderReply = { id: number; progress: number } | { id: number; song: RenderedSong } | { id: number; measure: RenderMeasure } | { id: number; error: string };
 
 const post = (reply: RenderReply, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(reply, transfer);
-const dB = (x: number) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
 
 self.onmessage = async (event: MessageEvent<RenderJob>) => {
-  const { id, want, input, rounding } = event.data;
+  const { id, want, input, ask } = event.data;
   try {
     let last = -1;
     const song = await renderSong(input, async (share) => {
@@ -57,10 +30,8 @@ self.onmessage = async (event: MessageEvent<RenderJob>) => {
       post({ id, song }, song.channels.map((c) => c.buffer));
       return;
     }
-    const [l, r] = song.channels;
-    let peak = 0;
-    for (const c of song.channels) for (let i = 0; i < c.length; i++) peak = Math.max(peak, Math.abs(c[i]));
-    post({ id, measure: { lufs: integratedLoudness(l, r, song.sampleRate), peakDb: dB(peak), truePeakDb: dB(truePeak(l, r)), bands: bandSpectrum(song.channels, song.sampleRate), ...stereoImage(l, r, song.sampleRate), ...(rounding ? { rounding: roundingFor(l, r, song.sampleRate, rounding.targetPlr, rounding.maxUnderPeakDb) } : {}) } });
+    const measure = measureSong(song, ask);
+    post({ id, measure }, measure.ear ? [measure.ear.left.buffer, measure.ear.right.buffer] : []);
   } catch (error) {
     post({ id, error: error instanceof Error ? error.message : String(error) });
   }

@@ -10,6 +10,8 @@ import type { RollPanel } from "../ui/rollPanel";
 import { balanceGains, cleanEq, lowCutFor, madeByAuto, maskingDip } from "./autoMix";
 import { BACKING, MAX_TRACK_GAIN, roomOf, tempoMapSec, withHarmony, type Tempo } from "./model";
 import { renderOff, type RenderMeasure } from "./renderClient";
+import { audibility } from "../audio/ear";
+import { buriedPoints, heardCell } from "./buried";
 import { ROLE_NAMES } from "./roles";
 import type { RenderTrack } from "./songRender";
 
@@ -148,7 +150,7 @@ export function installAutoMix(deps: AutoMixDeps): void {
         { sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, null, null), masterFx, room: roomOf(project), tempoMap: tempoMapSec(project), raw: true },
         "measure",
         (share) => (rollPanel.info.textContent = share >= 1 ? "ピークの出方を調べています…" : `曲を測っています… ${Math.round(share * 100)}%`),
-        { targetPlr: DENSITY_PLR, maxUnderPeakDb: DENSITY_MAX_DB },
+        { rounding: { targetPlr: DENSITY_PLR, maxUnderPeakDb: DENSITY_MAX_DB } },
       );
       rollPanel.applyDensity(song.rounding ?? null, Number.isFinite(song.lufs) ? song.peakDb - song.lufs : null, DENSITY_PLR);
     } finally {
@@ -158,22 +160,22 @@ export function installAutoMix(deps: AutoMixDeps): void {
   rollPanel.onDensify = () => void densify();
 
   /** One track as the song plays it (its effects, its volume; no master), offline: what the automatic mixing measures. */
-  async function renderTrackAlone(project: Snapshot, id: string, say: (share: number) => void): Promise<RenderMeasure> {
-    return renderOff({ sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, id, null), masterFx: null, room: roomOf(project), tempoMap: tempoMapSec(project), raw: true }, "measure", say);
+  async function renderTrackAlone(project: Snapshot, id: string, say: (share: number) => void, ear = false): Promise<RenderMeasure> {
+    return renderOff({ sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, id, null), masterFx: null, room: roomOf(project), tempoMap: tempoMapSec(project), raw: true }, "measure", say, { ear });
   }
 
   /**
    * These tracks each measured alone, side by side (the render workers share them out): `says` is the line shown
-   * with how many are done.
+   * with how many are done; `ear` adds the excitation in both ears (the 埋もれ diagnosis).
    */
-  async function measureTracks(project: Snapshot, indices: readonly number[], says: string): Promise<Map<number, RenderMeasure>> {
+  async function measureTracks(project: Snapshot, indices: readonly number[], says: string, ear = false): Promise<Map<number, RenderMeasure>> {
     const out = new Map<number, RenderMeasure>();
     let done = 0;
     const show = () => (rollPanel.info.textContent = `${says}… ${done} / ${indices.length} 本`);
     show();
     await Promise.all(
       indices.map(async (i) => {
-        out.set(i, await renderTrackAlone(project, project.tracks[i].id, () => {}));
+        out.set(i, await renderTrackAlone(project, project.tracks[i].id, () => {}, ear));
         done++;
         show();
       }),
@@ -363,28 +365,36 @@ export function installAutoMix(deps: AutoMixDeps): void {
     }
     lock.busy = true;
     try {
-      const rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[] = [];
+      const rows: { name: string; role: string; lufs: number | null; peakDb: number | null; heard: string; notes: string[] }[] = [];
       const lufsOf = new Map<number, number>();
       // The whole song and every heard track alone, side by side.
       const wholeJob = renderOff(
         { sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, null), room: roomOf(project), tempoMap: tempoMapSec(project), raw: true },
         "measure",
       );
-      const measured = await measureTracks(project, [...heard], "診断しています");
+      const measured = await measureTracks(project, [...heard], "診断しています", true);
+      rollPanel.info.textContent = "診断しています…(曲全体)";
+      const whole = await wholeJob;
+      // How much of each is heard among the others (the ear model; the whole at its own loudness).
+      rollPanel.info.textContent = "診断しています…(聞こえ方)";
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const order = [...heard];
+      const ears = audibility(order.map((i) => measured.get(i)?.ear ?? null), whole.lufs);
+      const listened = project.tracks.map((t, i) => ({ name: t.name, role: roles[i], heard: ears[order.indexOf(i)] ?? null }));
+      // (Its cover named by track: the ear model counts among the heard ones only.)
+      for (const h of listened) if (h.heard && h.heard.coveredBy !== null) h.heard = { ...h.heard, coveredBy: order[h.heard.coveredBy] };
       for (const [i, t] of project.tracks.entries()) {
         if (!t.notes.length) continue;
         const notes = rollPanel.trackWarnings(i);
         if (!heard.has(i)) {
-          rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: null, peakDb: null, notes: [t.mute ? "ミュート中" : "ソロの外", ...notes] });
+          rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: null, peakDb: null, heard: "—", notes: [t.mute ? "ミュート中" : "ソロの外", ...notes] });
           continue;
         }
         const song = measured.get(i)!;
         const l = song.lufs;
         if (Number.isFinite(l) && l > -70) lufsOf.set(i, l);
-        rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: lufsOf.get(i) ?? null, peakDb: song.peakDb, notes });
+        rows.push({ name: t.name, role: ROLE_NAMES[roles[i]], lufs: lufsOf.get(i) ?? null, peakDb: song.peakDb, heard: heardCell(listened[i], listened), notes });
       }
-      rollPanel.info.textContent = "診断しています…(曲全体)";
-      const whole = await wholeJob;
       const song = { lufs: whole.lufs, peakDb: whole.truePeakDb, correlation: whole.correlation, sideDb: whole.sideDb, balanceDb: whole.balanceDb };
       // How wide: nearly mono, or so wide it falls apart on one speaker.
       const wide = `左右の相関 ${whole.correlation.toFixed(2)}・横の成分 ${whole.sideDb.toFixed(1)} dB`;
@@ -409,9 +419,11 @@ export function installAutoMix(deps: AutoMixDeps): void {
           // (The bass may sit over the lead by what ベースの強さ asks for.)
           const allowed = lead + 1 + (roles[i] === "bass" ? project.bassLevelDb : roles[i] === "chords" || roles[i] === "backing" || roles[i] === "harmony" ? project.chordsLevelDb : 0);
           if (roles[i] !== "lead" && roles[i] !== "audio" && roles[i] !== "drum" && l > allowed) points.push(`「${t.name}」(${ROLE_NAMES[roles[i]]})がメロディより ${(l - lead).toFixed(1)} dB 大きく、メロディを隠しがちです。`);
-          if (l < lead - 24) points.push(`「${t.name}」はメロディより ${(lead - l).toFixed(0)} dB 小さく、ほとんど聞こえません(要らなければミュート、要るなら音量を上げる)。`);
+          // (Unheard by the ear model is said below, with what covers it; this is for where it could not be measured.)
+          if (l < lead - 24 && !listened[i].heard) points.push(`「${t.name}」はメロディより ${(lead - l).toFixed(0)} dB 小さく、ほとんど聞こえません(要らなければミュート、要るなら音量を上げる)。`);
         }
       } else points.push("メロディのトラックがありません。ミックスの列で役割を「メロディ」にすると、自動の音量・EQ の基準になります。");
+      points.push(...buriedPoints(listened));
       const wet = project.tracks.filter((t, i) => heard.has(i) && t.fx.reverb.on);
       // (Many rooms at a little each are fine: counted only when they are also heavy on average.)
       const meanWet = wet.reduce((x, t) => x + t.fx.reverb.mix, 0) / Math.max(1, wet.length);

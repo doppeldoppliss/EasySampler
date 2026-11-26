@@ -2150,17 +2150,18 @@ export class RollPanel {
   }
 
   /** ミックスを診断する: the table of what was measured, and what stands out. */
-  showDiagnosis(rows: { name: string; role: string; lufs: number | null; peakDb: number | null; notes: string[] }[], song: { lufs: number; peakDb: number; correlation?: number; sideDb?: number; balanceDb?: number } | null, points: string[]): void {
+  showDiagnosis(rows: { name: string; role: string; lufs: number | null; peakDb: number | null; heard?: string; notes: string[] }[], song: { lufs: number; peakDb: number; correlation?: number; sideDb?: number; balanceDb?: number } | null, points: string[]): void {
     const f = (x: number | null, unit: string) => (x === null || !Number.isFinite(x) ? "—" : `${x.toFixed(1)} ${unit}`);
     const table = el("table", { className: "diagnosis-table fine" }, [
-      el("tr", {}, ["トラック", "役割", "大きさ", "ピーク", "気になる点"].map((h) => el("th", { textContent: h }))),
-      ...rows.map((r) => el("tr", {}, [r.name, r.role, f(r.lufs, "LUFS"), f(r.peakDb, "dB"), r.notes.join("・") || "—"].map((c) => el("td", { textContent: c })))),
+      el("tr", {}, ["トラック", "役割", "大きさ", "ピーク", "聞こえ", "気になる点"].map((h) => el("th", { textContent: h }))),
+      ...rows.map((r) => el("tr", {}, [r.name, r.role, f(r.lufs, "LUFS"), f(r.peakDb, "dB"), r.heard ?? "—", r.notes.join("・") || "—"].map((c) => el("td", { textContent: c })))),
     ]);
     this.diagnosis.replaceChildren(
       el("details", { open: true }, [
         el("summary", { textContent: `診断の結果${song ? `(曲全体 ${f(song.lufs, "LUFS")}・ピーク ${f(song.peakDb, "dBTP")}${song.correlation !== undefined ? `・左右の相関 ${song.correlation.toFixed(2)}・横の成分 ${f(song.sideDb ?? null, "dB")}${song.balanceDb !== undefined ? `・左右の差 ${Math.abs(song.balanceDb) < 0.05 ? "なし" : `${song.balanceDb > 0 ? "左" : "右"}に ${Math.abs(song.balanceDb).toFixed(1)} dB`}` : ""}` : ""})` : ""}` }),
         ...(points.length ? [el("ul", { className: "fine" }, points.map((p) => el("li", { textContent: p })))] : [el("p", { className: "fine", textContent: "目立った問題は見つかりませんでした。" })]),
         el("div", { className: "diagnosis-scroll" }, [table]),
+        el("p", { className: "fine", textContent: "聞こえ: そのトラックが鳴っている間、曲全体の聞こえの大きさのうちそのトラックが届いている分(耳のしくみをまねた推定。ほかの音に隠れた分は数えません)。かっこ内は主に隠している音と、その音域です。" }),
       ]),
     );
   }

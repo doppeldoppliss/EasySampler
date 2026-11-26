@@ -7,7 +7,7 @@
 import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
 import type { AutoPoint, MixSettings, Room } from "../song/player";
-import type { PreparedSource } from "./engine";
+import type { LongVibrato, PreparedSource } from "./engine";
 
 export interface TrackSpec extends MixSettings {
   id: string;
@@ -22,6 +22,8 @@ export interface TrackSpec extends MixSettings {
   drumKeys?: (number | null)[];
   /** Portamento (seconds; 0 or absent = off). */
   glide?: number;
+  /** 長い音にビブラート (null or absent = off). */
+  vibrato?: LongVibrato | null;
   /** On the plain backing: its tones' 音色 (SYNTH_PRESETS; absent = the default). */
   synth?: string;
 }

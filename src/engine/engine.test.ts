@@ -3,7 +3,7 @@ import { analyzePitch } from "../analysis/pyin";
 import { rootPitch } from "../analysis/rootPitch";
 import { DEFAULT_PARAMS, type InstrumentParams } from "../instrument/types";
 import { demoPhrasePitch, demoSyllable, synthVoice } from "../testsignals/synthVoice";
-import { Engine } from "./engine";
+import { Engine, longVibratoDelay, longVibratoDepth, longVibratoRamp } from "./engine";
 import { analyzeMaterial, prepareSource, resample } from "./prepare";
 
 const SR = 44100;
@@ -367,6 +367,57 @@ describe("vibrato and tremolo", () => {
       return Math.max(...levels) / Math.max(1e-6, Math.min(...levels));
     };
     expect(ripple(trem)).toBeGreaterThan(ripple(plain) * 2);
+  });
+});
+
+describe("長い音にビブラート", () => {
+  /** A song's note: on with its written length, held for it. */
+  function playNote(engine: Engine, note: number, lengthSec: number): Float32Array {
+    const total = Math.ceil((lengthSec + 0.1) * SR);
+    const out = new Float32Array(total);
+    const l = new Float32Array(128);
+    const r = new Float32Array(128);
+    engine.noteOn(note, 1, lengthSec);
+    let released = false;
+    for (let at = 0; at < total; at += 128) {
+      if (!released && at >= lengthSec * SR) {
+        engine.noteOff(note);
+        released = true;
+      }
+      engine.render(l, r);
+      out.set(l.subarray(0, Math.min(128, total - at)), at);
+    }
+    return out;
+  }
+  const spread = (out: Float32Array, from: number, to: number) => rootPitch(analyzePitch(out.slice(Math.round(from * SR), Math.round(to * SR)), SR))?.spread ?? 0;
+
+  it("a long note starts straight, then shakes more and more; a short one does not shake", () => {
+    const material = demoSyllable(SR);
+    const on = setup(material).engine;
+    on.setLongVibrato({ minSec: 0.5, depthCents: 60, rateHz: 5.5 });
+    const off = setup(material).engine;
+    const long = playNote(on, 62, 1.6);
+    const plain = playNote(off, 62, 1.6);
+    // Straight at first (it comes in after 0.48 s), growing until about 1.1 s, then at full depth.
+    expect(spread(long, 0.1, 0.4)).toBeLessThan(spread(plain, 0.1, 0.4) + 0.05);
+    expect(spread(long, 0.55, 0.8)).toBeGreaterThan(spread(plain, 0.55, 0.8));
+    expect(spread(long, 1.15, 1.55)).toBeGreaterThan(spread(long, 0.55, 0.8) * 1.5);
+    expect(spread(long, 1.15, 1.55)).toBeGreaterThan(spread(plain, 1.15, 1.55) + 0.2);
+    // A note written shorter than the setting: as without it.
+    const short = playNote(on, 62, 0.45);
+    const shortPlain = playNote(off, 62, 0.45);
+    expect(Math.abs(spread(short, 0.1, 0.45) - spread(shortPlain, 0.1, 0.45))).toBeLessThan(0.03);
+  });
+
+  it("comes in after a third of the note and grows over two fifths of it, within bounds", () => {
+    expect(longVibratoDelay(1)).toBeCloseTo(0.3, 6);
+    expect(longVibratoDelay(0.2)).toBe(0.15);
+    expect(longVibratoDelay(4)).toBe(0.5);
+    expect(longVibratoRamp(1)).toBeCloseTo(0.4, 6);
+    expect(longVibratoRamp(10)).toBe(1.2);
+    expect(longVibratoDepth(0)).toBe(0);
+    expect(longVibratoDepth(0.5)).toBeCloseTo(0.5, 6);
+    expect(longVibratoDepth(2)).toBe(1);
   });
 });
 

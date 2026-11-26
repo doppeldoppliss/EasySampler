@@ -49,6 +49,26 @@ export interface PreparedSource {
 
 const MAX_GRAINS = 16;
 
+/** 長い音にビブラート (a song track's, design.md 54): notes written at least `minSec` long; the depth (cents) and rate. */
+export interface LongVibrato {
+  minSec: number;
+  depthCents: number;
+  rateHz: number;
+}
+
+/**
+ * How a singer's vibrato comes into a held note: straight first (a third of the note, 0.15–0.5 s), then growing over
+ * about two fifths of it (0.3–1.2 s), smoothly, to its full depth, which it keeps to the end. A long note grows it
+ * slowly; a shorter one ends while it is still shallow.
+ */
+export const longVibratoDelay = (lengthSec: number) => Math.min(0.5, Math.max(0.15, 0.3 * lengthSec));
+export const longVibratoRamp = (lengthSec: number) => Math.min(1.2, Math.max(0.3, 0.4 * lengthSec));
+/** The depth's share (0–1) at `x` of the way through the growing (a smoothstep: no corner where it starts or ends). */
+export function longVibratoDepth(x: number): number {
+  const u = Math.max(0, Math.min(1, x));
+  return u * u * (3 - 2 * u);
+}
+
 // 波形合わせ (pitchMode "wsola", design.md 42): grains of a fixed length read at the shift's rate, each taken from where
 // the material best continues the one before (WSOLA). Nothing of it needs the material's periods, so what the analysis
 // finds no pitch in — chords, a synthesiser, a voice over music — moves as cleanly as a plain voice.
@@ -146,6 +166,11 @@ class Voice {
   stretchSpeed = 1;
   /** Voice seconds at which the note was let go (for the vibrato's release). */
   releasedAt = Infinity;
+  /** 長い音にビブラート: this note's depth (cents; 0 = a short note, none), and from when (voice seconds) it counts its delay. */
+  longVibCents = 0;
+  longVibFrom = 0;
+  longVibDelay = 0;
+  longVibRamp = 1;
   /** The pitch correction as it has glided in so far (semitones), for tune.retuneSec. */
   retuneCorr = 0;
   /** How far the sustain's pitch shaping has come in (0 in the head, up to 1 over SHAPE_IN_SEC after it). */
@@ -206,6 +231,8 @@ export class Engine {
   private hold = 1;
   /** Portamento (a song track's setting, seconds; 0 = off): a note that starts while another is held slides from it. */
   private glideSec = 0;
+  /** 長い音にビブラート (a song track's setting; null = off): notes written at least `minSec` long get it. */
+  private longVibrato: LongVibrato | null = null;
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
@@ -362,6 +389,28 @@ export class Engine {
     this.glideSec = Number.isFinite(sec) && sec > 0 ? Math.min(2, sec) : 0;
   }
 
+  /**
+   * 長い音にビブラート: a song note written at least `minSec` long gets a vibrato of its own (on top of the cut's),
+   * coming in after a part of the note — as a singer holds a note and then lets it shake. Shorter notes, and notes
+   * with no length (the keyboard), get none.
+   */
+  setLongVibrato(v: LongVibrato | null): void {
+    this.longVibrato = v && v.depthCents > 0 && v.minSec > 0 ? { ...v } : null;
+  }
+
+  /** A note's long-note vibrato, as it starts at voice time `from` (seconds). */
+  private markLongVibrato(v: Voice, lengthSec: number | undefined, from: number): void {
+    const lv = this.longVibrato;
+    if (!lv || lengthSec === undefined || lengthSec < lv.minSec) {
+      v.longVibCents = 0;
+      return;
+    }
+    v.longVibCents = lv.depthCents;
+    v.longVibFrom = from;
+    v.longVibDelay = longVibratoDelay(lengthSec);
+    v.longVibRamp = longVibratoRamp(lengthSec);
+  }
+
   /** The read position moved past any removed stretch it has landed in. */
   private skipRemoved(position: number): number {
     for (let i = 0; i < this.removedStart.length; i++) {
@@ -412,6 +461,8 @@ export class Engine {
         if (holds) {
           held.note = note;
           this.glide(held, from - note);
+          // (Legato: the same voice goes on; the new note's vibrato counts from now.)
+          this.markLongVibrato(held, lengthSec, held.nextCenter / this.sampleRate);
           return;
         }
         this.fadeOut(held, STEAL_FADE_SEC);
@@ -419,6 +470,7 @@ export class Engine {
         this.start(voice, note, velocity);
         this.glide(voice, from - note);
         voice.stretchSpeed = this.stretchSpeedFor(lengthSec ?? this.hold);
+        this.markLongVibrato(voice, lengthSec, 0);
         return;
       }
     }
@@ -431,6 +483,7 @@ export class Engine {
     const voice = this.voices.find((v) => !v.active) ?? this.voices.reduce((a, b) => (b.startOrder < a.startOrder ? b : a));
     this.start(voice, note, velocity);
     voice.stretchSpeed = this.stretchSpeedFor(lengthSec !== undefined && lengthSec > 0 ? lengthSec : this.hold);
+    this.markLongVibrato(voice, lengthSec, 0);
   }
 
   private glide(v: Voice, semitones: number): void {
@@ -538,6 +591,7 @@ export class Engine {
     v.driftValue = 0;
     v.driftTarget = 0;
     v.driftCountdown = 0;
+    v.longVibCents = 0;
     for (const g of v.grains) g.active = false;
     // (`force` may be missing from settings kept before it existed: then it is off.)
     if (params.force && params.force.mode !== "off") {
@@ -639,6 +693,11 @@ export class Engine {
     let cents = 0;
     if (w.vibratoCents > 0) {
       cents += w.vibratoCents * this.vibratoEnvelope(v, seconds) * Math.sin(2 * Math.PI * (w.vibratoHz * seconds + w.vibratoPhase));
+    }
+    if (v.longVibCents > 0 && this.longVibrato) {
+      // (From where it comes in, at phase 0: no jump as it starts.)
+      const t = seconds - v.longVibFrom - v.longVibDelay;
+      if (t > 0) cents += v.longVibCents * longVibratoDepth(t / v.longVibRamp) * Math.sin(2 * Math.PI * this.longVibrato.rateHz * t);
     }
     if (w.driftCents > 0) {
       if (v.driftCountdown <= 0) {

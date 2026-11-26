@@ -58,6 +58,8 @@ export interface Track {
   main: boolean;
   /** 強調, set by hand (ミックス view): 音量を合わせる puts it a little over the others of its part (EMPHASIS_DB). */
   emphasis: boolean;
+  /** 長い音にビブラート (TrackVibrato). */
+  vibrato: TrackVibrato;
   /** ハモリ (a melodic track): notes added in the key, played by the same cut. */
   harmony: Harmony;
   /** What a note placed on this track gets: its length (beats) and velocity (0–1) (Domino's default Gate / Velocity). */
@@ -221,8 +223,29 @@ export function setTimeSig(project: Project, num: number, den: number): void {
 /** A track that plays the plain backing synth (簡易シンセ) instead of a cut: what a MIDI file's parts start on. */
 export const BACKING = "backing";
 
+/**
+ * 長い音にビブラート (design.md 54): on a track playing a cut, notes at least `minBeats` long shake, coming in and
+ * growing as a singer's do (engine.ts, longVibratoDelay / Ramp). The depth's choices (cents, to either side) and the
+ * rate, a singer's: about 5.5 a second.
+ */
+export interface TrackVibrato {
+  on: boolean;
+  minBeats: number;
+  depthCents: number;
+}
+export const DEFAULT_TRACK_VIBRATO: TrackVibrato = { on: false, minBeats: 1, depthCents: 35 };
+export const VIBRATO_RATE_HZ = 5.5;
+export const VIBRATO_MIN_BEATS: readonly [number, string][] = [[0.5, "8 分音符"], [1, "4 分音符(1 拍)"], [2, "2 分音符(2 拍)"], [4, "全音符(4 拍)"]];
+export const VIBRATO_DEPTHS: readonly [number, string][] = [[20, "浅め"], [35, "ふつう"], [60, "深め"]];
+
+/** A track's setting as the engine takes it (null: off). Its length in seconds at the song's tempo. */
+export function longVibratoOf(t: Pick<Track, "vibrato">, bpm: number): { minSec: number; depthCents: number; rateHz: number } | null {
+  const v = t.vibrato;
+  return v?.on && bpm > 0 ? { minSec: (v.minBeats * 60) / bpm, depthCents: v.depthCents, rateHz: VIBRATO_RATE_HZ } : null;
+}
+
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, synth: DEFAULT_SYNTH, role: null, main: false, emphasis: false, harmony: structuredClone(DEFAULT_HARMONY), noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
+  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, synth: DEFAULT_SYNTH, role: null, main: false, emphasis: false, vibrato: { ...DEFAULT_TRACK_VIBRATO }, harmony: structuredClone(DEFAULT_HARMONY), noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
 }
 
 /** An audio track: clips of materials on the timeline (a new clip plays `material`). */
@@ -432,6 +455,12 @@ export function shifted(notes: readonly Note[], dBeats: number, dPitch: number):
 }
 
 /** A project read back from storage or a file: anything missing or odd is put right. */
+function sanitizeVibrato(raw: unknown): TrackVibrato {
+  const v = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const pick = (x: unknown, from: readonly (readonly [number, string])[], d: number) => (typeof x === "number" && from.some(([k]) => k === x) ? x : d);
+  return { on: v.on === true, minBeats: pick(v.minBeats, VIBRATO_MIN_BEATS, DEFAULT_TRACK_VIBRATO.minBeats), depthCents: pick(v.depthCents, VIBRATO_DEPTHS, DEFAULT_TRACK_VIBRATO.depthCents) };
+}
+
 function sanitizeHarmony(raw: unknown): Harmony {
   const h = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const voices = Array.isArray(h.voices) ? [...new Set(h.voices.filter((v): v is number => Number.isInteger(v) && v !== 0 && Math.abs(v) <= 14))] : [...DEFAULT_HARMONY.voices];
@@ -496,6 +525,7 @@ export function sanitizeProject(raw: unknown): Project {
           role: typeof tr.role === "string" && ROLES.includes(tr.role as Role) ? (tr.role as Role) : null,
           main: tr.main === true,
           emphasis: tr.emphasis === true,
+          vibrato: sanitizeVibrato(tr.vibrato),
           harmony: sanitizeHarmony(tr.harmony),
           noteLength: num(tr.noteLength, 1, MIN_LENGTH, 64),
           noteVelocity: num(tr.noteVelocity, DEFAULT_VELOCITY, 0.01, 1),

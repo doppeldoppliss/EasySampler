@@ -2804,7 +2804,7 @@ export class RollPanel {
     const fx = structuredClone(t.fx);
     change(fx);
     // (An effect the automatic mixing put in, once changed by hand, is the user's: it leaves it be from then on.)
-    for (const k of ["eq", "duck", "reverb"] as const) {
+    for (const k of ["eq", "duck", "reverb", "transient"] as const) {
       const { auto: _was, ...before } = t.fx[k];
       const { auto: _now, ...after } = fx[k];
       if (fx[k].auto && JSON.stringify(before) !== JSON.stringify(after)) delete fx[k].auto;

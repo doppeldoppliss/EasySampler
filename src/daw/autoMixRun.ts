@@ -7,7 +7,8 @@ import { DEFAULT_FX, type FxSettings } from "../instrument/types";
 import { fitBalance, nearestStyle, type BalanceChoice } from "../fx/balance";
 import type { AutoPoint } from "../song/player";
 import type { RollPanel } from "../ui/rollPanel";
-import { balanceGains, cleanEq, lowCutFor, madeByAuto, maskingDip } from "./autoMix";
+import { balanceGains, cleanEq, lowCutFor, madeByAuto, maskingDip, PUNCH_DB, PUNCH_STEPS, punchAttack } from "./autoMix";
+import { KICK_KEYS } from "../song/player";
 import { BACKING, MAX_TRACK_GAIN, roomOf, tempoMapSec, withHarmony, type Tempo } from "./model";
 import { renderOff, type RenderMeasure } from "./renderClient";
 import { audibility } from "../audio/ear";
@@ -158,6 +159,63 @@ export function installAutoMix(deps: AutoMixDeps): void {
     }
   }
   rollPanel.onDensify = () => void densify();
+
+  /**
+   * キックの芯を残す (design.md 51): the song through the master (as 密度を上げる measures it) with the kick's drum
+   * tracks given a transient attack of 0 and each of PUNCH_STEPS, side by side; the least that brings the kick's
+   * punch up to PUNCH_DB goes in (marked automatic). One set by hand is kept.
+   */
+  async function keepPunch(): Promise<void> {
+    if (lock.busy) return;
+    const project = rollPanel.snapshot();
+    const heard = new Set(heardTracks(project));
+    const drums = project.tracks.flatMap((t, i) => (heard.has(i) && t.kind === "drum" && t.notes.some((n) => KICK_KEYS.includes(n.pitch)) ? [i] : []));
+    if (!drums.length) {
+      rollPanel.info.textContent = "キック(ドラムトラックの 35・36 番の音符)がないので、キックの立ち上がりは見ていません。";
+      return;
+    }
+    if (drums.some((i) => project.tracks[i].fx.transient.on && !project.tracks[i].fx.transient.auto)) {
+      rollPanel.info.textContent = "ドラムのトランジェントは自分で入れてあるので、そのままにしました。";
+      return;
+    }
+    lock.busy = true;
+    try {
+      const masterFx = structuredClone(project.masterFx);
+      masterFx.clip = { ...masterFx.clip, on: false };
+      masterFx.limiter = { ...masterFx.limiter, on: false };
+      const transient = (attackDb: number): FxSettings["transient"] => (attackDb ? { on: true, auto: true, attackDb, sustainDb: 0 } : { ...DEFAULT_FX.transient });
+      let done = 0;
+      const steps = [0, ...PUNCH_STEPS];
+      rollPanel.info.textContent = `キックの立ち上がりを測っています… 0 / ${steps.length}`;
+      const tried = await Promise.all(
+        steps.map(async (attackDb) => {
+          const p = structuredClone(project);
+          for (const i of drums) p.tracks[i].fx.transient = transient(attackDb);
+          const m = await renderOff({ sampleRate: deps.sampleRate(), bpm: p.bpm, tracks: songTracks(p, null, null), masterFx, room: roomOf(p), tempoMap: tempoMapSec(p), raw: true }, "measure", undefined, { punch: true });
+          rollPanel.info.textContent = `キックの立ち上がりを測っています… ${++done} / ${steps.length}`;
+          return { attackDb, punchDb: m.punchDb ?? NaN };
+        }),
+      );
+      const attack = punchAttack(tried);
+      const at = (a: number) => tried.find((t) => t.attackDb === a)!.punchDb.toFixed(1);
+      const fxs = project.tracks.map((t, i) => {
+        if (!drums.includes(i)) return null;
+        const next = transient(attack);
+        if (!next.on && !t.fx.transient.on) return null;
+        return { ...structuredClone(t.fx), transient: next };
+      });
+      const names = drums.map((i) => `「${project.tracks[i].name}」`).join("・");
+      const said = attack
+        ? `${names}のトランジェントのアタックを +${attack} dB にしました(低音でのキックの立ち上がり ${at(0)} → ${at(attack)} dB、目安 ${PUNCH_DB} dB 以上)。「元に戻す」で戻せます。`
+        : Number(at(0)) >= PUNCH_DB
+          ? `キックの立ち上がりは ${at(0)} dB で、目安(${PUNCH_DB} dB 以上)に届いています。`
+          : `キックの立ち上がりは ${at(0)} dB で目安(${PUNCH_DB} dB)より弱めですが、ドラムのアタックを上げてもほとんど変わらないので入れていません(ベースを少し下げると出ます)。`;
+      if (fxs.some(Boolean)) rollPanel.applyTrackFx(fxs, said);
+      else rollPanel.info.textContent = said;
+    } finally {
+      lock.busy = false;
+    }
+  }
 
   /** One track as the song plays it (its effects, its volume; no master), offline: what the automatic mixing measures. */
   async function renderTrackAlone(project: Snapshot, id: string, say: (share: number) => void, ear = false): Promise<RenderMeasure> {
@@ -341,6 +399,9 @@ export function installAutoMix(deps: AutoMixDeps): void {
     said.push("マスター EQ: 下の「音域のバランス」に結果があります。");
     await autoWidth();
     note("広がり");
+    // (Before 密度を上げる: a sharper kick moves the peaks it rounds.)
+    await keepPunch();
+    note("キックの立ち上がり");
     await densify();
     note("密度");
     // Last, the diagnosis of what came out (it changes nothing).
@@ -371,6 +432,8 @@ export function installAutoMix(deps: AutoMixDeps): void {
       const wholeJob = renderOff(
         { sampleRate: deps.sampleRate(), bpm: project.bpm, tracks: songTracks(project, null, null), masterFx: project.masterFx, masterAuto: renderLine(project.masterAuto, project, null), room: roomOf(project), tempoMap: tempoMapSec(project), raw: true },
         "measure",
+        undefined,
+        { punch: true },
       );
       const measured = await measureTracks(project, [...heard], "診断しています", true);
       rollPanel.info.textContent = "診断しています…(曲全体)";
@@ -424,6 +487,10 @@ export function installAutoMix(deps: AutoMixDeps): void {
         }
       } else points.push("メロディのトラックがありません。ミックスの列で役割を「メロディ」にすると、自動の音量・EQ の基準になります。");
       points.push(...buriedPoints(listened));
+      // The kick through the bass (only with a kick to hit: a song without one has no punch to lose).
+      const kicks = project.tracks.some((t, i) => heard.has(i) && t.kind === "drum" && t.notes.some((n) => KICK_KEYS.includes(n.pitch)));
+      if (kicks && whole.punchDb !== undefined && whole.punchDb < PUNCH_DB - 1)
+        points.push(`キックの立ち上がりが弱めです(低音で ${whole.punchDb.toFixed(1)} dB、目安 ${PUNCH_DB} dB 以上)。ベースに埋もれて「ドン」が丸く聞こえやすいので、ドラムのトランジェントでアタックを上げるか、ベースを少し下げてください(「まとめて自動ミックス」はトランジェントを自動で入れます)。`);
       const wet = project.tracks.filter((t, i) => heard.has(i) && t.fx.reverb.on);
       // (Many rooms at a little each are fine: counted only when they are also heavy on average.)
       const meanWet = wet.reduce((x, t) => x + t.fx.reverb.mix, 0) / Math.max(1, wet.length);

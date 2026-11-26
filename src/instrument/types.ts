@@ -177,7 +177,8 @@ export interface FxSettings {
    */
   stutter: { on: boolean; steps: boolean[]; stepBeats: StepBeats; sliceBeats: SliceBeats; fade: number };
   /** Transient shaper: dB on the attack and on what follows it. */
-  transient: { on: boolean; attackDb: number; sustainDb: number };
+  /** (`auto`: put on a drum track by まとめて自動ミックス to keep the kick's punch; editing it by hand clears it.) */
+  transient: { on: boolean; auto?: boolean; attackDb: number; sustainDb: number };
   /** Compressor: above the threshold the level rises by 1/ratio; attack / release (ms); make-up gain. */
   compressor: { on: boolean; thresholdDb: number; ratio: number; attackMs: number; releaseMs: number; makeupDb: number };
   /** EQ: low cut, low shelf, one bell, high shelf, high cut (a cut at 0 / ≥ 20 kHz is off). */

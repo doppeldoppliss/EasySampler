@@ -184,6 +184,30 @@ export function kickDuck(role: Role, bpm: number, duck: FxSettings["duck"], leng
   return { ...duck, on: true, auto: true, source: "kick", depthDb, releaseMs };
 }
 
+// ------------------------------------------------------------ the kick's punch
+
+/**
+ * キックの芯を残す (design.md 51): the kick's punch under 150 Hz (audio/punch.ts) a mix should have at least (dB) —
+ * finished songs 8.5 and 10.7, a very loud one 6.6; a real song's hand mix 8.6 and its automatic mix 6.9 — and the
+ * drum track's transient attacks tried to get there.
+ */
+export const PUNCH_DB = 8;
+export const PUNCH_STEPS: readonly number[] = [2, 3, 4, 5];
+
+/**
+ * The attack (dB, 0 = none) from what each one gave (`tried` holds 0 too): none when the mix has the punch already,
+ * else the least that reaches it, else the most tried if it brings at least half a dB.
+ */
+export function punchAttack(tried: readonly { attackDb: number; punchDb: number }[]): number {
+  const none = tried.find((t) => t.attackDb === 0);
+  if (!none || !Number.isFinite(none.punchDb) || none.punchDb >= PUNCH_DB) return 0;
+  const up = tried.filter((t) => t.attackDb > 0 && Number.isFinite(t.punchDb)).sort((a, b) => a.attackDb - b.attackDb);
+  const enough = up.find((t) => t.punchDb >= PUNCH_DB);
+  if (enough) return enough.attackDb;
+  const most = up[up.length - 1];
+  return most && most.punchDb >= none.punchDb + 0.5 ? most.attackDb : 0;
+}
+
 // ------------------------------------------------------------ octaves
 
 /**

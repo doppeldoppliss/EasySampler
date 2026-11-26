@@ -4,6 +4,7 @@
 
 import { integratedLoudness, stereoImage, truePeak } from "../audio/loudness";
 import { earPattern, type EarPattern } from "../audio/ear";
+import { lowPunchDb } from "../audio/punch";
 import { bandSpectrum } from "../fx/balance";
 import { roundingFor, type Rounding } from "../fx/clip";
 import type { RenderedSong } from "./songRender";
@@ -26,6 +27,8 @@ export interface RenderMeasure {
   rounding?: Rounding | null;
   /** Asked for with `ear`: the excitation in both ears (audio/ear.ts). */
   ear?: EarPattern;
+  /** Asked for with `punch`: how hard the kick hits through the rest (audio/punch.ts, dB). */
+  punchDb?: number;
 }
 
 /** ピークを丸める for this peak over the loudness, no further under the peak than this. */
@@ -38,6 +41,7 @@ export interface RoundingAsk {
 export interface MeasureAsk {
   rounding?: RoundingAsk;
   ear?: boolean;
+  punch?: boolean;
 }
 
 const dB = (x: number) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
@@ -54,5 +58,6 @@ export function measureSong(song: RenderedSong, ask: MeasureAsk = {}): RenderMea
     ...stereoImage(l, r, song.sampleRate),
     ...(ask.rounding ? { rounding: roundingFor(l, r, song.sampleRate, ask.rounding.targetPlr, ask.rounding.maxUnderPeakDb) } : {}),
     ...(ask.ear ? { ear: earPattern(l, r, song.sampleRate) } : {}),
+    ...(ask.punch ? { punchDb: lowPunchDb(l, r, song.sampleRate) } : {}),
   };
 }

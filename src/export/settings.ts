@@ -243,7 +243,7 @@ export function sanitizeFx(raw: unknown): FxSettings {
       thresholdDb: clamp(num(du.thresholdDb, d.duck.thresholdDb), -60, 0),
     },
     gate: { on: on(g), steps: steps(g.steps, d.gate.steps), stepBeats: stepBeats(g.stepBeats, d.gate.stepBeats), depth: clamp(num(g.depth, d.gate.depth), 0, 1), smoothMs: clamp(num(g.smoothMs, d.gate.smoothMs), 2, 50) },
-    transient: { on: on(t), attackDb: clamp(num(t.attackDb, d.transient.attackDb), -24, 24), sustainDb: clamp(num(t.sustainDb, d.transient.sustainDb), -24, 24) },
+    transient: { on: on(t), ...(t.auto === true ? { auto: true } : {}), attackDb: clamp(num(t.attackDb, d.transient.attackDb), -24, 24), sustainDb: clamp(num(t.sustainDb, d.transient.sustainDb), -24, 24) },
     compressor: {
       on: on(co),
       thresholdDb: clamp(num(co.thresholdDb, d.compressor.thresholdDb), -60, 0),

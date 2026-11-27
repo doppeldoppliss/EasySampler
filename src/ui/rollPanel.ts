@@ -54,6 +54,8 @@ import {
   noteBendsOf,
   phraseMarks,
   phraseRestsOf,
+  stepsFrom,
+  LINK_CHOICES,
   SCOOP_CHOICES,
   FALL_CHOICES,
   VIBRATO_RANGES,
@@ -374,6 +376,7 @@ export class RollPanel {
   // しゃくり・フォール: how deep each (なし = off).
   private readonly scoopSelect = el("select", { ariaLabel: "しゃくり" }, [...SCOOP_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })), el("option", { value: "custom", textContent: "数値" })]);
   private readonly fallSelect = el("select", { ariaLabel: "フォール" }, [...FALL_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })), el("option", { value: "custom", textContent: "数値" })]);
+  private readonly linkSelect = el("select", { ariaLabel: "音程のつなぎ" }, [...LINK_CHOICES.map((c, k) => el("option", { value: String(k), textContent: c.label })), el("option", { value: "custom", textContent: "数値" })]);
   private readonly bendsNote = el("span", { className: "fine" });
   // 数値: every number of the two, in a fold (design.md 56). Each field: where it reads and writes the selected track.
   private readonly expressionFields: { input: HTMLInputElement; read: (t: Track) => number }[] = [];
@@ -400,6 +403,7 @@ export class RollPanel {
     el("div", { className: "row", title: "しゃくり: フレーズの最初の音符(前に休みがある音)と、1 秒以上伸ばす音符を、少し下からすくい上げて鳴らします。フォール: フレーズの最後の音符(後ろに休みがある音)の終わりで、音程を落とします" }, [
       el("label", { className: "inline" }, ["しゃくり ", this.scoopSelect]),
       el("label", { className: "inline" }, ["フォール ", this.fallSelect]),
+      el("label", { className: "inline", title: "フレーズの途中で音の高さが変わるとき、前の音の側から入って、新しい音程を少し行き過ぎてから落ち着きます(階段のように切り替わるのを和らげます)" }, ["音程のつなぎ ", this.linkSelect]),
       this.bendsNote,
     ]),
     this.expressionFold,
@@ -665,6 +669,7 @@ export class RollPanel {
     fromMenu(this.vibratoDepth, (v) => (this.track.vibrato = { ...this.track.vibrato, depthCents: v }));
     fromMenu(this.scoopSelect, (v) => (this.track.bends = { ...this.track.bends, scoop: v }));
     fromMenu(this.fallSelect, (v) => (this.track.bends = { ...this.track.bends, fall: v }));
+    fromMenu(this.linkSelect, (k) => (this.track.bends = { ...this.track.bends, link: LINK_CHOICES[k].link, linkOver: LINK_CHOICES[k].linkOver }));
     // The numbers: each kept inside its range; a share shown as a percentage.
     const field = (label: string, unit: string, range: readonly [number, number, number], read: (t: Track) => number, write: (t: Track, v: number) => void, scale = 1) => {
       const input = el("input", { type: "number", min: String(range[0] * scale), max: String(range[1] * scale), step: String(range[2] * scale), ariaLabel: label });
@@ -685,6 +690,13 @@ export class RollPanel {
       el("div", { className: "row" }, [el("span", { className: "fine", textContent: "音符の頭から" }), vib("startShare", "まっすぐな部分", "%", 100), vib("growShare", "そのあと深くなる部分", "%", 100)]),
       el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "しゃくり" }), bend("scoop", "深さ", "半音"), bend("scoopSec", "時間", "秒")]),
       el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "フォール" }), bend("fall", "深さ", "半音"), bend("fallSec", "時間", "秒"), bend("fallMinSec", "かける最短の音符", "秒")]),
+      el("div", { className: "row" }, [
+        el("strong", { className: "fine", textContent: "音程のつなぎ" }),
+        field("前の音の側から", "%", BENDS_RANGES.link, (t) => t.bends.link, (t, v) => (t.bends = { ...t.bends, link: v }), 100),
+        field("行き過ぎ", "%", BENDS_RANGES.linkOver, (t) => t.bends.linkOver, (t, v) => (t.bends = { ...t.bends, linkOver: v }), 100),
+        bend("linkSec", "行き過ぎまでの時間", "秒"),
+        el("span", { className: "fine", textContent: "(% は音程の差に対して。前の側は 3 半音、行き過ぎは 1 半音まで)" }),
+      ]),
       el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "フレーズの区切り" }), bend("restBefore", "前に休み", "拍以上で始まり"), bend("restAfter", "後ろに休み", "拍以上で終わり")]),
       el("p", { className: "fine", textContent: "深さ 0 はかけません。まっすぐな部分・深くなる部分は 1 秒前後の音符でのおよその割合です(短い音符・長い音符では、自然に聞こえるよう少し縮み・伸びます)。しゃくりは、フレーズの始まりと 1 秒以上伸ばす音符にかかります。" }),
     );
@@ -1334,8 +1346,11 @@ export class RollPanel {
     const t = this.track;
     this.scoopSelect.value = menuValue(SCOOP_CHOICES, t.bends.scoop);
     this.fallSelect.value = menuValue(FALL_CHOICES, t.bends.fall);
+    const link = LINK_CHOICES.findIndex((c) => Math.abs(c.link - t.bends.link) < 1e-9 && Math.abs(c.linkOver - t.bends.linkOver) < 1e-9);
+    this.linkSelect.value = link >= 0 ? String(link) : "custom";
     this.showExpressionNumbers();
-    if (!t.bends.scoop && !t.bends.fall) {
+    const linking = t.bends.link > 0 || t.bends.linkOver > 0;
+    if (!t.bends.scoop && !t.bends.fall && !linking) {
       this.bendsNote.textContent = "";
       return;
     }
@@ -1344,10 +1359,12 @@ export class RollPanel {
       return;
     }
     const rests = phraseRestsOf(t);
-    const marks = phraseMarks([...t.notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch), rests.before, rests.after);
+    const sorted = [...t.notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+    const marks = phraseMarks(sorted, rests.before, rests.after);
     const starts = marks.filter((m) => m & 1).length;
     const ends = marks.filter((m) => m & 2).length;
-    this.bendsNote.textContent = `フレーズの始まり ${starts} か所・終わり ${ends} か所`;
+    const steps = linking && !(t.glide > 0) ? stepsFrom(sorted, marks).filter((s) => s !== 0).length : 0;
+    this.bendsNote.textContent = `フレーズの始まり ${starts} か所・終わり ${ends} か所${linking ? (t.glide > 0 ? "・ポルタメント中は音程のつなぎはかかりません" : `・音程のつなぎ ${steps} か所`) : ""}`;
   }
 
   /** The roll shows the selected track: keys for a melodic one, its rows for a drum track. */

@@ -256,10 +256,24 @@ export interface TrackBends {
   fallMinSec: number;
   restBefore: number;
   restAfter: number;
+  /**
+   * 音程のつなぎ (design.md 57): inside a phrase, a note that steps from the one before starts `link` of the step back
+   * toward it (0 = none), goes `linkOver` of it past its own pitch, and settles; `linkSec` to reach the far side.
+   */
+  link: number;
+  linkOver: number;
+  linkSec: number;
 }
-export const DEFAULT_TRACK_BENDS: TrackBends = { scoop: 0, fall: 0, scoopSec: 0.12, fallSec: 0.3, fallMinSec: 0.25, restBefore: 0.25, restAfter: 0.5 };
+export const DEFAULT_TRACK_BENDS: TrackBends = { scoop: 0, fall: 0, scoopSec: 0.12, fallSec: 0.3, fallMinSec: 0.25, restBefore: 0.25, restAfter: 0.5, link: 0, linkOver: 0, linkSec: 0.07 };
 export const SCOOP_CHOICES: readonly [number, string][] = [[0, "なし"], [1, "浅め"], [2, "ふつう"], [3, "深め"]];
 export const FALL_CHOICES: readonly [number, string][] = [[0, "なし"], [2, "浅め"], [4, "ふつう"], [7, "深め"]];
+/** 音程のつなぎ's steps: how far back toward the note before, and past (shares of the step). */
+export const LINK_CHOICES: readonly { label: string; link: number; linkOver: number }[] = [
+  { label: "なし", link: 0, linkOver: 0 },
+  { label: "浅め", link: 0.2, linkOver: 0.1 },
+  { label: "ふつう", link: 0.35, linkOver: 0.2 },
+  { label: "深め", link: 0.5, linkOver: 0.35 },
+];
 
 /** What each number may be set to (数値): [least, most, step]. Saved values are kept inside. */
 export const VIBRATO_RANGES: Record<Exclude<keyof TrackVibrato, "on">, readonly [number, number, number]> = {
@@ -277,12 +291,15 @@ export const BENDS_RANGES: Record<keyof TrackBends, readonly [number, number, nu
   fallMinSec: [0.05, 1, 0.01],
   restBefore: [0.125, 2, 0.125],
   restAfter: [0.125, 2, 0.125],
+  link: [0, 1, 0.05],
+  linkOver: [0, 1, 0.05],
+  linkSec: [0.02, 0.3, 0.01],
 };
 
-/** A track's しゃくり・フォール as the engine takes it (null: neither). */
-export function noteBendsOf(t: Pick<Track, "bends">): { scoopSemis: number; fallSemis: number; scoopSec: number; fallSec: number; fallMinSec: number } | null {
+/** A track's しゃくり・フォール・音程のつなぎ as the engine takes it (null: none of them). */
+export function noteBendsOf(t: Pick<Track, "bends">): { scoopSemis: number; fallSemis: number; scoopSec: number; fallSec: number; fallMinSec: number; linkStart: number; linkOver: number; linkSec: number } | null {
   const b = t.bends;
-  return b && (b.scoop > 0 || b.fall > 0) ? { scoopSemis: b.scoop, fallSemis: b.fall, scoopSec: b.scoopSec, fallSec: b.fallSec, fallMinSec: b.fallMinSec } : null;
+  return b && (b.scoop > 0 || b.fall > 0 || b.link > 0 || b.linkOver > 0) ? { scoopSemis: b.scoop, fallSemis: b.fall, scoopSec: b.scoopSec, fallSec: b.fallSec, fallMinSec: b.fallMinSec, linkStart: b.link, linkOver: b.linkOver, linkSec: b.linkSec } : null;
 }
 
 /** The rests (beats) a track reads its phrases by (しゃくり・フォール). */
@@ -462,6 +479,8 @@ export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false, r
   const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   const out: SeqNote[] = [];
   const phrases = phraseMarks(sorted, rests?.before, rests?.after);
+  // (With portamento the notes slide into each other already: no step of their own.)
+  const steps = legato ? null : stepsFrom(sorted, phrases);
   for (let i = 0; i < sorted.length; i++) {
     const n = sorted[i];
     let end = n.start + n.length;
@@ -473,7 +492,31 @@ export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false, r
     }
     let endSec = beatsToSec(Math.max(n.start + MIN_LENGTH, end), bpm);
     if (legato && sorted.some((m) => m.pitch !== n.pitch && m.start > n.start && Math.abs(m.start - end) < 1e-6)) endSec += LEGATO_OVERLAP_SEC;
-    out.push({ start: beatsToSec(n.start, bpm), end: endSec, note: n.pitch, velocity: n.velocity, drum: false, ...(phrases[i] ? { phrase: phrases[i] } : {}) });
+    out.push({ start: beatsToSec(n.start, bpm), end: endSec, note: n.pitch, velocity: n.velocity, drum: false, ...(phrases[i] ? { phrase: phrases[i] } : {}), ...(steps?.[i] ? { fromSemis: steps[i] } : {}) });
+  }
+  return out;
+}
+
+/**
+ * 音程のつなぎ (design.md 57): for each note (sorted by start) inside a phrase, the note before it less this one
+ * (semitones; 0 at a phrase's start or the same pitch). "Before it" is the last onset before; of its notes, the one
+ * nearest in pitch (a chord's voices each follow their own).
+ */
+export function stepsFrom(sorted: readonly Pick<Note, "start" | "pitch">[], marks: readonly number[]): number[] {
+  const out = sorted.map(() => 0);
+  let prev: number[] = [];
+  let i = 0;
+  while (i < sorted.length) {
+    let j = i;
+    while (j < sorted.length && Math.abs(sorted[j].start - sorted[i].start) < 1e-6) j++;
+    for (let k = i; k < j; k++) {
+      if (marks[k] & PHRASE_START || !prev.length) continue;
+      const p = sorted[k].pitch;
+      const near = prev.reduce((a, b) => (Math.abs(b - p) < Math.abs(a - p) ? b : a));
+      out[k] = near - p;
+    }
+    prev = sorted.slice(i, j).map((n) => n.pitch);
+    i = j;
   }
   return out;
 }

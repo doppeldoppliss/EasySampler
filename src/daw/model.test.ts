@@ -14,11 +14,11 @@ describe("daw model", () => {
 
   it("turns beats into seconds at the tempo, and cuts a same-pitch overlap where the next note starts", () => {
     const seq = toSeqNotes([note(0, 2, 60), note(1, 1, 60), note(1, 1, 64)], 120);
-    // (Each with its place in its phrase: the first starts it, the chord that follows ends it.)
+    // (Each with its place in its phrase: the first starts it, the chord that follows ends it; E4 steps up from C4.)
     expect(seq).toEqual([
       { start: 0, end: 0.5, note: 60, velocity: 0.8, drum: false, phrase: 1 },
       { start: 0.5, end: 1, note: 60, velocity: 0.8, drum: false, phrase: 2 },
-      { start: 0.5, end: 1, note: 64, velocity: 0.8, drum: false, phrase: 2 },
+      { start: 0.5, end: 1, note: 64, velocity: 0.8, drum: false, phrase: 2, fromSemis: -4 },
     ]);
   });
 

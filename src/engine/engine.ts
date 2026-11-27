@@ -83,6 +83,30 @@ export interface NoteBends {
   scoopSec?: number;
   fallSec?: number;
   fallMinSec?: number;
+  /**
+   * 音程のつなぎ (design.md 57): a note whose pitch steps from the one before inside a phrase starts this share of
+   * the step back toward it, goes `linkOver` of the step past its own pitch, and settles; reaching the far side
+   * takes `linkSec` (0 / absent: none).
+   */
+  linkStart?: number;
+  linkOver?: number;
+  linkSec?: number;
+}
+/** 音程のつなぎ: at most this far back toward the note before, and this far past (semitones), however wide the step. */
+export const LINK_START_MOST = 3;
+export const LINK_OVER_MOST = 1;
+/** Settling back from past the pitch takes this times as long as getting there. */
+const LINK_SETTLE = 1.5;
+/**
+ * The step's bend (semitones) at time `t` into the note: from `from` (toward the note before) smoothly over to
+ * `past` (beyond its pitch) in `toSec`, then smoothly back onto it in LINK_SETTLE × as long.
+ */
+export function linkBend(t: number, from: number, past: number, toSec: number): number {
+  if (t < 0) return from;
+  if (t < toSec) return from + (past - from) * (1 - Math.cos((Math.PI * t) / toSec)) / 2;
+  const back = toSec * LINK_SETTLE;
+  if (t < toSec + back) return (past * (1 + Math.cos((Math.PI * (t - toSec)) / back))) / 2;
+  return 0;
 }
 /**
  * しゃくり: notes held at least this long get it besides a phrase's first (at 0.4 s every quarter note at 120 got it,
@@ -218,6 +242,10 @@ class Voice {
   fallFrom = 0;
   fallDur = 0;
   bendFrom = 0;
+  /** 音程のつなぎ for this note: where it starts and how far past it goes (semitones, signed), and how fast (0 = none). */
+  linkFrom = 0;
+  linkPast = 0;
+  linkDur = 0;
   /** The pitch correction as it has glided in so far (semitones), for tune.retuneSec. */
   retuneCorr = 0;
   /** How far the sustain's pitch shaping has come in (0 in the head, up to 1 over SHAPE_IN_SEC after it). */
@@ -452,17 +480,28 @@ export class Engine {
    * ends a phrase drops off at its end. Notes with no length (the keyboard) get neither.
    */
   setNoteBends(b: NoteBends | null): void {
-    this.bends = b && (b.scoopSemis > 0 || b.fallSemis > 0) ? { ...b } : null;
+    this.bends = b && (b.scoopSemis > 0 || b.fallSemis > 0 || ((b.linkSec ?? 0) > 0 && ((b.linkStart ?? 0) > 0 || (b.linkOver ?? 0) > 0))) ? { ...b } : null;
   }
 
-  /** A note's しゃくり・フォール, as it starts at voice time `from` (seconds). */
-  private markBends(v: Voice, lengthSec: number | undefined, phrase: number, from: number): void {
+  /** A note's しゃくり・フォール・音程のつなぎ, as it starts at voice time `from` (seconds). */
+  private markBends(v: Voice, lengthSec: number | undefined, phrase: number, from: number, fromSemis = 0): void {
     const b = this.bends;
     v.scoopSemis = 0;
     v.fallSemis = 0;
+    v.linkDur = 0;
     if (!b || lengthSec === undefined || !(lengthSec > 0)) return;
     v.bendFrom = from;
-    if (b.scoopSemis > 0 && (phrase & 1 || lengthSec >= SCOOP_LONG_SEC)) {
+    // A step from the note before: from toward it, past its own pitch, back (all of it within 60% of a short note).
+    const linked = !!b.linkSec && b.linkSec > 0 && fromSemis !== 0 && ((b.linkStart ?? 0) > 0 || (b.linkOver ?? 0) > 0);
+    if (linked) {
+      const step = Math.abs(fromSemis);
+      const toward = Math.sign(fromSemis);
+      v.linkFrom = toward * Math.min(LINK_START_MOST, step * (b.linkStart ?? 0));
+      v.linkPast = -toward * Math.min(LINK_OVER_MOST, step * (b.linkOver ?? 0));
+      v.linkDur = Math.min(b.linkSec!, (0.6 * lengthSec) / (1 + LINK_SETTLE));
+    }
+    // (A long note that steps in gets the step's way in, not a scoop as well.)
+    if (b.scoopSemis > 0 && !linked && (phrase & 1 || lengthSec >= SCOOP_LONG_SEC)) {
       v.scoopSemis = b.scoopSemis;
       v.scoopDur = Math.max(0.005, scoopSec(lengthSec, b.scoopSec));
     }
@@ -524,7 +563,7 @@ export class Engine {
    * a "stretch" sustain is paced to fill it. Without it (the keyboard, a
    * preview) the hold length stands in.
    */
-  noteOn(note: number, velocity = 0.8, lengthSec?: number, phrase = 0): void {
+  noteOn(note: number, velocity = 0.8, lengthSec?: number, phrase = 0, fromSemis = 0): void {
     if (!this.source || !this.params) return;
     const params = this.params;
     if (this.glideSec > 0) {
@@ -539,7 +578,7 @@ export class Engine {
           this.glide(held, from - note);
           // (Legato: the same voice goes on; the new note's vibrato counts from now.)
           this.markLongVibrato(held, lengthSec, held.nextCenter / this.sampleRate);
-          this.markBends(held, lengthSec, phrase, held.nextCenter / this.sampleRate);
+          this.markBends(held, lengthSec, phrase, held.nextCenter / this.sampleRate, 0);
           return;
         }
         this.fadeOut(held, STEAL_FADE_SEC);
@@ -548,7 +587,7 @@ export class Engine {
         this.glide(voice, from - note);
         voice.stretchSpeed = this.stretchSpeedFor(lengthSec ?? this.hold);
         this.markLongVibrato(voice, lengthSec, 0);
-        this.markBends(voice, lengthSec, phrase, 0);
+        this.markBends(voice, lengthSec, phrase, 0, 0);
         return;
       }
     }
@@ -562,7 +601,7 @@ export class Engine {
     this.start(voice, note, velocity);
     voice.stretchSpeed = this.stretchSpeedFor(lengthSec !== undefined && lengthSec > 0 ? lengthSec : this.hold);
     this.markLongVibrato(voice, lengthSec, 0);
-    this.markBends(voice, lengthSec, phrase, 0);
+    this.markBends(voice, lengthSec, phrase, 0, fromSemis);
   }
 
   private glide(v: Voice, semitones: number): void {
@@ -673,6 +712,7 @@ export class Engine {
     v.longVibCents = 0;
     v.scoopSemis = 0;
     v.fallSemis = 0;
+    v.linkDur = 0;
     for (const g of v.grains) g.active = false;
     // (`force` may be missing from settings kept before it existed: then it is off.)
     if (params.force && params.force.mode !== "off") {
@@ -787,7 +827,8 @@ export class Engine {
       }
       v.driftValue += (v.driftTarget - v.driftValue) * 0.02;
     }
-    const bend = v.scoopSemis > 0 || v.fallSemis > 0 ? noteBend(seconds - v.bendFrom, v.scoopSemis, v.scoopDur, v.fallSemis, v.fallFrom, v.fallDur) : 0;
+    let bend = v.scoopSemis > 0 || v.fallSemis > 0 ? noteBend(seconds - v.bendFrom, v.scoopSemis, v.scoopDur, v.fallSemis, v.fallFrom, v.fallDur) : 0;
+    if (v.linkDur > 0) bend += linkBend(seconds - v.bendFrom, v.linkFrom, v.linkPast, v.linkDur);
     return (cents + v.driftValue) / 100 + bend;
   }
 

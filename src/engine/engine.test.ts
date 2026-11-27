@@ -3,7 +3,7 @@ import { analyzePitch } from "../analysis/pyin";
 import { rootPitch } from "../analysis/rootPitch";
 import { DEFAULT_PARAMS, type InstrumentParams } from "../instrument/types";
 import { demoPhrasePitch, demoSyllable, synthVoice } from "../testsignals/synthVoice";
-import { Engine, fallSec, longVibratoDelay, longVibratoDepth, longVibratoRamp, noteBend, scoopSec } from "./engine";
+import { Engine, fallSec, linkBend, longVibratoDelay, longVibratoDepth, longVibratoRamp, noteBend, scoopSec } from "./engine";
 import { analyzeMaterial, prepareSource, resample } from "./prepare";
 
 const SR = 44100;
@@ -483,6 +483,34 @@ describe("しゃくり・フォール", () => {
     // A scoop of 0.3 s is still well under at 0.1–0.18 s; the default (0.12 s) has arrived.
     expect(pitch(play({ scoopSemis: 3, fallSemis: 0, scoopSec: 0.3 }, 1, 1), 0.1, 0.18)).toBeLessThan(61.3);
     expect(Math.abs(pitch(play({ scoopSemis: 3, fallSemis: 0 }, 1, 1), 0.13, 0.2) - 62)).toBeLessThan(0.25);
+  });
+
+  it("音程のつなぎ: a note stepping down from 4 over starts on that side, goes past its pitch, settles", () => {
+    const material = synthVoice({ sampleRate: SR, durationSec: 1.5, pitch: () => 62 });
+    const e = setup(material, { flatten: 1 }).engine;
+    // ふつう: 35% back toward the note before (1.4 semitones over), 20% past (0.8 under), 0.07 s to the far side.
+    e.setNoteBends({ scoopSemis: 0, fallSemis: 0, linkStart: 0.35, linkOver: 0.2, linkSec: 0.07 });
+    const total = Math.round(0.6 * SR);
+    const out = new Float32Array(total);
+    const l = new Float32Array(128), r = new Float32Array(128);
+    e.noteOn(62, 1, 0.6, 0, 4);
+    for (let at = 0; at < total; at += 128) {
+      e.render(l, r);
+      out.set(l.subarray(0, Math.min(128, total - at)), at);
+    }
+    // Frame by frame (5 ms): the pitch at a time, the middle of what is read around it.
+    const track = analyzePitch(out, SR, { hopSec: 0.005 });
+    const at = (sec: number) => {
+      const f = Math.round(sec / track.hopSec);
+      const xs = Array.from(track.f0.slice(Math.max(0, f - 1), f + 2)).filter(Number.isFinite).sort((a, b) => a - b);
+      return xs[xs.length >> 1];
+    };
+    expect(at(0.015)).toBeGreaterThan(62.6);
+    expect(at(0.075)).toBeLessThan(61.6);
+    expect(Math.abs(at(0.35) - 62)).toBeLessThan(0.15);
+    expect(linkBend(0, 1.4, -0.8, 0.07)).toBe(1.4);
+    expect(linkBend(0.07, 1.4, -0.8, 0.07)).toBeCloseTo(-0.8, 6);
+    expect(linkBend(0.07 + 0.105, 1.4, -0.8, 0.07)).toBeCloseTo(0, 6);
   });
 
   it("the bend: rises fast then settles, drops slowly then fast", () => {

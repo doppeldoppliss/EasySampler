@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TRACK_BENDS, DEFAULT_TRACK_VIBRATO, phraseMarks, sanitizeProject, toSeqNotes } from "./model";
+import { DEFAULT_TRACK_BENDS, DEFAULT_TRACK_VIBRATO, phraseMarks, sanitizeProject, stepsFrom, toSeqNotes } from "./model";
 import { PHRASE_END, PHRASE_START } from "../song/parts";
 
 const n = (start: number, length: number, pitch = 60) => ({ id: start * 100 + pitch, start, length, pitch, velocity: 0.8 });
@@ -35,6 +35,18 @@ describe("phrases (しゃくり・フォール)", () => {
     const old = sanitizeProject({ tracks: [{ name: "b", notes: [], vibrato: { on: true, minBeats: 2, depthCents: 60 }, bends: { scoop: 1, fall: 2 } }] }).tracks[0];
     expect(old.vibrato.rateHz).toBe(5.5);
     expect(old.bends.restAfter).toBe(0.5);
+  });
+
+  it("音程のつなぎ: each note inside a phrase knows its step from the one before (a chord's voices their own)", () => {
+    const notes = [n(0, 1, 60), n(1, 1, 62), n(2, 1, 62), n(3, 1, 58), n(6, 1, 65)];
+    const marks = phraseMarks(notes);
+    // From 60 up to 62: the one before is 2 under (−2); the same 62: none; down to 58: 4 over (+4); after a rest: none.
+    expect(stepsFrom(notes, marks)).toEqual([0, -2, 0, 4, 0]);
+    const chords = [n(0, 1, 60), n(0, 1, 64), n(1, 1, 62), n(1, 1, 65)];
+    expect(stepsFrom(chords, phraseMarks(chords))).toEqual([0, 0, -2, -1]);
+    // With portamento they slide already: no steps reach the player.
+    expect(toSeqNotes(notes, 120, true).some((s) => s.fromSemis)).toBe(false);
+    expect(toSeqNotes(notes, 120).map((s) => s.fromSemis ?? 0)).toEqual([0, -2, 0, 4, 0]);
   });
 
   it("reaches the player's notes", () => {

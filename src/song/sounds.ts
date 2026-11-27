@@ -118,8 +118,8 @@ export class EngineSound implements TrackSound {
     this.engine.setNoteBends(b);
   }
   /** A song's note hands its length on: a "stretch" sustain fills it (and a long one gets 長い音にビブラート); and its place in its phrase (しゃくり・フォール). */
-  noteOn(note: number, velocity: number, _drum = false, lengthSec?: number, phrase = 0): void {
-    this.engine.noteOn(note, velocity, lengthSec, phrase);
+  noteOn(note: number, velocity: number, _drum = false, lengthSec?: number, phrase = 0, fromSemis = 0): void {
+    this.engine.noteOn(note, velocity, lengthSec, phrase, fromSemis);
   }
   noteOff(note: number): void {
     this.engine.noteOff(note);

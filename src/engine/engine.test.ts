@@ -3,7 +3,7 @@ import { analyzePitch } from "../analysis/pyin";
 import { rootPitch } from "../analysis/rootPitch";
 import { DEFAULT_PARAMS, type InstrumentParams } from "../instrument/types";
 import { demoPhrasePitch, demoSyllable, synthVoice } from "../testsignals/synthVoice";
-import { Engine, longVibratoDelay, longVibratoDepth, longVibratoRamp } from "./engine";
+import { Engine, fallSec, longVibratoDelay, longVibratoDepth, longVibratoRamp, noteBend, scoopSec } from "./engine";
 import { analyzeMaterial, prepareSource, resample } from "./prepare";
 
 const SR = 44100;
@@ -418,6 +418,60 @@ describe("長い音にビブラート", () => {
     expect(longVibratoDepth(0)).toBe(0);
     expect(longVibratoDepth(0.5)).toBeCloseTo(0.5, 6);
     expect(longVibratoDepth(2)).toBe(1);
+  });
+});
+
+describe("しゃくり・フォール", () => {
+  function playNote(engine: Engine, note: number, lengthSec: number, phrase: number): Float32Array {
+    const total = Math.ceil((lengthSec + 0.05) * SR);
+    const out = new Float32Array(total);
+    const l = new Float32Array(128);
+    const r = new Float32Array(128);
+    engine.noteOn(note, 1, lengthSec, phrase);
+    let released = false;
+    for (let at = 0; at < total; at += 128) {
+      if (!released && at >= lengthSec * SR) {
+        engine.noteOff(note);
+        released = true;
+      }
+      engine.render(l, r);
+      out.set(l.subarray(0, Math.min(128, total - at)), at);
+    }
+    return out;
+  }
+  const pitch = (out: Float32Array, from: number, to: number) => rootPitch(analyzePitch(out.slice(Math.round(from * SR), Math.round(to * SR)), SR))?.midi ?? NaN;
+
+  it("a phrase's first note slides up into its pitch, its last drops at the end; notes inside stay on the note", () => {
+    // A steady voice (no pitch movement of its own): the bends are all there is.
+    const material = synthVoice({ sampleRate: SR, durationSec: 1.5, pitch: () => 62 });
+    const engine = () => {
+      const e = setup(material, { flatten: 1 }).engine;
+      e.setNoteBends({ scoopSemis: 3, fallSemis: 7 });
+      return e;
+    };
+    // Its first 80 ms well under D4 (it starts 3 semitones under; over them it is about 1.2 under on average), on it after.
+    const first = playNote(engine(), 62, 0.3, 1);
+    expect(pitch(first, 0.0, 0.08)).toBeLessThan(61.5);
+    expect(Math.abs(pitch(first, 0.16, 0.28) - 62)).toBeLessThan(0.25);
+    // A last note of 0.8 s: on the note until its last 0.28 s, then down a few semitones by the end.
+    const last = playNote(engine(), 62, 0.8, 2);
+    expect(Math.abs(pitch(last, 0.2, 0.45) - 62)).toBeLessThan(0.25);
+    expect(pitch(last, 0.7, 0.8)).toBeLessThan(58.5);
+    // Inside a phrase and short: nothing.
+    const inside = playNote(engine(), 62, 0.3, 0);
+    expect(Math.abs(pitch(inside, 0.0, 0.08) - 62)).toBeLessThan(0.25);
+    expect(Math.abs(pitch(inside, 0.2, 0.3) - 62)).toBeLessThan(0.25);
+  });
+
+  it("the bend: rises fast then settles, drops slowly then fast", () => {
+    expect(noteBend(0, 2, 0.1, 0, 0, 0)).toBe(-2);
+    expect(noteBend(0.05, 2, 0.1, 0, 0, 0)).toBeCloseTo(-0.5, 6);
+    expect(noteBend(0.1, 2, 0.1, 0, 0, 0)).toBe(0);
+    expect(noteBend(0.5, 0, 0, 4, 0.5, 0.2)).toBe(0);
+    expect(noteBend(0.6, 0, 0, 4, 0.5, 0.2)).toBeCloseTo(-1, 6);
+    expect(noteBend(0.8, 0, 0, 4, 0.5, 0.2)).toBe(-4);
+    expect(scoopSec(1)).toBe(0.12);
+    expect(fallSec(0.4)).toBeCloseTo(0.14, 6);
   });
 });
 

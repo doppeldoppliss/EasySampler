@@ -13,7 +13,12 @@ export interface SeqNote {
   velocity: number;
   /** Played as a drum hit by the backing (ignored for the material). */
   drum: boolean;
+  /** A song track's note: it starts a phrase (PHRASE_START: a rest, or nothing, before it) and/or ends one (PHRASE_END). */
+  phrase?: number;
 }
+
+export const PHRASE_START = 1;
+export const PHRASE_END = 2;
 
 export interface SongPart {
   id: string;

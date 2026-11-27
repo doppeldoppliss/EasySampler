@@ -51,6 +51,10 @@ import {
   longVibratoOf,
   VIBRATO_DEPTHS,
   VIBRATO_MIN_BEATS,
+  noteBendsOf,
+  phraseMarks,
+  SCOOP_CHOICES,
+  FALL_CHOICES,
 } from "../daw/model";
 import type { MixSettings } from "../song/player";
 import { DEFAULT_FX, type FxSettings } from "../instrument/types";
@@ -360,6 +364,10 @@ export class RollPanel {
   private readonly vibratoMin = el("select", { ariaLabel: "ビブラートをかける音の長さ" }, VIBRATO_MIN_BEATS.map(([v, label]) => el("option", { value: String(v), textContent: `${label}以上` })));
   private readonly vibratoDepth = el("select", { ariaLabel: "ビブラートの深さ" }, VIBRATO_DEPTHS.map(([v, label]) => el("option", { value: String(v), textContent: label })));
   private readonly vibratoNote = el("span", { className: "fine" });
+  // しゃくり・フォール: how deep each (なし = off).
+  private readonly scoopSelect = el("select", { ariaLabel: "しゃくり" }, SCOOP_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })));
+  private readonly fallSelect = el("select", { ariaLabel: "フォール" }, FALL_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })));
+  private readonly bendsNote = el("span", { className: "fine" });
   private readonly glideRow = el("div", { className: "track-options" }, [
     el("div", { className: "row" }, [
       el("label", { className: "inline" }, ["ポルタメント ", this.glideSelect]),
@@ -378,6 +386,11 @@ export class RollPanel {
       this.vibratoMin,
       el("label", { className: "inline" }, ["深さ ", this.vibratoDepth]),
       this.vibratoNote,
+    ]),
+    el("div", { className: "row", title: "しゃくり: フレーズの最初の音符(前に休みがある音)と、1 秒以上伸ばす音符を、少し下からすくい上げて鳴らします。フォール: フレーズの最後の音符(後ろに休みがある音)の終わりで、音程を落とします" }, [
+      el("label", { className: "inline" }, ["しゃくり ", this.scoopSelect]),
+      el("label", { className: "inline" }, ["フォール ", this.fallSelect]),
+      this.bendsNote,
     ]),
   ]);
   // Step input: notes played on the keyboard go in at the position, which then moves on by one grid step.
@@ -625,6 +638,14 @@ export class RollPanel {
       this.commit();
     };
     for (const c of [this.vibratoOn, this.vibratoMin, this.vibratoDepth]) c.addEventListener("change", vibratoChanged);
+    const bendsChanged = () => {
+      this.track.bends = { scoop: Number(this.scoopSelect.value), fall: Number(this.fallSelect.value) };
+      this.showBends();
+      this.reload();
+      this.scheduleSave();
+      this.commit();
+    };
+    for (const c of [this.scoopSelect, this.fallSelect]) c.addEventListener("change", bendsChanged);
     this.glideSelect.addEventListener("change", () => {
       const t = this.track;
       t.glide = Number(this.glideSelect.value) || 0;
@@ -1259,6 +1280,25 @@ export class RollPanel {
         : `${t.notes.length} 個の音符のうち ${long} 個が揺れます`;
   }
 
+  /** しゃくり・フォール: the selected track's setting, and how many phrases it reaches. */
+  private showBends(): void {
+    const t = this.track;
+    this.scoopSelect.value = String(t.bends.scoop);
+    this.fallSelect.value = String(t.bends.fall);
+    if (!t.bends.scoop && !t.bends.fall) {
+      this.bendsNote.textContent = "";
+      return;
+    }
+    if (t.instrument === BACKING) {
+      this.bendsNote.textContent = "簡易シンセのトラックでは効きません(素材の音源で鳴るトラックだけ)";
+      return;
+    }
+    const marks = phraseMarks([...t.notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch));
+    const starts = marks.filter((m) => m & 1).length;
+    const ends = marks.filter((m) => m & 2).length;
+    this.bendsNote.textContent = `フレーズの始まり ${starts} か所・終わり ${ends} か所`;
+  }
+
   /** The roll shows the selected track: keys for a melodic one, its rows for a drum track. */
   private showTrackInRoll(): void {
     const t = this.track;
@@ -1270,6 +1310,7 @@ export class RollPanel {
     this.glideSelect.value = String(GLIDES.some(([v]) => v === t.glide) ? t.glide : 0);
     this.showHarmony();
     this.showVibrato();
+    this.showBends();
     this.stepHeld.clear();
     this.stepHistory.length = 0;
     this.stepLastChord = null;
@@ -2907,6 +2948,7 @@ export class RollPanel {
         notes: toSeqNotes(t.kind === "melodic" ? withHarmony(t.notes, t.harmony, t.glide) : t.notes, this.project, t.kind !== "drum" && t.glide > 0),
         glide: t.kind === "drum" ? 0 : t.glide,
         vibrato: t.kind === "melodic" ? longVibratoOf(t, this.project.bpm) : null,
+        bends: t.kind === "melodic" ? noteBendsOf(t) : null,
         synth: t.instrument === BACKING ? t.synth : undefined,
         ...this.mixOf(t),
         };

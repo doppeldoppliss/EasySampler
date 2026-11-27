@@ -145,6 +145,7 @@ class EngineProcessor extends AudioWorkletProcessor {
       if (sound instanceof EngineSound) {
         sound.setGlide(t.glide ?? 0);
         sound.setLongVibrato(t.vibrato ?? null);
+        sound.setNoteBends(t.bends ?? null);
       }
       if (sound instanceof SampleSound) {
         sound.rows = (t.samples ?? []).map((id) => (id ? (this.samples.get(id) ?? null) : null));

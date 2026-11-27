@@ -3,7 +3,7 @@
 // effects. What you hear is what is written.
 
 import { matchLoudness } from "../audio/loudness";
-import type { LongVibrato, PreparedSource } from "../engine/engine";
+import type { LongVibrato, NoteBends, PreparedSource } from "../engine/engine";
 import { FxChain } from "../fx/chain";
 import type { FxSettings, InstrumentParams, Markers } from "../instrument/types";
 import type { SeqNote } from "../song/parts";
@@ -36,6 +36,8 @@ export interface RenderTrack {
   glide?: number;
   /** 長い音にビブラート (null or absent = off). */
   vibrato?: LongVibrato | null;
+  /** しゃくり・フォール (null or absent = off). */
+  bends?: NoteBends | null;
   fx: FxSettings | null;
   gain: number;
   pan: number;
@@ -142,6 +144,7 @@ export async function renderSong(input: SongRenderInput, progress?: (share: numb
       s.engine.setHold(t.instrument.hold);
       s.setGlide(t.glide ?? 0);
       s.setLongVibrato(t.vibrato ?? null);
+      s.setNoteBends(t.bends ?? null);
       sound = s;
     }
     if (!sound) continue;

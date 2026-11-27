@@ -9,7 +9,7 @@ import { DEFAULT_SYNTH, isSynthPreset, type SynthPreset } from "../song/backing"
 import type { Role } from "./roles";
 
 const ROLES: readonly Role[] = ["drum", "audio", "bass", "lead", "chords", "backing", "harmony"];
-import type { SeqNote } from "../song/parts";
+import { PHRASE_END, PHRASE_START, type SeqNote } from "../song/parts";
 import type { SongNote } from "../song/midi";
 import type { AutoPoint } from "../song/player";
 
@@ -60,6 +60,8 @@ export interface Track {
   emphasis: boolean;
   /** 長い音にビブラート (TrackVibrato). */
   vibrato: TrackVibrato;
+  /** しゃくり・フォール (TrackBends). */
+  bends: TrackBends;
   /** ハモリ (a melodic track): notes added in the key, played by the same cut. */
   harmony: Harmony;
   /** What a note placed on this track gets: its length (beats) and velocity (0–1) (Domino's default Gate / Velocity). */
@@ -238,6 +240,24 @@ export const VIBRATO_RATE_HZ = 5.5;
 export const VIBRATO_MIN_BEATS: readonly [number, string][] = [[0.5, "8 分音符"], [1, "4 分音符(1 拍)"], [2, "2 分音符(2 拍)"], [4, "全音符(4 拍)"]];
 export const VIBRATO_DEPTHS: readonly [number, string][] = [[20, "浅め"], [35, "ふつう"], [60, "深め"]];
 
+/**
+ * しゃくり・フォール (design.md 55): on a track playing a cut, how far under its pitch a phrase's first note (or a long
+ * one) slides up from, and how far a phrase's last note drops at its end (semitones; 0 = none). The choices.
+ */
+export interface TrackBends {
+  scoop: number;
+  fall: number;
+}
+export const DEFAULT_TRACK_BENDS: TrackBends = { scoop: 0, fall: 0 };
+export const SCOOP_CHOICES: readonly [number, string][] = [[0, "なし"], [1, "浅め"], [2, "ふつう"], [3, "深め"]];
+export const FALL_CHOICES: readonly [number, string][] = [[0, "なし"], [2, "浅め"], [4, "ふつう"], [7, "深め"]];
+
+/** A track's しゃくり・フォール as the engine takes it (null: neither). */
+export function noteBendsOf(t: Pick<Track, "bends">): { scoopSemis: number; fallSemis: number } | null {
+  const b = t.bends;
+  return b && (b.scoop > 0 || b.fall > 0) ? { scoopSemis: b.scoop, fallSemis: b.fall } : null;
+}
+
 /** A track's setting as the engine takes it (null: off). Its length in seconds at the song's tempo. */
 export function longVibratoOf(t: Pick<Track, "vibrato">, bpm: number): { minSec: number; depthCents: number; rateHz: number } | null {
   const v = t.vibrato;
@@ -245,7 +265,7 @@ export function longVibratoOf(t: Pick<Track, "vibrato">, bpm: number): { minSec:
 }
 
 export function newTrack(name: string, instrument: string | null = null): Track {
-  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, synth: DEFAULT_SYNTH, role: null, main: false, emphasis: false, vibrato: { ...DEFAULT_TRACK_VIBRATO }, harmony: structuredClone(DEFAULT_HARMONY), noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
+  return { id: newTrackId(), name, kind: "melodic", instrument, notes: [], fx: structuredClone(DEFAULT_FX), gain: 1, pan: 0, mute: false, solo: false, glide: 0, synth: DEFAULT_SYNTH, role: null, main: false, emphasis: false, vibrato: { ...DEFAULT_TRACK_VIBRATO }, bends: { ...DEFAULT_TRACK_BENDS }, harmony: structuredClone(DEFAULT_HARMONY), noteLength: 1, noteVelocity: DEFAULT_VELOCITY, volumeAuto: [], panAuto: [] };
 }
 
 /** An audio track: clips of materials on the timeline (a new clip plays `material`). */
@@ -411,6 +431,7 @@ export function secToBeats(sec: number, tempo: Tempo): number {
 export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false): SeqNote[] {
   const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   const out: SeqNote[] = [];
+  const phrases = phraseMarks(sorted);
   for (let i = 0; i < sorted.length; i++) {
     const n = sorted[i];
     let end = n.start + n.length;
@@ -422,9 +443,38 @@ export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false): 
     }
     let endSec = beatsToSec(Math.max(n.start + MIN_LENGTH, end), bpm);
     if (legato && sorted.some((m) => m.pitch !== n.pitch && m.start > n.start && Math.abs(m.start - end) < 1e-6)) endSec += LEGATO_OVERLAP_SEC;
-    out.push({ start: beatsToSec(n.start, bpm), end: endSec, note: n.pitch, velocity: n.velocity, drum: false });
+    out.push({ start: beatsToSec(n.start, bpm), end: endSec, note: n.pitch, velocity: n.velocity, drum: false, ...(phrases[i] ? { phrase: phrases[i] } : {}) });
   }
   return out;
+}
+
+/** A rest at least this long (beats) before a note starts a phrase; after one, ends it. */
+export const PHRASE_REST_BEFORE = 0.25;
+export const PHRASE_REST_AFTER = 0.5;
+
+/**
+ * Where each note (sorted by start) sits in its phrase: PHRASE_START when nothing sounds for PHRASE_REST_BEFORE before
+ * it (or it is first), PHRASE_END when nothing starts for PHRASE_REST_AFTER after it ends (or nothing comes after).
+ * Notes of one chord share what is before and after them.
+ */
+export function phraseMarks(sorted: readonly Pick<Note, "start" | "length">[]): number[] {
+  const marks = sorted.map(() => 0);
+  let soundingUntil = -Infinity;
+  let i = 0;
+  while (i < sorted.length) {
+    // One onset: the notes starting together.
+    let j = i;
+    while (j < sorted.length && Math.abs(sorted[j].start - sorted[i].start) < 1e-6) j++;
+    const start = sorted[i].start;
+    const nextStart = j < sorted.length ? sorted[j].start : Infinity;
+    for (let k = i; k < j; k++) {
+      if (start - soundingUntil >= PHRASE_REST_BEFORE - 1e-9) marks[k] |= PHRASE_START;
+      if (nextStart - (sorted[k].start + sorted[k].length) >= PHRASE_REST_AFTER - 1e-9) marks[k] |= PHRASE_END;
+    }
+    for (let k = i; k < j; k++) soundingUntil = Math.max(soundingUntil, sorted[k].start + sorted[k].length);
+    i = j;
+  }
+  return marks;
 }
 
 /** An audio track's clips as the player takes them: note i is clip i (`clips[i]`), from its start to its end (seconds). */
@@ -459,6 +509,12 @@ function sanitizeVibrato(raw: unknown): TrackVibrato {
   const v = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const pick = (x: unknown, from: readonly (readonly [number, string])[], d: number) => (typeof x === "number" && from.some(([k]) => k === x) ? x : d);
   return { on: v.on === true, minBeats: pick(v.minBeats, VIBRATO_MIN_BEATS, DEFAULT_TRACK_VIBRATO.minBeats), depthCents: pick(v.depthCents, VIBRATO_DEPTHS, DEFAULT_TRACK_VIBRATO.depthCents) };
+}
+
+function sanitizeBends(raw: unknown): TrackBends {
+  const b = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const pick = (x: unknown, from: readonly (readonly [number, string])[]) => (typeof x === "number" && from.some(([k]) => k === x) ? x : 0);
+  return { scoop: pick(b.scoop, SCOOP_CHOICES), fall: pick(b.fall, FALL_CHOICES) };
 }
 
 function sanitizeHarmony(raw: unknown): Harmony {
@@ -526,6 +582,7 @@ export function sanitizeProject(raw: unknown): Project {
           main: tr.main === true,
           emphasis: tr.emphasis === true,
           vibrato: sanitizeVibrato(tr.vibrato),
+          bends: sanitizeBends(tr.bends),
           harmony: sanitizeHarmony(tr.harmony),
           noteLength: num(tr.noteLength, 1, MIN_LENGTH, 64),
           noteVelocity: num(tr.noteVelocity, DEFAULT_VELOCITY, 0.01, 1),

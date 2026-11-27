@@ -12,8 +12,8 @@ import type { SeqNote } from "./parts";
 
 /** What a track plays its notes on. `render` fills (does not add to) the buffers. */
 export interface TrackSound {
-  /** `lengthSec`: how long the note is written (a song's note; the keyboard does not know it). */
-  noteOn(note: number, velocity: number, drum: boolean, lengthSec?: number): void;
+  /** `lengthSec`: how long the note is written (a song's note; the keyboard does not know it); `phrase`: SeqNote.phrase. */
+  noteOn(note: number, velocity: number, drum: boolean, lengthSec?: number, phrase?: number): void;
   noteOff(note: number, drum: boolean): void;
   allOff(): void;
   render(left: Float32Array, right: Float32Array, frames: number): void;
@@ -91,8 +91,9 @@ interface SongEvent {
   note: number;
   velocity: number;
   drum: boolean;
-  /** A note-on: the note's length (seconds). */
+  /** A note-on: the note's length (seconds), and where it sits in its phrase (SeqNote.phrase). */
   lengthSec: number;
+  phrase: number;
 }
 
 /** After this long with nothing sounding, a track's effects stop being run (their tails have died away). */
@@ -222,8 +223,8 @@ export class SongPlayer {
       for (const n of t.notes) {
         const start = Math.round(n.start * sr);
         const end = Math.max(start + 1, Math.round(n.end * sr));
-        events.push({ frame: start, on: true, note: n.note, velocity: n.velocity, drum: n.drum, lengthSec: (end - start) / sr });
-        events.push({ frame: end, on: false, note: n.note, velocity: 0, drum: n.drum, lengthSec: 0 });
+        events.push({ frame: start, on: true, note: n.note, velocity: n.velocity, drum: n.drum, lengthSec: (end - start) / sr, phrase: n.phrase ?? 0 });
+        events.push({ frame: end, on: false, note: n.note, velocity: 0, drum: n.drum, lengthSec: 0, phrase: 0 });
       }
       // Note-offs before note-ons at the same frame (a repeated note re-strikes).
       events.sort((a, b) => a.frame - b.frame || Number(a.on) - Number(b.on));
@@ -465,7 +466,7 @@ export class SongPlayer {
               const offset = e.frame - base;
               if (offset >= limit) break;
               SongPlayer.fill(lane, Math.max(0, offset));
-              if (e.on) lane.sound.noteOn(e.note, e.velocity, e.drum, e.lengthSec);
+              if (e.on) lane.sound.noteOn(e.note, e.velocity, e.drum, e.lengthSec, e.phrase);
               else lane.sound.noteOff(e.note, e.drum);
               lane.cursor++;
               fired = true;

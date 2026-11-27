@@ -63,6 +63,31 @@ export interface LongVibrato {
  */
 export const longVibratoDelay = (lengthSec: number) => Math.min(0.5, Math.max(0.15, 0.3 * lengthSec));
 export const longVibratoRamp = (lengthSec: number) => Math.min(1.2, Math.max(0.3, 0.4 * lengthSec));
+/**
+ * しゃくり・フォール (a song track's, design.md 55): how far below the note a phrase's first note (or a long one) starts
+ * and slides up from, and how far a phrase's last note drops at its end (semitones; 0 = none).
+ */
+export interface NoteBends {
+  scoopSemis: number;
+  fallSemis: number;
+}
+/**
+ * しゃくり: notes held at least this long get it besides a phrase's first (at 0.4 s every quarter note at 120 got it,
+ * the whole melody sliding); it takes this long (or a third of a short note).
+ */
+export const SCOOP_LONG_SEC = 1;
+export const scoopSec = (lengthSec: number) => Math.min(0.12, lengthSec / 3);
+/** フォール: on a phrase's last note at least this long, over its last part (0.3 s at most, or 35% of it). */
+export const FALL_MIN_SEC = 0.25;
+export const fallSec = (lengthSec: number) => Math.min(0.3, 0.35 * lengthSec);
+/** The bend (semitones, ≤ 0) at voice time `t` since the note began: rising fast then settling; dropping slowly then fast. */
+export function noteBend(t: number, scoop: number, scoopDur: number, fall: number, fallFrom: number, fallDur: number): number {
+  let s = 0;
+  if (scoop > 0 && t < scoopDur) s -= scoop * (1 - t / scoopDur) ** 2;
+  if (fall > 0 && t > fallFrom) s -= fall * Math.min(1, ((t - fallFrom) / fallDur) ** 2);
+  return s;
+}
+
 /** The depth's share (0–1) at `x` of the way through the growing (a smoothstep: no corner where it starts or ends). */
 export function longVibratoDepth(x: number): number {
   const u = Math.max(0, Math.min(1, x));
@@ -171,6 +196,13 @@ class Voice {
   longVibFrom = 0;
   longVibDelay = 0;
   longVibRamp = 1;
+  /** しゃくり・フォール for this note: depths (semitones), and when (voice seconds) the note began and its fall starts. */
+  scoopSemis = 0;
+  scoopDur = 0;
+  fallSemis = 0;
+  fallFrom = 0;
+  fallDur = 0;
+  bendFrom = 0;
   /** The pitch correction as it has glided in so far (semitones), for tune.retuneSec. */
   retuneCorr = 0;
   /** How far the sustain's pitch shaping has come in (0 in the head, up to 1 over SHAPE_IN_SEC after it). */
@@ -233,6 +265,8 @@ export class Engine {
   private glideSec = 0;
   /** 長い音にビブラート (a song track's setting; null = off): notes written at least `minSec` long get it. */
   private longVibrato: LongVibrato | null = null;
+  /** しゃくり・フォール (a song track's setting; null = off). */
+  private bends: NoteBends | null = null;
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
@@ -398,6 +432,32 @@ export class Engine {
     this.longVibrato = v && v.depthCents > 0 && v.minSec > 0 ? { ...v } : null;
   }
 
+  /**
+   * しゃくり・フォール: a song note that starts a phrase (or is long) slides up into its pitch from under it; one that
+   * ends a phrase drops off at its end. Notes with no length (the keyboard) get neither.
+   */
+  setNoteBends(b: NoteBends | null): void {
+    this.bends = b && (b.scoopSemis > 0 || b.fallSemis > 0) ? { ...b } : null;
+  }
+
+  /** A note's しゃくり・フォール, as it starts at voice time `from` (seconds). */
+  private markBends(v: Voice, lengthSec: number | undefined, phrase: number, from: number): void {
+    const b = this.bends;
+    v.scoopSemis = 0;
+    v.fallSemis = 0;
+    if (!b || lengthSec === undefined || !(lengthSec > 0)) return;
+    v.bendFrom = from;
+    if (b.scoopSemis > 0 && (phrase & 1 || lengthSec >= SCOOP_LONG_SEC)) {
+      v.scoopSemis = b.scoopSemis;
+      v.scoopDur = scoopSec(lengthSec);
+    }
+    if (b.fallSemis > 0 && phrase & 2 && lengthSec >= FALL_MIN_SEC) {
+      v.fallSemis = b.fallSemis;
+      v.fallDur = fallSec(lengthSec);
+      v.fallFrom = lengthSec - v.fallDur;
+    }
+  }
+
   /** A note's long-note vibrato, as it starts at voice time `from` (seconds). */
   private markLongVibrato(v: Voice, lengthSec: number | undefined, from: number): void {
     const lv = this.longVibrato;
@@ -448,7 +508,7 @@ export class Engine {
    * a "stretch" sustain is paced to fill it. Without it (the keyboard, a
    * preview) the hold length stands in.
    */
-  noteOn(note: number, velocity = 0.8, lengthSec?: number): void {
+  noteOn(note: number, velocity = 0.8, lengthSec?: number, phrase = 0): void {
     if (!this.source || !this.params) return;
     const params = this.params;
     if (this.glideSec > 0) {
@@ -463,6 +523,7 @@ export class Engine {
           this.glide(held, from - note);
           // (Legato: the same voice goes on; the new note's vibrato counts from now.)
           this.markLongVibrato(held, lengthSec, held.nextCenter / this.sampleRate);
+          this.markBends(held, lengthSec, phrase, held.nextCenter / this.sampleRate);
           return;
         }
         this.fadeOut(held, STEAL_FADE_SEC);
@@ -471,6 +532,7 @@ export class Engine {
         this.glide(voice, from - note);
         voice.stretchSpeed = this.stretchSpeedFor(lengthSec ?? this.hold);
         this.markLongVibrato(voice, lengthSec, 0);
+        this.markBends(voice, lengthSec, phrase, 0);
         return;
       }
     }
@@ -484,6 +546,7 @@ export class Engine {
     this.start(voice, note, velocity);
     voice.stretchSpeed = this.stretchSpeedFor(lengthSec !== undefined && lengthSec > 0 ? lengthSec : this.hold);
     this.markLongVibrato(voice, lengthSec, 0);
+    this.markBends(voice, lengthSec, phrase, 0);
   }
 
   private glide(v: Voice, semitones: number): void {
@@ -592,6 +655,8 @@ export class Engine {
     v.driftTarget = 0;
     v.driftCountdown = 0;
     v.longVibCents = 0;
+    v.scoopSemis = 0;
+    v.fallSemis = 0;
     for (const g of v.grains) g.active = false;
     // (`force` may be missing from settings kept before it existed: then it is off.)
     if (params.force && params.force.mode !== "off") {
@@ -706,7 +771,8 @@ export class Engine {
       }
       v.driftValue += (v.driftTarget - v.driftValue) * 0.02;
     }
-    return (cents + v.driftValue) / 100;
+    const bend = v.scoopSemis > 0 || v.fallSemis > 0 ? noteBend(seconds - v.bendFrom, v.scoopSemis, v.scoopDur, v.fallSemis, v.fallFrom, v.fallDur) : 0;
+    return (cents + v.driftValue) / 100 + bend;
   }
 
   /** 0–1: the vibrato (and tremolo) coming in after its delay over its attack, and going out after the release. */

@@ -54,7 +54,14 @@ import {
   noteBendsOf,
   phraseMarks,
   phraseRestsOf,
+  seqExprOf,
   stepsFrom,
+  breathsBefore,
+  LEAP_CHOICES,
+  KOBUSHI_CHOICES,
+  DYNAMICS_CHOICES,
+  BREATH_CHOICES,
+  HUMAN_CHOICES,
   LINK_CHOICES,
   SCOOP_CHOICES,
   FALL_CHOICES,
@@ -378,6 +385,15 @@ export class RollPanel {
   private readonly fallSelect = el("select", { ariaLabel: "フォール" }, [...FALL_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })), el("option", { value: "custom", textContent: "数値" })]);
   private readonly linkSelect = el("select", { ariaLabel: "音程のつなぎ" }, [...LINK_CHOICES.map((c, k) => el("option", { value: String(k), textContent: c.label })), el("option", { value: "custom", textContent: "数値" })]);
   private readonly bendsNote = el("span", { className: "fine" });
+  // 歌い方 (design.md 58): five more, each a menu of steps and 数値.
+  private readonly singMenus = {
+    leap: el("select", { ariaLabel: "跳躍だけポルタメント" }, [...LEAP_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })), el("option", { value: "custom", textContent: "数値" })]),
+    kobushi: el("select", { ariaLabel: "こぶし" }, [...KOBUSHI_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })), el("option", { value: "custom", textContent: "数値" })]),
+    dynamics: el("select", { ariaLabel: "抑揚" }, [...DYNAMICS_CHOICES.map((c, k) => el("option", { value: String(k), textContent: c.label })), el("option", { value: "custom", textContent: "数値" })]),
+    breath: el("select", { ariaLabel: "ブレス" }, [...BREATH_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })), el("option", { value: "custom", textContent: "数値" })]),
+    human: el("select", { ariaLabel: "揺らぎ" }, [...HUMAN_CHOICES.map((c, k) => el("option", { value: String(k), textContent: c.label })), el("option", { value: "custom", textContent: "数値" })]),
+  };
+  private readonly singNote = el("span", { className: "fine" });
   // 数値: every number of the two, in a fold (design.md 56). Each field: where it reads and writes the selected track.
   private readonly expressionFields: { input: HTMLInputElement; read: (t: Track) => number }[] = [];
   private readonly expressionFold = el("details", { className: "sub expression-numbers" }, [el("summary", { textContent: "数値で細かく(ビブラート・しゃくり・フォール)" })]);
@@ -405,6 +421,14 @@ export class RollPanel {
       el("label", { className: "inline" }, ["フォール ", this.fallSelect]),
       el("label", { className: "inline", title: "フレーズの途中で音の高さが変わるとき、前の音の側から入って、新しい音程を少し行き過ぎてから落ち着きます(階段のように切り替わるのを和らげます)" }, ["音程のつなぎ ", this.linkSelect]),
       this.bendsNote,
+    ]),
+    el("div", { className: "row" }, [
+      el("label", { className: "inline", title: "フレーズの途中で音程が大きく跳ぶ所(5 半音以上)だけ、前の音から滑らせてつなぎます" }, ["跳躍だけポルタメント ", this.singMenus.leap]),
+      el("label", { className: "inline", title: "長く伸ばす音符(0.8 秒以上)の途中で、音程を一瞬だけ上に回してから戻します" }, ["こぶし ", this.singMenus.kobushi]),
+      el("label", { className: "inline", title: "フレーズの中で高い音を少し強く、フレーズの終わりの音を少し弱くし、長い音は終わりにかけて少し細らせます" }, ["抑揚 ", this.singMenus.dynamics]),
+      el("label", { className: "inline", title: "前に休みがあるフレーズの始まりの直前に、短い息継ぎの音を足します" }, ["ブレス ", this.singMenus.breath]),
+      el("label", { className: "inline", title: "音符の始まりと強さを、ごくわずかにばらつかせます(毎回同じばらつき方)" }, ["揺らぎ ", this.singMenus.human]),
+      this.singNote,
     ]),
     this.expressionFold,
   ]);
@@ -670,6 +694,11 @@ export class RollPanel {
     fromMenu(this.scoopSelect, (v) => (this.track.bends = { ...this.track.bends, scoop: v }));
     fromMenu(this.fallSelect, (v) => (this.track.bends = { ...this.track.bends, fall: v }));
     fromMenu(this.linkSelect, (k) => (this.track.bends = { ...this.track.bends, link: LINK_CHOICES[k].link, linkOver: LINK_CHOICES[k].linkOver }));
+    fromMenu(this.singMenus.leap, (v) => (this.track.bends = { ...this.track.bends, leapSec: v }));
+    fromMenu(this.singMenus.kobushi, (v) => (this.track.bends = { ...this.track.bends, kobushi: v }));
+    fromMenu(this.singMenus.dynamics, (k) => (this.track.bends = { ...this.track.bends, highDb: DYNAMICS_CHOICES[k].highDb, endDb: DYNAMICS_CHOICES[k].endDb, fadeDb: DYNAMICS_CHOICES[k].fadeDb }));
+    fromMenu(this.singMenus.breath, (v) => (this.track.bends = { ...this.track.bends, breath: v }));
+    fromMenu(this.singMenus.human, (k) => (this.track.bends = { ...this.track.bends, humanMs: HUMAN_CHOICES[k].humanMs, humanVel: HUMAN_CHOICES[k].humanVel }));
     // The numbers: each kept inside its range; a share shown as a percentage.
     const field = (label: string, unit: string, range: readonly [number, number, number], read: (t: Track) => number, write: (t: Track, v: number) => void, scale = 1) => {
       const input = el("input", { type: "number", min: String(range[0] * scale), max: String(range[1] * scale), step: String(range[2] * scale), ariaLabel: label });
@@ -697,6 +726,11 @@ export class RollPanel {
         bend("linkSec", "行き過ぎまでの時間", "秒"),
         el("span", { className: "fine", textContent: "(% は音程の差に対して。前の側は 3 半音、行き過ぎは 1 半音まで)" }),
       ]),
+      el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "跳躍だけポルタメント" }), bend("leapSec", "滑らせる時間", "秒"), bend("leapMin", "かける跳躍", "半音以上")]),
+      el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "こぶし" }), bend("kobushi", "深さ", "半音"), bend("kobushiSec", "時間", "秒"), field("位置(音符の頭から)", "%", BENDS_RANGES.kobushiAt, (t) => t.bends.kobushiAt, (t, v) => (t.bends = { ...t.bends, kobushiAt: v }), 100), bend("kobushiMinSec", "かける音符", "秒以上")]),
+      el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "抑揚" }), bend("highDb", "高い音を強く", "dB/オクターブ"), bend("endDb", "フレーズの終わりを弱く", "dB"), bend("fadeDb", "長い音の抜き", "dB")]),
+      el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "ブレス" }), field("大きさ(声に対して)", "%", BENDS_RANGES.breath, (t) => t.bends.breath, (t, v) => (t.bends = { ...t.bends, breath: v }), 100), bend("breathSec", "長さ", "秒"), bend("breathRest", "前の休み", "拍以上で入れる")]),
+      el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "揺らぎ" }), bend("humanMs", "タイミング", "ミリ秒まで"), field("強さ", "%まで", BENDS_RANGES.humanVel, (t) => t.bends.humanVel, (t, v) => (t.bends = { ...t.bends, humanVel: v }), 100)]),
       el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "フレーズの区切り" }), bend("restBefore", "前に休み", "拍以上で始まり"), bend("restAfter", "後ろに休み", "拍以上で終わり")]),
       el("p", { className: "fine", textContent: "深さ 0 はかけません。まっすぐな部分・深くなる部分は 1 秒前後の音符でのおよその割合です(短い音符・長い音符では、自然に聞こえるよう少し縮み・伸びます)。しゃくりは、フレーズの始まりと 1 秒以上伸ばす音符にかかります。" }),
     );
@@ -1349,6 +1383,15 @@ export class RollPanel {
     const link = LINK_CHOICES.findIndex((c) => Math.abs(c.link - t.bends.link) < 1e-9 && Math.abs(c.linkOver - t.bends.linkOver) < 1e-9);
     this.linkSelect.value = link >= 0 ? String(link) : "custom";
     this.showExpressionNumbers();
+    const b = t.bends;
+    this.singMenus.leap.value = menuValue(LEAP_CHOICES, b.leapSec);
+    this.singMenus.kobushi.value = menuValue(KOBUSHI_CHOICES, b.kobushi);
+    const dyn = DYNAMICS_CHOICES.findIndex((c) => c.highDb === b.highDb && c.endDb === b.endDb && c.fadeDb === b.fadeDb);
+    this.singMenus.dynamics.value = dyn >= 0 ? String(dyn) : "custom";
+    this.singMenus.breath.value = menuValue(BREATH_CHOICES, b.breath);
+    const hum = HUMAN_CHOICES.findIndex((c) => c.humanMs === b.humanMs && Math.abs(c.humanVel - b.humanVel) < 1e-9);
+    this.singMenus.human.value = hum >= 0 ? String(hum) : "custom";
+    this.showSinging();
     const linking = t.bends.link > 0 || t.bends.linkOver > 0;
     if (!t.bends.scoop && !t.bends.fall && !linking) {
       this.bendsNote.textContent = "";
@@ -1365,6 +1408,28 @@ export class RollPanel {
     const ends = marks.filter((m) => m & 2).length;
     const steps = linking && !(t.glide > 0) ? stepsFrom(sorted, marks).filter((s) => s !== 0).length : 0;
     this.bendsNote.textContent = `フレーズの始まり ${starts} か所・終わり ${ends} か所${linking ? (t.glide > 0 ? "・ポルタメント中は音程のつなぎはかかりません" : `・音程のつなぎ ${steps} か所`) : ""}`;
+  }
+
+  /** 歌い方: how many places each of the five reaches on the selected track. */
+  private showSinging(): void {
+    const t = this.track;
+    const b = t.bends;
+    if (!(b.leapSec > 0 || b.kobushi > 0 || b.highDb > 0 || b.endDb > 0 || b.fadeDb > 0 || b.breath > 0 || b.humanMs > 0 || b.humanVel > 0)) {
+      this.singNote.textContent = "";
+      return;
+    }
+    if (t.instrument === BACKING) {
+      this.singNote.textContent = "簡易シンセのトラックでは効きません(素材の音源で鳴るトラックだけ)";
+      return;
+    }
+    const sorted = [...t.notes].sort((a, c) => a.start - c.start || a.pitch - c.pitch);
+    const marks = phraseMarks(sorted, b.restBefore, b.restAfter);
+    const secOf = (n: Note) => beatsToSec(n.start + n.length, this.project) - beatsToSec(n.start, this.project);
+    const said: string[] = [];
+    if (b.leapSec > 0) said.push(t.glide > 0 ? "ポルタメント中は跳躍だけポルタメントはかかりません" : `跳躍 ${stepsFrom(sorted, marks).filter((s) => s !== 0 && Math.abs(s) >= b.leapMin).length} か所`);
+    if (b.kobushi > 0) said.push(`こぶし ${sorted.filter((n) => secOf(n) >= b.kobushiMinSec).length} か所`);
+    if (b.breath > 0) said.push(`ブレス ${breathsBefore(sorted, marks, b.breathRest, b.breathSec, this.project).filter((x) => x > 0).length} か所`);
+    this.singNote.textContent = said.join("・");
   }
 
   /** The roll shows the selected track: keys for a melodic one, its rows for a drum track. */
@@ -3013,7 +3078,7 @@ export class RollPanel {
         instrument: t.kind === "drum" ? "drum" : t.instrument!,
         samples: t.kind === "drum" ? kit.samples : undefined,
         drumKeys: t.kind === "drum" ? kit.keys : undefined,
-        notes: toSeqNotes(t.kind === "melodic" ? withHarmony(t.notes, t.harmony, t.glide) : t.notes, this.project, t.kind !== "drum" && t.glide > 0, phraseRestsOf(t)),
+        notes: toSeqNotes(t.kind === "melodic" ? withHarmony(t.notes, t.harmony, t.glide) : t.notes, this.project, t.kind !== "drum" && t.glide > 0, t.kind === "melodic" ? seqExprOf(t) : undefined),
         glide: t.kind === "drum" ? 0 : t.glide,
         vibrato: t.kind === "melodic" ? longVibratoOf(t, this.project.bpm) : null,
         bends: t.kind === "melodic" ? noteBendsOf(t) : null,

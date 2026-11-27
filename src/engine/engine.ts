@@ -91,6 +91,47 @@ export interface NoteBends {
   linkStart?: number;
   linkOver?: number;
   linkSec?: number;
+  /** 跳躍だけポルタメント (design.md 58): a step of `leapMin` semitones or more slides all the way from the note before, over `leapSec` (0 / absent: none). */
+  leapSec?: number;
+  leapMin?: number;
+  /** こぶし: a note at least `kobushiMinSec` long turns up `kobushi` semitones and back (a little under after), `kobushiAt` of the way in, over `kobushiSec`. */
+  kobushi?: number;
+  kobushiSec?: number;
+  kobushiAt?: number;
+  kobushiMinSec?: number;
+  /** 抑揚's 抜き: a note at least FADE_MIN_SEC long comes down `fadeDb` over its last 40%. */
+  fadeDb?: number;
+  /** ブレス: the breath before a phrase, its loudness against the sound's held part (0 / absent: none). */
+  breath?: number;
+}
+
+/**
+ * What a song's note-on carries besides its pitch and length (design.md 55–58): where it sits in its phrase
+ * (SeqNote.phrase), its step from the note before (fromSemis), and a level of its own (dB: 抑揚, 揺らぎ).
+ */
+export interface NoteExpr {
+  phrase: number;
+  fromSemis: number;
+  gainDb: number;
+}
+export const NO_EXPR: NoteExpr = { phrase: 0, fromSemis: 0, gainDb: 0 };
+
+/** 抜き: only notes held this long; over the last share of them. */
+export const FADE_MIN_SEC = 0.5;
+const FADE_SHARE = 0.4;
+/** こぶし: the turn up (this share of its time), then the little dip under. */
+const KOBUSHI_UP = 0.6;
+const KOBUSHI_DIP = 0.4;
+/** こぶし's bend (semitones) at `u` (0–1) through it: up `depth` and back, smoothly, then a dip of KOBUSHI_DIP × it. */
+export function kobushiBend(u: number, depth: number): number {
+  if (u <= 0 || u >= 1) return 0;
+  if (u < KOBUSHI_UP) return depth * Math.sin((Math.PI * u) / KOBUSHI_UP) ** 2;
+  return -KOBUSHI_DIP * depth * Math.sin((Math.PI * (u - KOBUSHI_UP)) / (1 - KOBUSHI_UP)) ** 2;
+}
+/** ブレス's loudness over `u` (0–1) of it: drawn in slowly, cut short as the note comes. */
+export function breathEnvelope(u: number): number {
+  if (u <= 0 || u >= 1) return 0;
+  return u < 0.85 ? (u / 0.85) ** 1.5 : (1 - u) / 0.15;
 }
 /** 音程のつなぎ: at most this far back toward the note before, and this far past (semitones), however wide the step. */
 export const LINK_START_MOST = 3;
@@ -246,6 +287,15 @@ class Voice {
   linkFrom = 0;
   linkPast = 0;
   linkDur = 0;
+  /** こぶし: from when (seconds into the note), how long, how deep (0 = none). */
+  kobFrom = 0;
+  kobDur = 0;
+  kobDepth = 0;
+  /** This note's own level (抑揚, 揺らぎ; linear), and its 抜き: from when, how long, how far (dB; 0 = none). */
+  exprGain = 1;
+  fadeFrom = 0;
+  fadeDur = 0;
+  fadeDb = 0;
   /** The pitch correction as it has glided in so far (semitones), for tune.retuneSec. */
   retuneCorr = 0;
   /** How far the sustain's pitch shaping has come in (0 in the head, up to 1 over SHAPE_IN_SEC after it). */
@@ -310,6 +360,13 @@ export class Engine {
   private longVibrato: LongVibrato | null = null;
   /** しゃくり・フォール (a song track's setting; null = off). */
   private bends: NoteBends | null = null;
+  /** ブレス: its loudness against the held part (0 = none), and the one sounding: samples left of how many, its filters' states. */
+  private breathAmount = 0;
+  private breathLeft = 0;
+  private breathLength = 0;
+  private breathHp = 0;
+  private breathHpIn = 0;
+  private breathLp = 0;
 
   constructor(sampleRate: number) {
     this.sampleRate = sampleRate;
@@ -480,28 +537,50 @@ export class Engine {
    * ends a phrase drops off at its end. Notes with no length (the keyboard) get neither.
    */
   setNoteBends(b: NoteBends | null): void {
-    this.bends = b && (b.scoopSemis > 0 || b.fallSemis > 0 || ((b.linkSec ?? 0) > 0 && ((b.linkStart ?? 0) > 0 || (b.linkOver ?? 0) > 0))) ? { ...b } : null;
+    this.bends = b ? { ...b } : null;
+    this.breathAmount = b?.breath && b.breath > 0 ? b.breath : 0;
   }
 
-  /** A note's しゃくり・フォール・音程のつなぎ, as it starts at voice time `from` (seconds). */
+  /** A note's しゃくり・フォール・音程のつなぎ・跳躍だけポルタメント・こぶし・抜き, as it starts at voice time `from` (seconds). */
   private markBends(v: Voice, lengthSec: number | undefined, phrase: number, from: number, fromSemis = 0): void {
     const b = this.bends;
     v.scoopSemis = 0;
     v.fallSemis = 0;
     v.linkDur = 0;
+    v.kobDepth = 0;
+    v.fadeDb = 0;
     if (!b || lengthSec === undefined || !(lengthSec > 0)) return;
     v.bendFrom = from;
+    const step = Math.abs(fromSemis);
+    const toward = Math.sign(fromSemis);
+    // A leap: all the way from the note before (and past its own pitch as 音程のつなぎ has it), within 60% of the note.
+    const leap = !!b.leapSec && b.leapSec > 0 && step > 0 && step >= (b.leapMin ?? 5);
     // A step from the note before: from toward it, past its own pitch, back (all of it within 60% of a short note).
-    const linked = !!b.linkSec && b.linkSec > 0 && fromSemis !== 0 && ((b.linkStart ?? 0) > 0 || (b.linkOver ?? 0) > 0);
-    if (linked) {
-      const step = Math.abs(fromSemis);
-      const toward = Math.sign(fromSemis);
+    const linked = !leap && !!b.linkSec && b.linkSec > 0 && step > 0 && ((b.linkStart ?? 0) > 0 || (b.linkOver ?? 0) > 0);
+    if (leap) {
+      v.linkFrom = fromSemis;
+      v.linkPast = b.linkSec && b.linkSec > 0 ? -toward * Math.min(LINK_OVER_MOST, step * (b.linkOver ?? 0)) : 0;
+      v.linkDur = Math.min(b.leapSec!, (0.6 * lengthSec) / (1 + LINK_SETTLE));
+    } else if (linked) {
       v.linkFrom = toward * Math.min(LINK_START_MOST, step * (b.linkStart ?? 0));
       v.linkPast = -toward * Math.min(LINK_OVER_MOST, step * (b.linkOver ?? 0));
       v.linkDur = Math.min(b.linkSec!, (0.6 * lengthSec) / (1 + LINK_SETTLE));
     }
+    // こぶし: on a long note, a turn up and back part of the way in (no longer than 40% of the note).
+    if (b.kobushi && b.kobushi > 0 && lengthSec >= (b.kobushiMinSec ?? 0.8)) {
+      v.kobDepth = b.kobushi;
+      v.kobDur = Math.min(b.kobushiSec ?? 0.16, 0.4 * lengthSec);
+      v.kobFrom = Math.min((b.kobushiAt ?? 0.35) * lengthSec, lengthSec - v.kobDur);
+    }
+    // 抜き: a long note comes down over its last part.
+    if (b.fadeDb && b.fadeDb > 0 && lengthSec >= FADE_MIN_SEC) {
+      v.fadeDb = b.fadeDb;
+      v.fadeDur = FADE_SHARE * lengthSec;
+      v.fadeFrom = lengthSec - v.fadeDur;
+    }
+    const linkedAny = leap || linked;
     // (A long note that steps in gets the step's way in, not a scoop as well.)
-    if (b.scoopSemis > 0 && !linked && (phrase & 1 || lengthSec >= SCOOP_LONG_SEC)) {
+    if (b.scoopSemis > 0 && !linkedAny && (phrase & 1 || lengthSec >= SCOOP_LONG_SEC)) {
       v.scoopSemis = b.scoopSemis;
       v.scoopDur = Math.max(0.005, scoopSec(lengthSec, b.scoopSec));
     }
@@ -563,9 +642,11 @@ export class Engine {
    * a "stretch" sustain is paced to fill it. Without it (the keyboard, a
    * preview) the hold length stands in.
    */
-  noteOn(note: number, velocity = 0.8, lengthSec?: number, phrase = 0, fromSemis = 0): void {
+  noteOn(note: number, velocity = 0.8, lengthSec?: number, expr: NoteExpr = NO_EXPR): void {
     if (!this.source || !this.params) return;
     const params = this.params;
+    const { phrase, fromSemis } = expr;
+    const exprGain = expr.gainDb ? 10 ** (expr.gainDb / 20) : 1;
     if (this.glideSec > 0) {
       // The note still held, if any: the new one slides from its pitch (as it is just now, mid-slide or not).
       let held: Voice | null = null;
@@ -579,6 +660,7 @@ export class Engine {
           // (Legato: the same voice goes on; the new note's vibrato counts from now.)
           this.markLongVibrato(held, lengthSec, held.nextCenter / this.sampleRate);
           this.markBends(held, lengthSec, phrase, held.nextCenter / this.sampleRate, 0);
+          held.exprGain = exprGain;
           return;
         }
         this.fadeOut(held, STEAL_FADE_SEC);
@@ -588,6 +670,7 @@ export class Engine {
         voice.stretchSpeed = this.stretchSpeedFor(lengthSec ?? this.hold);
         this.markLongVibrato(voice, lengthSec, 0);
         this.markBends(voice, lengthSec, phrase, 0, 0);
+        voice.exprGain = exprGain;
         return;
       }
     }
@@ -602,6 +685,18 @@ export class Engine {
     voice.stretchSpeed = this.stretchSpeedFor(lengthSec !== undefined && lengthSec > 0 ? lengthSec : this.hold);
     this.markLongVibrato(voice, lengthSec, 0);
     this.markBends(voice, lengthSec, phrase, 0, fromSemis);
+    voice.exprGain = exprGain;
+  }
+
+  /**
+   * ブレス: a breath drawn in over `lengthSec`, ending as a phrase's first note comes (a song's track: the player
+   * starts it that long before the note). Noise between about 700 Hz and 5 kHz, as loud as the setting against the
+   * cut's held part.
+   */
+  breath(lengthSec: number): void {
+    if (this.breathAmount <= 0 || !(lengthSec > 0)) return;
+    this.breathLength = Math.max(1, Math.round(lengthSec * this.sampleRate));
+    this.breathLeft = this.breathLength;
   }
 
   private glide(v: Voice, semitones: number): void {
@@ -634,6 +729,7 @@ export class Engine {
     outL.fill(0, 0, frames);
     outR.fill(0, 0, frames);
     if (!this.source || !this.params) return;
+    if (this.breathLeft > 0) this.renderBreath(outL, outR, frames);
     for (const v of this.voices) {
       if (!v.active) continue;
       this.renderVoice(v, frames);
@@ -658,6 +754,24 @@ export class Engine {
     x ^= x << 5;
     this.seed = x >>> 0;
     return this.seed / 4294967296;
+  }
+
+  /** ブレス: the breath's next samples into the outputs (both alike): noise, high-passed at 700 Hz and low-passed at 5 kHz. */
+  private renderBreath(outL: Float32Array, outR: Float32Array, frames: number): void {
+    const sr = this.sampleRate;
+    const hp = Math.exp((-2 * Math.PI * 700) / sr);
+    const lp = 1 - Math.exp((-2 * Math.PI * 5000) / sr);
+    // (As loud as the setting against the held part: white noise through these keeps about a third of its level.)
+    const level = this.breathAmount * (this.sustainLevel > 0 ? this.sustainLevel : 0.05) * 3;
+    for (let i = 0; i < frames && this.breathLeft > 0; i++, this.breathLeft--) {
+      const x = this.random() * 2 - 1;
+      this.breathHp = hp * (this.breathHp + x - this.breathHpIn);
+      this.breathHpIn = x;
+      this.breathLp += lp * (this.breathHp - this.breathLp);
+      const y = this.breathLp * level * breathEnvelope(1 - this.breathLeft / this.breathLength);
+      outL[i] += y;
+      outR[i] += y;
+    }
   }
 
   /** The steady voiced periods of the sustain region, centred if there are too many. */
@@ -713,6 +827,9 @@ export class Engine {
     v.scoopSemis = 0;
     v.fallSemis = 0;
     v.linkDur = 0;
+    v.kobDepth = 0;
+    v.fadeDb = 0;
+    v.exprGain = 1;
     for (const g of v.grains) g.active = false;
     // (`force` may be missing from settings kept before it existed: then it is off.)
     if (params.force && params.force.mode !== "off") {
@@ -829,6 +946,7 @@ export class Engine {
     }
     let bend = v.scoopSemis > 0 || v.fallSemis > 0 ? noteBend(seconds - v.bendFrom, v.scoopSemis, v.scoopDur, v.fallSemis, v.fallFrom, v.fallDur) : 0;
     if (v.linkDur > 0) bend += linkBend(seconds - v.bendFrom, v.linkFrom, v.linkPast, v.linkDur);
+    if (v.kobDepth > 0) bend += kobushiBend((seconds - v.bendFrom - v.kobFrom) / v.kobDur, v.kobDepth);
     return (cents + v.driftValue) / 100 + bend;
   }
 
@@ -1201,6 +1319,13 @@ export class Engine {
     const remaining = fadeOutSamples > 0 ? this.playoutRemaining(v) : Infinity;
     const w = params.wobble;
     const tremolo = w.tremoloDepth;
+    // This note's own level, and its 抜き at the block's two ends (in between, a straight line).
+    const fadeAt = (s: number) => {
+      const t = s / sr - v.bendFrom - v.fadeFrom;
+      return t <= 0 ? 1 : 10 ** ((-v.fadeDb * Math.min(1, t / v.fadeDur)) / 20);
+    };
+    const g0 = v.exprGain * (v.fadeDb > 0 ? fadeAt(blockStart) : 1);
+    const gStep = (v.exprGain * (v.fadeDb > 0 ? fadeAt(blockEnd) : 1) - g0) / Math.max(1, frames);
     for (let i = 0; i < frames; i++) {
       switch (v.env) {
         case Env.Attack:
@@ -1229,7 +1354,7 @@ export class Engine {
           break;
       }
       if (v.fadeStep > 0) v.fadeGain = Math.max(0, v.fadeGain - v.fadeStep);
-      let gain = v.level * v.fadeGain * v.velocityGain;
+      let gain = v.level * v.fadeGain * v.velocityGain * (g0 + gStep * i);
       if (remaining !== Infinity) gain *= Math.max(0, Math.min(1, (remaining - i) / fadeOutSamples));
       if (tremolo > 0) {
         // Amplitude vibrato at the vibrato's rate and envelope (VocalShifter's DYN ビブラート).

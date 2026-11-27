@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TRACK_BENDS, DEFAULT_TRACK_VIBRATO, phraseMarks, sanitizeProject, stepsFrom, toSeqNotes } from "./model";
+import { breathsBefore, DEFAULT_TRACK_BENDS, DEFAULT_TRACK_VIBRATO, noteGains, phraseMarks, sanitizeProject, stepsFrom, toSeqNotes } from "./model";
 import { PHRASE_END, PHRASE_START } from "../song/parts";
 
 const n = (start: number, length: number, pitch = 60) => ({ id: start * 100 + pitch, start, length, pitch, velocity: 0.8 });
@@ -47,6 +47,34 @@ describe("phrases (しゃくり・フォール)", () => {
     // With portamento they slide already: no steps reach the player.
     expect(toSeqNotes(notes, 120, true).some((s) => s.fromSemis)).toBe(false);
     expect(toSeqNotes(notes, 120).map((s) => s.fromSemis ?? 0)).toEqual([0, -2, 0, 4, 0]);
+  });
+
+  it("抑揚: higher in its phrase is louder, a phrase's last note softer; 揺らぎ the same every time, within its bounds", () => {
+    const notes = [n(0, 1, 60), n(1, 1, 64), n(2, 1, 67), n(3, 1, 62)];
+    const marks = phraseMarks(notes);
+    const g = noteGains(notes, marks, { highDb: 4, endDb: 2 });
+    // The middle is 63.25: −3.25, +0.75, +3.75 and −1.25 semitones from it, at 4 dB an octave; the last 2 dB less.
+    expect(g[0]).toBeCloseTo((4 * -3.25) / 12, 6);
+    expect(g[2]).toBeCloseTo((4 * 3.75) / 12, 6);
+    expect(g[3]).toBeCloseTo((4 * -1.25) / 12 - 2, 6);
+    const a = toSeqNotes(notes, 120, false, { humanMs: 10, humanVel: 0.1 });
+    const b = toSeqNotes(notes, 120, false, { humanMs: 10, humanVel: 0.1 });
+    expect(a).toEqual(b);
+    a.forEach((s, i) => {
+      expect(Math.abs(s.start - i * 0.5)).toBeLessThanOrEqual(0.0101);
+      expect(Math.abs(s.gainDb ?? 0)).toBeLessThanOrEqual(-20 * Math.log10(0.9) + 1e-9);
+    });
+    expect(a.some((s, i) => Math.abs(s.start - i * 0.5) > 0.001)).toBe(true);
+  });
+
+  it("ブレス: before a phrase after a rest long enough, as long as asked or 80% of the rest", () => {
+    // A phrase at 0 (nothing before it: but no time either), one after a beat's rest, one after half a beat's.
+    const notes = [n(0, 1), n(2, 1), n(3.5, 1)];
+    const marks = phraseMarks(notes, 0.25, 0.25);
+    // At 120 a beat is 0.5 s: the second gets 0.25 s; the third (0.25 s of rest) 0.2 s; the first, at 0 s, none.
+    expect(breathsBefore(notes, marks, 0.5, 0.25, 120)).toEqual([0, 0.25, 0.2]);
+    expect(breathsBefore(notes, marks, 1, 0.25, 120)).toEqual([0, 0.25, 0]);
+    expect(toSeqNotes(notes, 120, false, { restBefore: 0.25, restAfter: 0.25, breathRest: 0.5, breathSec: 0.25 }).map((s) => s.breathSec ?? 0)).toEqual([0, 0.25, 0.2]);
   });
 
   it("reaches the player's notes", () => {

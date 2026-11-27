@@ -3,7 +3,7 @@ import { analyzePitch } from "../analysis/pyin";
 import { rootPitch } from "../analysis/rootPitch";
 import { DEFAULT_PARAMS, type InstrumentParams } from "../instrument/types";
 import { demoPhrasePitch, demoSyllable, synthVoice } from "../testsignals/synthVoice";
-import { Engine, fallSec, linkBend, longVibratoDelay, longVibratoDepth, longVibratoRamp, noteBend, scoopSec } from "./engine";
+import { Engine, fallSec, kobushiBend, linkBend, longVibratoDelay, longVibratoDepth, longVibratoRamp, noteBend, scoopSec } from "./engine";
 import { analyzeMaterial, prepareSource, resample } from "./prepare";
 
 const SR = 44100;
@@ -432,7 +432,7 @@ describe("しゃくり・フォール", () => {
     const out = new Float32Array(total);
     const l = new Float32Array(128);
     const r = new Float32Array(128);
-    engine.noteOn(note, 1, lengthSec, phrase);
+    engine.noteOn(note, 1, lengthSec, { phrase, fromSemis: 0, gainDb: 0 });
     let released = false;
     for (let at = 0; at < total; at += 128) {
       if (!released && at >= lengthSec * SR) {
@@ -493,7 +493,7 @@ describe("しゃくり・フォール", () => {
     const total = Math.round(0.6 * SR);
     const out = new Float32Array(total);
     const l = new Float32Array(128), r = new Float32Array(128);
-    e.noteOn(62, 1, 0.6, 0, 4);
+    e.noteOn(62, 1, 0.6, { phrase: 0, fromSemis: 4, gainDb: 0 });
     for (let at = 0; at < total; at += 128) {
       e.render(l, r);
       out.set(l.subarray(0, Math.min(128, total - at)), at);
@@ -511,6 +511,78 @@ describe("しゃくり・フォール", () => {
     expect(linkBend(0, 1.4, -0.8, 0.07)).toBe(1.4);
     expect(linkBend(0.07, 1.4, -0.8, 0.07)).toBeCloseTo(-0.8, 6);
     expect(linkBend(0.07 + 0.105, 1.4, -0.8, 0.07)).toBeCloseTo(0, 6);
+  });
+
+  it("跳躍だけポルタメント・こぶし: a leap slides all the way, a long note turns up and back", () => {
+    const material = synthVoice({ sampleRate: SR, durationSec: 2, pitch: () => 62 });
+    const run = (b: Parameters<Engine["setNoteBends"]>[0], len: number, fromSemis: number) => {
+      const e = setup(material, { flatten: 1 }).engine;
+      e.setNoteBends(b);
+      const total = Math.round((len + 0.05) * SR);
+      const out = new Float32Array(total);
+      const l = new Float32Array(128), r = new Float32Array(128);
+      e.noteOn(62, 1, len, { phrase: 0, fromSemis, gainDb: 0 });
+      for (let at = 0; at < total; at += 128) {
+        e.render(l, r);
+        out.set(l.subarray(0, Math.min(128, total - at)), at);
+      }
+      const track = analyzePitch(out, SR, { hopSec: 0.005 });
+      return (sec: number) => {
+        const f = Math.round(sec / track.hopSec);
+        const xs = Array.from(track.f0.slice(Math.max(0, f - 1), f + 2)).filter(Number.isFinite).sort((a, c) => a - c);
+        return xs[xs.length >> 1];
+      };
+    };
+    // A leap of 7 down from A4 (fromSemis +7) over 0.1 s: near the A at first, on D after.
+    const leap = run({ scoopSemis: 0, fallSemis: 0, leapSec: 0.1, leapMin: 5 }, 0.6, 7);
+    expect(leap(0.015)).toBeGreaterThan(67);
+    expect(Math.abs(leap(0.3) - 62)).toBeLessThan(0.15);
+    // A step of 3 is no leap: on D from the start.
+    expect(Math.abs(run({ scoopSemis: 0, fallSemis: 0, leapSec: 0.1, leapMin: 5 }, 0.6, 3)(0.015) - 62)).toBeLessThan(0.3);
+    // こぶし of 2 on a 1 s note: 0.35 s in, up for 0.1 s (at its top 0.048 s in), back after.
+    const kob = run({ scoopSemis: 0, fallSemis: 0, kobushi: 2, kobushiSec: 0.16, kobushiAt: 0.35, kobushiMinSec: 0.8 }, 1, 0);
+    expect(kob(0.35 + 0.048)).toBeGreaterThan(63.3);
+    expect(Math.abs(kob(0.7) - 62)).toBeLessThan(0.15);
+    expect(kobushiBend(0.3, 2)).toBeCloseTo(2, 6);
+    expect(kobushiBend(0.8, 2)).toBeCloseTo(-0.8, 6);
+  });
+
+  it("抑揚・ブレス: a note's own level, a long note's 抜き, a breath before", () => {
+    const material = synthVoice({ sampleRate: SR, durationSec: 2, pitch: () => 62 });
+    const level = (b: Parameters<Engine["setNoteBends"]>[0], gainDb: number) => {
+      const e = setup(material, { flatten: 1 }).engine;
+      e.setNoteBends(b);
+      const out = new Float32Array(Math.round(1.05 * SR));
+      const l = new Float32Array(128), r = new Float32Array(128);
+      e.noteOn(62, 1, 1, { phrase: 0, fromSemis: 0, gainDb });
+      for (let at = 0; at < out.length; at += 128) {
+        e.render(l, r);
+        out.set(l.subarray(0, Math.min(128, out.length - at)), at);
+      }
+      return out;
+    };
+    const plain = level(null, 0), quieter = level(null, -6), faded = level({ scoopSemis: 0, fallSemis: 0, fadeDb: 6 }, 0);
+    expect(rms(quieter, 0.3 * SR, 0.5 * SR) / rms(plain, 0.3 * SR, 0.5 * SR)).toBeCloseTo(0.5, 1);
+    // 抜き: as it was until 60% in, down toward −6 dB by the end.
+    expect(rms(faded, 0.3 * SR, 0.5 * SR) / rms(plain, 0.3 * SR, 0.5 * SR)).toBeCloseTo(1, 1);
+    expect(rms(faded, 0.9 * SR, 0.98 * SR) / rms(plain, 0.9 * SR, 0.98 * SR)).toBeLessThan(0.65);
+    // A breath: noise for its length (then nothing), louder for a larger setting.
+    const breath = (amount: number) => {
+      const e = setup(material, { flatten: 1 }).engine;
+      e.setNoteBends({ scoopSemis: 0, fallSemis: 0, breath: amount });
+      e.breath(0.25);
+      const out = new Float32Array(Math.round(0.35 * SR));
+      const l = new Float32Array(128), r = new Float32Array(128);
+      for (let at = 0; at < out.length; at += 128) {
+        e.render(l, r);
+        out.set(l.subarray(0, Math.min(128, out.length - at)), at);
+      }
+      return out;
+    };
+    const small = breath(0.06), big = breath(0.2);
+    expect(rms(small, 0.1 * SR, 0.2 * SR)).toBeGreaterThan(1e-4);
+    expect(rms(big, 0.1 * SR, 0.2 * SR) / rms(small, 0.1 * SR, 0.2 * SR)).toBeCloseTo(0.2 / 0.06, 0);
+    expect(rms(big, 0.27 * SR, 0.34 * SR)).toBe(0);
   });
 
   it("the bend: rises fast then settles, drops slowly then fast", () => {

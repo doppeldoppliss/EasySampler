@@ -2,7 +2,7 @@
 // offline song export, so the file sounds as the page does): an Engine on one
 // cut, a drum track's rendered one-shots, or the plain backing.
 
-import { Engine, type LongVibrato, type NoteBends, type PreparedSource } from "../engine/engine";
+import { Engine, type LongVibrato, type NoteBends, type NoteExpr, type PreparedSource } from "../engine/engine";
 import { BackingSynth } from "./backing";
 import type { TrackSound } from "./player";
 
@@ -118,8 +118,12 @@ export class EngineSound implements TrackSound {
     this.engine.setNoteBends(b);
   }
   /** A song's note hands its length on: a "stretch" sustain fills it (and a long one gets 長い音にビブラート); and its place in its phrase (しゃくり・フォール). */
-  noteOn(note: number, velocity: number, _drum = false, lengthSec?: number, phrase = 0, fromSemis = 0): void {
-    this.engine.noteOn(note, velocity, lengthSec, phrase, fromSemis);
+  noteOn(note: number, velocity: number, _drum = false, lengthSec?: number, expr?: NoteExpr): void {
+    this.engine.noteOn(note, velocity, lengthSec, expr);
+  }
+  /** ブレス before a phrase (when the track has it). */
+  breath(lengthSec: number): void {
+    this.engine.breath(lengthSec);
   }
   noteOff(note: number): void {
     this.engine.noteOff(note);

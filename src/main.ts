@@ -67,7 +67,7 @@ import { writeMidi } from "./daw/midiWrite";
 import { COMMON_KEYS, detectOnset, guessKey, KEY_FAMILIES, newSlot, renderSlot, slotFor, soundKey, type KitSlot } from "./daw/kit";
 import { drumName } from "./song/parts";
 import { MidiInput } from "./audio/midiInput";
-import { autoToSec, BACKING, beatsToSec, clipsToSeq, longVibratoOf, noteBendsOf, phraseRestsOf, roomOf, tempoMapSec, toSeqNotes, trimClips, withHarmony, type Tempo } from "./daw/model";
+import { autoToSec, BACKING, beatsToSec, clipsToSeq, longVibratoOf, noteBendsOf, roomOf, seqExprOf, tempoMapSec, toSeqNotes, trimClips, withHarmony, type Tempo } from "./daw/model";
 import { autoValue, type AutoPoint } from "./song/player";
 import { zipStore, type ZipEntry } from "./export/zip";
 import { encodeWavBytes } from "./audio/wav";
@@ -3438,7 +3438,7 @@ function songTracks(project: ReturnType<typeof rollPanel.snapshot>, only: string
       out.push({ id: t.id, instrument: null, clips, notes, ...mix });
       continue;
     }
-    const all = toSeqNotes(t.kind === "melodic" ? withHarmony(t.notes, t.harmony, t.glide) : t.notes, project, t.kind !== "drum" && t.glide > 0, phraseRestsOf(t));
+    const all = toSeqNotes(t.kind === "melodic" ? withHarmony(t.notes, t.harmony, t.glide) : t.notes, project, t.kind !== "drum" && t.glide > 0, t.kind === "melodic" ? seqExprOf(t) : undefined);
     const notes = range ? loopNotes(all, range.startSec, range.lengthSec) : all;
     if (t.kind === "drum") {
       // The kit: each key its sound (as the engine has it), or the plain drum sound.

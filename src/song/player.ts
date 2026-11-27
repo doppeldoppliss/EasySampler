@@ -9,11 +9,14 @@
 import { canonicalFx, FxChain } from "../fx/chain";
 import { DEFAULT_FX, type FxSettings } from "../instrument/types";
 import type { SeqNote } from "./parts";
+import type { NoteExpr } from "../engine/engine";
 
 /** What a track plays its notes on. `render` fills (does not add to) the buffers. */
 export interface TrackSound {
-  /** `lengthSec`: how long the note is written (a song's note; the keyboard does not know it); `phrase`: SeqNote.phrase. */
-  noteOn(note: number, velocity: number, drum: boolean, lengthSec?: number, phrase?: number, fromSemis?: number): void;
+  /** `lengthSec`: how long the note is written (a song's note; the keyboard does not know it); `expr`: its phrase, step and own level. */
+  noteOn(note: number, velocity: number, drum: boolean, lengthSec?: number, expr?: NoteExpr): void;
+  /** ブレス: a breath drawn over `lengthSec`, ending as a phrase's first note comes (a sound that has one). */
+  breath?(lengthSec: number): void;
   noteOff(note: number, drum: boolean): void;
   allOff(): void;
   render(left: Float32Array, right: Float32Array, frames: number): void;
@@ -91,10 +94,10 @@ interface SongEvent {
   note: number;
   velocity: number;
   drum: boolean;
-  /** A note-on: the note's length (seconds), and where it sits in its phrase (SeqNote.phrase). */
+  /** A note-on: the note's length (seconds), and its expression (phrase, step, own level); a breath: its length. */
   lengthSec: number;
-  phrase: number;
-  fromSemis: number;
+  expr?: NoteExpr;
+  breath?: boolean;
 }
 
 /** After this long with nothing sounding, a track's effects stop being run (their tails have died away). */
@@ -224,8 +227,10 @@ export class SongPlayer {
       for (const n of t.notes) {
         const start = Math.round(n.start * sr);
         const end = Math.max(start + 1, Math.round(n.end * sr));
-        events.push({ frame: start, on: true, note: n.note, velocity: n.velocity, drum: n.drum, lengthSec: (end - start) / sr, phrase: n.phrase ?? 0, fromSemis: n.fromSemis ?? 0 });
-        events.push({ frame: end, on: false, note: n.note, velocity: 0, drum: n.drum, lengthSec: 0, phrase: 0, fromSemis: 0 });
+        const expr = n.phrase || n.fromSemis || n.gainDb ? { phrase: n.phrase ?? 0, fromSemis: n.fromSemis ?? 0, gainDb: n.gainDb ?? 0 } : undefined;
+        events.push({ frame: start, on: true, note: n.note, velocity: n.velocity, drum: n.drum, lengthSec: (end - start) / sr, expr });
+        events.push({ frame: end, on: false, note: n.note, velocity: 0, drum: n.drum, lengthSec: 0 });
+        if (n.breathSec) events.push({ frame: Math.max(0, start - Math.round(n.breathSec * sr)), on: false, breath: true, note: n.note, velocity: 0, drum: false, lengthSec: n.breathSec });
       }
       // Note-offs before note-ons at the same frame (a repeated note re-strikes).
       events.sort((a, b) => a.frame - b.frame || Number(a.on) - Number(b.on));
@@ -467,7 +472,8 @@ export class SongPlayer {
               const offset = e.frame - base;
               if (offset >= limit) break;
               SongPlayer.fill(lane, Math.max(0, offset));
-              if (e.on) lane.sound.noteOn(e.note, e.velocity, e.drum, e.lengthSec, e.phrase, e.fromSemis);
+              if (e.breath) lane.sound.breath?.(e.lengthSec);
+              else if (e.on) lane.sound.noteOn(e.note, e.velocity, e.drum, e.lengthSec, e.expr);
               else lane.sound.noteOff(e.note, e.drum);
               lane.cursor++;
               fired = true;

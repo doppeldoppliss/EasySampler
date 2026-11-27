@@ -17,6 +17,10 @@ export interface SeqNote {
   phrase?: number;
   /** Inside a phrase: the note before it (the nearest in pitch) less this one, in semitones (absent / 0: none, or the same pitch). */
   fromSemis?: number;
+  /** Its own level (dB: 抑揚, 揺らぎ; absent: 0). */
+  gainDb?: number;
+  /** ブレス: a breath this long (seconds) ends where it starts (absent: none). */
+  breathSec?: number;
 }
 
 export const PHRASE_START = 1;

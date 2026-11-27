@@ -12,6 +12,7 @@ const ROLES: readonly Role[] = ["drum", "audio", "bass", "lead", "chords", "back
 import { PHRASE_END, PHRASE_START, type SeqNote } from "../song/parts";
 import type { SongNote } from "../song/midi";
 import type { AutoPoint } from "../song/player";
+import type { NoteBends } from "../engine/engine";
 
 export interface Note {
   /** Unique within its track (for selection; not saved meaningfully across sessions). */
@@ -263,8 +264,68 @@ export interface TrackBends {
   link: number;
   linkOver: number;
   linkSec: number;
+  /** 跳躍だけポルタメント (design.md 58): a step of `leapMin` semitones or more slides all the way, over `leapSec` (0 = none). */
+  leapSec: number;
+  leapMin: number;
+  /** こぶし: semitones up (0 = none), how long, how far into the note (share), on notes at least `kobushiMinSec`. */
+  kobushi: number;
+  kobushiSec: number;
+  kobushiAt: number;
+  kobushiMinSec: number;
+  /** 抑揚: dB per octave over the phrase's middle, dB off a phrase's last note, dB a long note comes down at its end. */
+  highDb: number;
+  endDb: number;
+  fadeDb: number;
+  /** ブレス: loudness against the held part (0 = none), length (s), the rest before a phrase it needs (beats). */
+  breath: number;
+  breathSec: number;
+  breathRest: number;
+  /** 揺らぎ: ms early or late at most, share of level up or down at most. */
+  humanMs: number;
+  humanVel: number;
 }
-export const DEFAULT_TRACK_BENDS: TrackBends = { scoop: 0, fall: 0, scoopSec: 0.12, fallSec: 0.3, fallMinSec: 0.25, restBefore: 0.25, restAfter: 0.5, link: 0, linkOver: 0, linkSec: 0.07 };
+export const DEFAULT_TRACK_BENDS: TrackBends = {
+  scoop: 0,
+  fall: 0,
+  scoopSec: 0.12,
+  fallSec: 0.3,
+  fallMinSec: 0.25,
+  restBefore: 0.25,
+  restAfter: 0.5,
+  link: 0,
+  linkOver: 0,
+  linkSec: 0.07,
+  leapSec: 0,
+  leapMin: 5,
+  kobushi: 0,
+  kobushiSec: 0.16,
+  kobushiAt: 0.35,
+  kobushiMinSec: 0.8,
+  highDb: 0,
+  endDb: 0,
+  fadeDb: 0,
+  breath: 0,
+  breathSec: 0.25,
+  breathRest: 0.5,
+  humanMs: 0,
+  humanVel: 0,
+};
+/** The steps of the five (design.md 58): each the numbers it sets. */
+export const LEAP_CHOICES: readonly [number, string][] = [[0, "なし"], [0.06, "短め"], [0.1, "ふつう"], [0.16, "長め"]];
+export const KOBUSHI_CHOICES: readonly [number, string][] = [[0, "なし"], [1, "浅め"], [2, "ふつう"], [3, "深め"]];
+export const DYNAMICS_CHOICES: readonly { label: string; highDb: number; endDb: number; fadeDb: number }[] = [
+  { label: "なし", highDb: 0, endDb: 0, fadeDb: 0 },
+  { label: "浅め", highDb: 2, endDb: 1, fadeDb: 2 },
+  { label: "ふつう", highDb: 4, endDb: 2, fadeDb: 4 },
+  { label: "深め", highDb: 6, endDb: 4, fadeDb: 6 },
+];
+export const BREATH_CHOICES: readonly [number, string][] = [[0, "なし"], [0.06, "小さめ"], [0.12, "ふつう"], [0.2, "大きめ"]];
+export const HUMAN_CHOICES: readonly { label: string; humanMs: number; humanVel: number }[] = [
+  { label: "なし", humanMs: 0, humanVel: 0 },
+  { label: "少し", humanMs: 5, humanVel: 0.05 },
+  { label: "ふつう", humanMs: 10, humanVel: 0.1 },
+  { label: "多め", humanMs: 18, humanVel: 0.18 },
+];
 export const SCOOP_CHOICES: readonly [number, string][] = [[0, "なし"], [1, "浅め"], [2, "ふつう"], [3, "深め"]];
 export const FALL_CHOICES: readonly [number, string][] = [[0, "なし"], [2, "浅め"], [4, "ふつう"], [7, "深め"]];
 /** 音程のつなぎ's steps: how far back toward the note before, and past (shares of the step). */
@@ -294,16 +355,40 @@ export const BENDS_RANGES: Record<keyof TrackBends, readonly [number, number, nu
   link: [0, 1, 0.05],
   linkOver: [0, 1, 0.05],
   linkSec: [0.02, 0.3, 0.01],
+  leapSec: [0, 0.4, 0.01],
+  leapMin: [1, 12, 1],
+  kobushi: [0, 4, 0.1],
+  kobushiSec: [0.06, 0.4, 0.01],
+  kobushiAt: [0.1, 0.8, 0.05],
+  kobushiMinSec: [0.3, 3, 0.05],
+  highDb: [0, 10, 0.5],
+  endDb: [0, 10, 0.5],
+  fadeDb: [0, 12, 0.5],
+  breath: [0, 0.5, 0.01],
+  breathSec: [0.1, 0.6, 0.01],
+  breathRest: [0.25, 4, 0.25],
+  humanMs: [0, 40, 1],
+  humanVel: [0, 0.4, 0.01],
 };
 
-/** A track's しゃくり・フォール・音程のつなぎ as the engine takes it (null: none of them). */
-export function noteBendsOf(t: Pick<Track, "bends">): { scoopSemis: number; fallSemis: number; scoopSec: number; fallSec: number; fallMinSec: number; linkStart: number; linkOver: number; linkSec: number } | null {
+/** A track's 歌い方 as the engine takes it (null: none of what the engine does). */
+export function noteBendsOf(t: Pick<Track, "bends">): NoteBends | null {
   const b = t.bends;
-  return b && (b.scoop > 0 || b.fall > 0 || b.link > 0 || b.linkOver > 0) ? { scoopSemis: b.scoop, fallSemis: b.fall, scoopSec: b.scoopSec, fallSec: b.fallSec, fallMinSec: b.fallMinSec, linkStart: b.link, linkOver: b.linkOver, linkSec: b.linkSec } : null;
+  if (!b) return null;
+  const any = b.scoop > 0 || b.fall > 0 || b.link > 0 || b.linkOver > 0 || b.leapSec > 0 || b.kobushi > 0 || b.fadeDb > 0 || b.breath > 0;
+  return any
+    ? { scoopSemis: b.scoop, fallSemis: b.fall, scoopSec: b.scoopSec, fallSec: b.fallSec, fallMinSec: b.fallMinSec, linkStart: b.link, linkOver: b.linkOver, linkSec: b.linkSec, leapSec: b.leapSec, leapMin: b.leapMin, kobushi: b.kobushi, kobushiSec: b.kobushiSec, kobushiAt: b.kobushiAt, kobushiMinSec: b.kobushiMinSec, fadeDb: b.fadeDb, breath: b.breath }
+    : null;
 }
 
 /** The rests (beats) a track reads its phrases by (しゃくり・フォール). */
 export const phraseRestsOf = (t: Pick<Track, "bends">) => ({ before: t.bends?.restBefore ?? DEFAULT_TRACK_BENDS.restBefore, after: t.bends?.restAfter ?? DEFAULT_TRACK_BENDS.restAfter });
+
+/** What a track's 歌い方 asks of its notes before they play (toSeqNotes): phrases, 抑揚, 揺らぎ, ブレス. */
+export function seqExprOf(t: Pick<Track, "bends">): SeqExpr {
+  const b = t.bends ?? DEFAULT_TRACK_BENDS;
+  return { restBefore: b.restBefore, restAfter: b.restAfter, highDb: b.highDb, endDb: b.endDb, humanMs: b.humanMs, humanVel: b.humanVel, breathRest: b.breathRest, breathSec: b.breath > 0 ? b.breathSec : 0 };
+}
 
 /** A track's setting as the engine takes it (null: off). Its length in seconds at the song's tempo. */
 export function longVibratoOf(t: Pick<Track, "vibrato">, bpm: number): { minSec: number; depthCents: number; rateHz: number; startShare: number; growShare: number } | null {
@@ -475,12 +560,15 @@ export function secToBeats(sec: number, tempo: Tempo): number {
  * heard (the engine has one voice per key). With `legato` (a track with portamento), a
  * note that ends right where one of another pitch starts overlaps it a little.
  */
-export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false, rests?: { before: number; after: number }): SeqNote[] {
+export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false, expr?: Partial<SeqExpr>): SeqNote[] {
   const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   const out: SeqNote[] = [];
-  const phrases = phraseMarks(sorted, rests?.before, rests?.after);
+  const phrases = phraseMarks(sorted, expr?.restBefore, expr?.restAfter);
   // (With portamento the notes slide into each other already: no step of their own.)
   const steps = legato ? null : stepsFrom(sorted, phrases);
+  const gains = noteGains(sorted, phrases, expr ?? {});
+  const breaths = expr?.breathSec ? breathsBefore(sorted, phrases, expr.breathRest ?? 0.5, expr.breathSec, bpm) : null;
+  const human = expr?.humanMs ?? 0;
   for (let i = 0; i < sorted.length; i++) {
     const n = sorted[i];
     let end = n.start + n.length;
@@ -492,7 +580,85 @@ export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false, r
     }
     let endSec = beatsToSec(Math.max(n.start + MIN_LENGTH, end), bpm);
     if (legato && sorted.some((m) => m.pitch !== n.pitch && m.start > n.start && Math.abs(m.start - end) < 1e-6)) endSec += LEGATO_OVERLAP_SEC;
-    out.push({ start: beatsToSec(n.start, bpm), end: endSec, note: n.pitch, velocity: n.velocity, drum: false, ...(phrases[i] ? { phrase: phrases[i] } : {}), ...(steps?.[i] ? { fromSemis: steps[i] } : {}) });
+    let startSec = beatsToSec(n.start, bpm);
+    // 揺らぎ: a few ms early or late (the same for the same note every time), never past its end or before 0.
+    if (human > 0) startSec = Math.max(0, Math.min(endSec - 0.01, startSec + (noteNoise(n.start, n.pitch, 1) * 2 - 1) * human * 0.001));
+    out.push({
+      start: startSec,
+      end: endSec,
+      note: n.pitch,
+      velocity: n.velocity,
+      drum: false,
+      ...(phrases[i] ? { phrase: phrases[i] } : {}),
+      ...(steps?.[i] ? { fromSemis: steps[i] } : {}),
+      ...(gains[i] ? { gainDb: gains[i] } : {}),
+      ...(breaths?.[i] ? { breathSec: breaths[i] } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * What a track's 歌い方 settings ask of its notes before they play (design.md 55–58): the rests (beats) that end a
+ * phrase; 抑揚 — dB per octave a note sits over its phrase's middle, and dB off a phrase's last note; 揺らぎ — ms
+ * early or late at most, and a share of level up or down at most; ブレス — the rest (beats) before a phrase it
+ * needs, and how long it is (seconds; 0 = none).
+ */
+export interface SeqExpr {
+  restBefore: number;
+  restAfter: number;
+  highDb: number;
+  endDb: number;
+  humanMs: number;
+  humanVel: number;
+  breathRest: number;
+  breathSec: number;
+}
+
+/** A number 0–1 that a note always gets the same of (by where and how high it is, and which draw): 揺らぎ's dice. */
+export function noteNoise(start: number, pitch: number, draw: number): number {
+  const x = Math.sin(start * 12.9898 + pitch * 78.233 + draw * 37.719) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/** Each note's own level (dB): 抑揚 by its height in its phrase and a phrase's last note softer, and 揺らぎ's level. */
+export function noteGains(sorted: readonly Pick<Note, "start" | "pitch">[], marks: readonly number[], e: Partial<SeqExpr>): number[] {
+  const high = e.highDb ?? 0, end = e.endDb ?? 0, vel = e.humanVel ?? 0;
+  const out = sorted.map(() => 0);
+  if (!high && !end && !vel) return out;
+  // The phrases: from a start to the note before the next one (a chord's notes share their onset's start).
+  let from = 0;
+  for (let i = 0; i <= sorted.length; i++) {
+    if (i < sorted.length && (i === 0 || !(marks[i] & PHRASE_START) || Math.abs(sorted[i].start - sorted[i - 1].start) < 1e-6)) continue;
+    const span = sorted.slice(from, i);
+    const middle = span.reduce((a, n) => a + n.pitch, 0) / Math.max(1, span.length);
+    for (let k = from; k < i; k++) {
+      let db = (high * (sorted[k].pitch - middle)) / 12;
+      if (marks[k] & PHRASE_END) db -= end;
+      if (vel > 0) db += 20 * Math.log10(Math.max(0.05, 1 + (noteNoise(sorted[k].start, sorted[k].pitch, 2) * 2 - 1) * vel));
+      out[k] = Math.max(-12, Math.min(6, db));
+    }
+    from = i;
+  }
+  return out;
+}
+
+/**
+ * ブレス: for each phrase's first note (one per onset) with a rest of at least `restBeats` before it (or nothing
+ * before it), the breath's length (seconds): `sec`, or 80% of the rest when that is shorter; 0 elsewhere.
+ */
+export function breathsBefore(sorted: readonly Pick<Note, "start" | "length">[], marks: readonly number[], restBeats: number, sec: number, tempo: Tempo): number[] {
+  const out = sorted.map(() => 0);
+  let soundingUntil = -Infinity;
+  for (let i = 0; i < sorted.length; i++) {
+    const n = sorted[i];
+    const first = i === 0 || Math.abs(n.start - sorted[i - 1].start) > 1e-6;
+    if (first && marks[i] & PHRASE_START && n.start - soundingUntil >= restBeats - 1e-9) {
+      const restSec = Number.isFinite(soundingUntil) ? beatsToSec(n.start, tempo) - beatsToSec(Math.max(0, soundingUntil), tempo) : Infinity;
+      out[i] = Math.min(sec, 0.8 * restSec, beatsToSec(n.start, tempo));
+    }
+    // (Only once the onset is done: its own notes do not count as sounding before it.)
+    if (i + 1 >= sorted.length || Math.abs(sorted[i + 1].start - n.start) > 1e-6) for (let k = i; k >= 0 && Math.abs(sorted[k].start - n.start) < 1e-6; k--) soundingUntil = Math.max(soundingUntil, sorted[k].start + sorted[k].length);
   }
   return out;
 }

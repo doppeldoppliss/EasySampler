@@ -234,9 +234,12 @@ export interface TrackVibrato {
   on: boolean;
   minBeats: number;
   depthCents: number;
+  /** (数値, design.md 56) Its rate, and how much of the note it stays straight for, then takes to grow (shares). */
+  rateHz: number;
+  startShare: number;
+  growShare: number;
 }
-export const DEFAULT_TRACK_VIBRATO: TrackVibrato = { on: false, minBeats: 1, depthCents: 35 };
-export const VIBRATO_RATE_HZ = 5.5;
+export const DEFAULT_TRACK_VIBRATO: TrackVibrato = { on: false, minBeats: 1, depthCents: 35, rateHz: 5.5, startShare: 0.3, growShare: 0.4 };
 export const VIBRATO_MIN_BEATS: readonly [number, string][] = [[0.5, "8 分音符"], [1, "4 分音符(1 拍)"], [2, "2 分音符(2 拍)"], [4, "全音符(4 拍)"]];
 export const VIBRATO_DEPTHS: readonly [number, string][] = [[20, "浅め"], [35, "ふつう"], [60, "深め"]];
 
@@ -247,21 +250,48 @@ export const VIBRATO_DEPTHS: readonly [number, string][] = [[20, "浅め"], [35,
 export interface TrackBends {
   scoop: number;
   fall: number;
+  /** (数値, design.md 56) How long each takes at most (s), the shortest note a fall goes on (s), and the rests (beats) that end a phrase before a note and after one. */
+  scoopSec: number;
+  fallSec: number;
+  fallMinSec: number;
+  restBefore: number;
+  restAfter: number;
 }
-export const DEFAULT_TRACK_BENDS: TrackBends = { scoop: 0, fall: 0 };
+export const DEFAULT_TRACK_BENDS: TrackBends = { scoop: 0, fall: 0, scoopSec: 0.12, fallSec: 0.3, fallMinSec: 0.25, restBefore: 0.25, restAfter: 0.5 };
 export const SCOOP_CHOICES: readonly [number, string][] = [[0, "なし"], [1, "浅め"], [2, "ふつう"], [3, "深め"]];
 export const FALL_CHOICES: readonly [number, string][] = [[0, "なし"], [2, "浅め"], [4, "ふつう"], [7, "深め"]];
 
+/** What each number may be set to (数値): [least, most, step]. Saved values are kept inside. */
+export const VIBRATO_RANGES: Record<Exclude<keyof TrackVibrato, "on">, readonly [number, number, number]> = {
+  minBeats: [0.25, 8, 0.25],
+  depthCents: [0, 150, 1],
+  rateHz: [3, 9, 0.1],
+  startShare: [0, 0.8, 0.05],
+  growShare: [0, 1, 0.05],
+};
+export const BENDS_RANGES: Record<keyof TrackBends, readonly [number, number, number]> = {
+  scoop: [0, 6, 0.1],
+  fall: [0, 12, 0.1],
+  scoopSec: [0.02, 0.3, 0.01],
+  fallSec: [0.05, 0.8, 0.01],
+  fallMinSec: [0.05, 1, 0.01],
+  restBefore: [0.125, 2, 0.125],
+  restAfter: [0.125, 2, 0.125],
+};
+
 /** A track's しゃくり・フォール as the engine takes it (null: neither). */
-export function noteBendsOf(t: Pick<Track, "bends">): { scoopSemis: number; fallSemis: number } | null {
+export function noteBendsOf(t: Pick<Track, "bends">): { scoopSemis: number; fallSemis: number; scoopSec: number; fallSec: number; fallMinSec: number } | null {
   const b = t.bends;
-  return b && (b.scoop > 0 || b.fall > 0) ? { scoopSemis: b.scoop, fallSemis: b.fall } : null;
+  return b && (b.scoop > 0 || b.fall > 0) ? { scoopSemis: b.scoop, fallSemis: b.fall, scoopSec: b.scoopSec, fallSec: b.fallSec, fallMinSec: b.fallMinSec } : null;
 }
 
+/** The rests (beats) a track reads its phrases by (しゃくり・フォール). */
+export const phraseRestsOf = (t: Pick<Track, "bends">) => ({ before: t.bends?.restBefore ?? DEFAULT_TRACK_BENDS.restBefore, after: t.bends?.restAfter ?? DEFAULT_TRACK_BENDS.restAfter });
+
 /** A track's setting as the engine takes it (null: off). Its length in seconds at the song's tempo. */
-export function longVibratoOf(t: Pick<Track, "vibrato">, bpm: number): { minSec: number; depthCents: number; rateHz: number } | null {
+export function longVibratoOf(t: Pick<Track, "vibrato">, bpm: number): { minSec: number; depthCents: number; rateHz: number; startShare: number; growShare: number } | null {
   const v = t.vibrato;
-  return v?.on && bpm > 0 ? { minSec: (v.minBeats * 60) / bpm, depthCents: v.depthCents, rateHz: VIBRATO_RATE_HZ } : null;
+  return v?.on && bpm > 0 ? { minSec: (v.minBeats * 60) / bpm, depthCents: v.depthCents, rateHz: v.rateHz, startShare: v.startShare, growShare: v.growShare } : null;
 }
 
 export function newTrack(name: string, instrument: string | null = null): Track {
@@ -428,10 +458,10 @@ export function secToBeats(sec: number, tempo: Tempo): number {
  * heard (the engine has one voice per key). With `legato` (a track with portamento), a
  * note that ends right where one of another pitch starts overlaps it a little.
  */
-export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false): SeqNote[] {
+export function toSeqNotes(notes: readonly Note[], bpm: Tempo, legato = false, rests?: { before: number; after: number }): SeqNote[] {
   const sorted = [...notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   const out: SeqNote[] = [];
-  const phrases = phraseMarks(sorted);
+  const phrases = phraseMarks(sorted, rests?.before, rests?.after);
   for (let i = 0; i < sorted.length; i++) {
     const n = sorted[i];
     let end = n.start + n.length;
@@ -457,7 +487,7 @@ export const PHRASE_REST_AFTER = 0.5;
  * it (or it is first), PHRASE_END when nothing starts for PHRASE_REST_AFTER after it ends (or nothing comes after).
  * Notes of one chord share what is before and after them.
  */
-export function phraseMarks(sorted: readonly Pick<Note, "start" | "length">[]): number[] {
+export function phraseMarks(sorted: readonly Pick<Note, "start" | "length">[], restBefore = PHRASE_REST_BEFORE, restAfter = PHRASE_REST_AFTER): number[] {
   const marks = sorted.map(() => 0);
   let soundingUntil = -Infinity;
   let i = 0;
@@ -468,8 +498,8 @@ export function phraseMarks(sorted: readonly Pick<Note, "start" | "length">[]): 
     const start = sorted[i].start;
     const nextStart = j < sorted.length ? sorted[j].start : Infinity;
     for (let k = i; k < j; k++) {
-      if (start - soundingUntil >= PHRASE_REST_BEFORE - 1e-9) marks[k] |= PHRASE_START;
-      if (nextStart - (sorted[k].start + sorted[k].length) >= PHRASE_REST_AFTER - 1e-9) marks[k] |= PHRASE_END;
+      if (start - soundingUntil >= restBefore - 1e-9) marks[k] |= PHRASE_START;
+      if (nextStart - (sorted[k].start + sorted[k].length) >= restAfter - 1e-9) marks[k] |= PHRASE_END;
     }
     for (let k = i; k < j; k++) soundingUntil = Math.max(soundingUntil, sorted[k].start + sorted[k].length);
     i = j;
@@ -505,16 +535,23 @@ export function shifted(notes: readonly Note[], dBeats: number, dPitch: number):
 }
 
 /** A project read back from storage or a file: anything missing or odd is put right. */
+/** Each number kept inside its range, a missing one at its default. */
+function inRanges<T extends object>(raw: unknown, defaults: T, ranges: Partial<Record<keyof T, readonly [number, number, number]>>): T {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const out = { ...defaults };
+  for (const [k, range] of Object.entries(ranges) as [keyof T & string, readonly [number, number, number]][]) {
+    const x = r[k];
+    if (typeof x === "number" && Number.isFinite(x)) (out as Record<string, unknown>)[k] = Math.min(range[1], Math.max(range[0], x));
+  }
+  return out;
+}
+
 function sanitizeVibrato(raw: unknown): TrackVibrato {
-  const v = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const pick = (x: unknown, from: readonly (readonly [number, string])[], d: number) => (typeof x === "number" && from.some(([k]) => k === x) ? x : d);
-  return { on: v.on === true, minBeats: pick(v.minBeats, VIBRATO_MIN_BEATS, DEFAULT_TRACK_VIBRATO.minBeats), depthCents: pick(v.depthCents, VIBRATO_DEPTHS, DEFAULT_TRACK_VIBRATO.depthCents) };
+  return { ...inRanges(raw, DEFAULT_TRACK_VIBRATO, VIBRATO_RANGES), on: (raw as { on?: unknown } | null)?.on === true };
 }
 
 function sanitizeBends(raw: unknown): TrackBends {
-  const b = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const pick = (x: unknown, from: readonly (readonly [number, string])[]) => (typeof x === "number" && from.some(([k]) => k === x) ? x : 0);
-  return { scoop: pick(b.scoop, SCOOP_CHOICES), fall: pick(b.fall, FALL_CHOICES) };
+  return inRanges(raw, DEFAULT_TRACK_BENDS, BENDS_RANGES);
 }
 
 function sanitizeHarmony(raw: unknown): Harmony {

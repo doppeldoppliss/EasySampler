@@ -418,6 +418,11 @@ describe("長い音にビブラート", () => {
     expect(longVibratoDepth(0)).toBe(0);
     expect(longVibratoDepth(0.5)).toBeCloseTo(0.5, 6);
     expect(longVibratoDepth(2)).toBe(1);
+    // 数値: another share scales it, bounds too; 0 is at once.
+    expect(longVibratoDelay(1, 0.6)).toBeCloseTo(0.6, 6);
+    expect(longVibratoDelay(4, 0.15)).toBeCloseTo(0.25, 6);
+    expect(longVibratoDelay(1, 0)).toBe(0);
+    expect(longVibratoRamp(1, 0.8)).toBeCloseTo(0.8, 6);
   });
 });
 
@@ -461,6 +466,23 @@ describe("しゃくり・フォール", () => {
     const inside = playNote(engine(), 62, 0.3, 0);
     expect(Math.abs(pitch(inside, 0.0, 0.08) - 62)).toBeLessThan(0.25);
     expect(Math.abs(pitch(inside, 0.2, 0.3) - 62)).toBeLessThan(0.25);
+  });
+
+  it("数値: a fall on a shorter note when its shortest is lowered, and a longer scoop", () => {
+    const material = synthVoice({ sampleRate: SR, durationSec: 1.5, pitch: () => 62 });
+    const play = (b: Parameters<Engine["setNoteBends"]>[0], len: number, phrase: number) => {
+      const e = setup(material, { flatten: 1 }).engine;
+      e.setNoteBends(b);
+      return playNote(e, 62, len, phrase);
+    };
+    // A phrase's last note of 0.2 s: no fall by default (0.25 s is the shortest), a fall at 0.15.
+    // (Its fall is 0.07 s — 35% of it — so the reading over its end averages it: compared, not to a fixed pitch.)
+    const none = pitch(play({ scoopSemis: 0, fallSemis: 6 }, 0.2, 2), 0.14, 0.2);
+    expect(Math.abs(none - 62)).toBeLessThan(0.25);
+    expect(pitch(play({ scoopSemis: 0, fallSemis: 6, fallMinSec: 0.15 }, 0.2, 2), 0.14, 0.2)).toBeLessThan(none - 0.3);
+    // A scoop of 0.3 s is still well under at 0.1–0.18 s; the default (0.12 s) has arrived.
+    expect(pitch(play({ scoopSemis: 3, fallSemis: 0, scoopSec: 0.3 }, 1, 1), 0.1, 0.18)).toBeLessThan(61.3);
+    expect(Math.abs(pitch(play({ scoopSemis: 3, fallSemis: 0 }, 1, 1), 0.13, 0.2) - 62)).toBeLessThan(0.25);
   });
 
   it("the bend: rises fast then settles, drops slowly then fast", () => {

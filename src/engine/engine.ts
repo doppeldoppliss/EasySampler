@@ -49,37 +49,52 @@ export interface PreparedSource {
 
 const MAX_GRAINS = 16;
 
-/** 長い音にビブラート (a song track's, design.md 54): notes written at least `minSec` long; the depth (cents) and rate. */
+/**
+ * 長い音にビブラート (a song track's, design.md 54): notes written at least `minSec` long; the depth (cents) and rate;
+ * and (数値, design.md 56) how much of the note it stays straight for and how much it then takes to grow, as shares
+ * of the note (absent: 0.3 and 0.4).
+ */
 export interface LongVibrato {
   minSec: number;
   depthCents: number;
   rateHz: number;
+  startShare?: number;
+  growShare?: number;
 }
+export const VIBRATO_START_SHARE = 0.3;
+export const VIBRATO_GROW_SHARE = 0.4;
 
 /**
  * How a singer's vibrato comes into a held note: straight first (a third of the note, 0.15–0.5 s), then growing over
  * about two fifths of it (0.3–1.2 s), smoothly, to its full depth, which it keeps to the end. A long note grows it
- * slowly; a shorter one ends while it is still shallow.
+ * slowly; a shorter one ends while it is still shallow. Another share scales all of it (bounds too): at 0 it starts,
+ * or grows, at once.
  */
-export const longVibratoDelay = (lengthSec: number) => Math.min(0.5, Math.max(0.15, 0.3 * lengthSec));
-export const longVibratoRamp = (lengthSec: number) => Math.min(1.2, Math.max(0.3, 0.4 * lengthSec));
+export const longVibratoDelay = (lengthSec: number, share = VIBRATO_START_SHARE) => (share / VIBRATO_START_SHARE) * Math.min(0.5, Math.max(0.15, VIBRATO_START_SHARE * lengthSec));
+export const longVibratoRamp = (lengthSec: number, share = VIBRATO_GROW_SHARE) => (share / VIBRATO_GROW_SHARE) * Math.min(1.2, Math.max(0.3, VIBRATO_GROW_SHARE * lengthSec));
 /**
  * しゃくり・フォール (a song track's, design.md 55): how far below the note a phrase's first note (or a long one) starts
- * and slides up from, and how far a phrase's last note drops at its end (semitones; 0 = none).
+ * and slides up from, and how far a phrase's last note drops at its end (semitones; 0 = none); and (数値, design.md 56)
+ * how long each takes at most and the shortest note a fall goes on (absent: 0.12 s, 0.3 s, 0.25 s).
  */
 export interface NoteBends {
   scoopSemis: number;
   fallSemis: number;
+  scoopSec?: number;
+  fallSec?: number;
+  fallMinSec?: number;
 }
 /**
  * しゃくり: notes held at least this long get it besides a phrase's first (at 0.4 s every quarter note at 120 got it,
- * the whole melody sliding); it takes this long (or a third of a short note).
+ * the whole melody sliding); it takes `most` (or a third of a short note).
  */
 export const SCOOP_LONG_SEC = 1;
-export const scoopSec = (lengthSec: number) => Math.min(0.12, lengthSec / 3);
-/** フォール: on a phrase's last note at least this long, over its last part (0.3 s at most, or 35% of it). */
+export const SCOOP_SEC = 0.12;
+export const scoopSec = (lengthSec: number, most = SCOOP_SEC) => Math.min(most, lengthSec / 3);
+/** フォール: on a phrase's last note at least FALL_MIN_SEC long, over its last part (`most` at most, or 35% of it). */
 export const FALL_MIN_SEC = 0.25;
-export const fallSec = (lengthSec: number) => Math.min(0.3, 0.35 * lengthSec);
+export const FALL_SEC = 0.3;
+export const fallSec = (lengthSec: number, most = FALL_SEC) => Math.min(most, 0.35 * lengthSec);
 /** The bend (semitones, ≤ 0) at voice time `t` since the note began: rising fast then settling; dropping slowly then fast. */
 export function noteBend(t: number, scoop: number, scoopDur: number, fall: number, fallFrom: number, fallDur: number): number {
   let s = 0;
@@ -449,11 +464,11 @@ export class Engine {
     v.bendFrom = from;
     if (b.scoopSemis > 0 && (phrase & 1 || lengthSec >= SCOOP_LONG_SEC)) {
       v.scoopSemis = b.scoopSemis;
-      v.scoopDur = scoopSec(lengthSec);
+      v.scoopDur = Math.max(0.005, scoopSec(lengthSec, b.scoopSec));
     }
-    if (b.fallSemis > 0 && phrase & 2 && lengthSec >= FALL_MIN_SEC) {
+    if (b.fallSemis > 0 && phrase & 2 && lengthSec >= (b.fallMinSec ?? FALL_MIN_SEC)) {
       v.fallSemis = b.fallSemis;
-      v.fallDur = fallSec(lengthSec);
+      v.fallDur = Math.max(0.005, fallSec(lengthSec, b.fallSec));
       v.fallFrom = lengthSec - v.fallDur;
     }
   }
@@ -467,8 +482,9 @@ export class Engine {
     }
     v.longVibCents = lv.depthCents;
     v.longVibFrom = from;
-    v.longVibDelay = longVibratoDelay(lengthSec);
-    v.longVibRamp = longVibratoRamp(lengthSec);
+    v.longVibDelay = longVibratoDelay(lengthSec, lv.startShare);
+    // (A ramp of 0 — full depth at once — is a hair long instead: the depth is read as how far through it is.)
+    v.longVibRamp = Math.max(1e-3, longVibratoRamp(lengthSec, lv.growShare));
   }
 
   /** The read position moved past any removed stretch it has landed in. */

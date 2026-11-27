@@ -53,8 +53,11 @@ import {
   VIBRATO_MIN_BEATS,
   noteBendsOf,
   phraseMarks,
+  phraseRestsOf,
   SCOOP_CHOICES,
   FALL_CHOICES,
+  VIBRATO_RANGES,
+  BENDS_RANGES,
 } from "../daw/model";
 import type { MixSettings } from "../song/player";
 import { DEFAULT_FX, type FxSettings } from "../instrument/types";
@@ -74,6 +77,9 @@ import { BALANCE_STYLES, BAND_HZ, type BalanceChoice, type BalanceResult, type B
 
 /** Where the song is kept until the page says which project is open (useStore). */
 const DEFAULT_STORE_KEY = "project";
+
+/** A menu's value for a number: its step when it is one, else 数値. */
+const menuValue = (steps: readonly (readonly [number, string])[], v: number) => (steps.some(([k]) => Math.abs(k - v) < 1e-9) ? String(steps.find(([k]) => Math.abs(k - v) < 1e-9)![0]) : "custom");
 
 function remembered(key: string): string | null {
   try {
@@ -361,13 +367,17 @@ export class RollPanel {
   private readonly harmonyNote = el("span", { className: "fine" });
   // 長い音にビブラート: on, from which note length, how deep.
   private readonly vibratoOn = el("input", { type: "checkbox" });
-  private readonly vibratoMin = el("select", { ariaLabel: "ビブラートをかける音の長さ" }, VIBRATO_MIN_BEATS.map(([v, label]) => el("option", { value: String(v), textContent: `${label}以上` })));
-  private readonly vibratoDepth = el("select", { ariaLabel: "ビブラートの深さ" }, VIBRATO_DEPTHS.map(([v, label]) => el("option", { value: String(v), textContent: label })));
+  // (Each menu: its steps, and 数値 — shown when the number set below is none of them.)
+  private readonly vibratoMin = el("select", { ariaLabel: "ビブラートをかける音の長さ" }, [...VIBRATO_MIN_BEATS.map(([v, label]) => el("option", { value: String(v), textContent: `${label}以上` })), el("option", { value: "custom", textContent: "数値" })]);
+  private readonly vibratoDepth = el("select", { ariaLabel: "ビブラートの深さ" }, [...VIBRATO_DEPTHS.map(([v, label]) => el("option", { value: String(v), textContent: label })), el("option", { value: "custom", textContent: "数値" })]);
   private readonly vibratoNote = el("span", { className: "fine" });
   // しゃくり・フォール: how deep each (なし = off).
-  private readonly scoopSelect = el("select", { ariaLabel: "しゃくり" }, SCOOP_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })));
-  private readonly fallSelect = el("select", { ariaLabel: "フォール" }, FALL_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })));
+  private readonly scoopSelect = el("select", { ariaLabel: "しゃくり" }, [...SCOOP_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })), el("option", { value: "custom", textContent: "数値" })]);
+  private readonly fallSelect = el("select", { ariaLabel: "フォール" }, [...FALL_CHOICES.map(([v, label]) => el("option", { value: String(v), textContent: label })), el("option", { value: "custom", textContent: "数値" })]);
   private readonly bendsNote = el("span", { className: "fine" });
+  // 数値: every number of the two, in a fold (design.md 56). Each field: where it reads and writes the selected track.
+  private readonly expressionFields: { input: HTMLInputElement; read: (t: Track) => number }[] = [];
+  private readonly expressionFold = el("details", { className: "sub expression-numbers" }, [el("summary", { textContent: "数値で細かく(ビブラート・しゃくり・フォール)" })]);
   private readonly glideRow = el("div", { className: "track-options" }, [
     el("div", { className: "row" }, [
       el("label", { className: "inline" }, ["ポルタメント ", this.glideSelect]),
@@ -392,6 +402,7 @@ export class RollPanel {
       el("label", { className: "inline" }, ["フォール ", this.fallSelect]),
       this.bendsNote,
     ]),
+    this.expressionFold,
   ]);
   // Step input: notes played on the keyboard go in at the position, which then moves on by one grid step.
   private stepMode = false;
@@ -629,23 +640,54 @@ export class RollPanel {
       this.scheduleSave();
       this.commitSoon();
     });
-    const vibratoChanged = () => {
-      const t = this.track;
-      t.vibrato = { on: this.vibratoOn.checked, minBeats: Number(this.vibratoMin.value), depthCents: Number(this.vibratoDepth.value) };
+    // A menu's step sets its number; 数値 opens the numbers instead.
+    const expressionChanged = () => {
       this.showVibrato();
-      this.reload();
-      this.scheduleSave();
-      this.commit();
-    };
-    for (const c of [this.vibratoOn, this.vibratoMin, this.vibratoDepth]) c.addEventListener("change", vibratoChanged);
-    const bendsChanged = () => {
-      this.track.bends = { scoop: Number(this.scoopSelect.value), fall: Number(this.fallSelect.value) };
       this.showBends();
       this.reload();
       this.scheduleSave();
       this.commit();
     };
-    for (const c of [this.scoopSelect, this.fallSelect]) c.addEventListener("change", bendsChanged);
+    const fromMenu = (select: HTMLSelectElement, set: (v: number) => void) =>
+      select.addEventListener("change", () => {
+        if (select.value === "custom") {
+          this.expressionFold.open = true;
+          return;
+        }
+        set(Number(select.value));
+        expressionChanged();
+      });
+    this.vibratoOn.addEventListener("change", () => {
+      this.track.vibrato = { ...this.track.vibrato, on: this.vibratoOn.checked };
+      expressionChanged();
+    });
+    fromMenu(this.vibratoMin, (v) => (this.track.vibrato = { ...this.track.vibrato, minBeats: v }));
+    fromMenu(this.vibratoDepth, (v) => (this.track.vibrato = { ...this.track.vibrato, depthCents: v }));
+    fromMenu(this.scoopSelect, (v) => (this.track.bends = { ...this.track.bends, scoop: v }));
+    fromMenu(this.fallSelect, (v) => (this.track.bends = { ...this.track.bends, fall: v }));
+    // The numbers: each kept inside its range; a share shown as a percentage.
+    const field = (label: string, unit: string, range: readonly [number, number, number], read: (t: Track) => number, write: (t: Track, v: number) => void, scale = 1) => {
+      const input = el("input", { type: "number", min: String(range[0] * scale), max: String(range[1] * scale), step: String(range[2] * scale), ariaLabel: label });
+      input.addEventListener("change", () => {
+        const v = Number(input.value) / scale;
+        if (!Number.isFinite(v)) return;
+        write(this.track, Math.min(range[1], Math.max(range[0], v)));
+        expressionChanged();
+      });
+      this.expressionFields.push({ input, read: (t) => Math.round(read(t) * scale * 1000) / 1000 });
+      return el("label", { className: "inline fine" }, [`${label} `, input, ` ${unit}`]);
+    };
+    const vib = (k: keyof typeof VIBRATO_RANGES, label: string, unit: string, scale = 1) =>
+      field(label, unit, VIBRATO_RANGES[k], (t) => t.vibrato[k], (t, v) => (t.vibrato = { ...t.vibrato, [k]: v }), scale);
+    const bend = (k: keyof typeof BENDS_RANGES, label: string, unit: string) => field(label, unit, BENDS_RANGES[k], (t) => t.bends[k], (t, v) => (t.bends = { ...t.bends, [k]: v }));
+    this.expressionFold.append(
+      el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "ビブラート" }), vib("depthCents", "深さ(上下それぞれ)", "¢"), vib("rateHz", "速さ", "回/秒"), vib("minBeats", "かける音符", "拍以上")]),
+      el("div", { className: "row" }, [el("span", { className: "fine", textContent: "音符の頭から" }), vib("startShare", "まっすぐな部分", "%", 100), vib("growShare", "そのあと深くなる部分", "%", 100)]),
+      el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "しゃくり" }), bend("scoop", "深さ", "半音"), bend("scoopSec", "時間", "秒")]),
+      el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "フォール" }), bend("fall", "深さ", "半音"), bend("fallSec", "時間", "秒"), bend("fallMinSec", "かける最短の音符", "秒")]),
+      el("div", { className: "row" }, [el("strong", { className: "fine", textContent: "フレーズの区切り" }), bend("restBefore", "前に休み", "拍以上で始まり"), bend("restAfter", "後ろに休み", "拍以上で終わり")]),
+      el("p", { className: "fine", textContent: "深さ 0 はかけません。まっすぐな部分・深くなる部分は 1 秒前後の音符でのおよその割合です(短い音符・長い音符では、自然に聞こえるよう少し縮み・伸びます)。しゃくりは、フレーズの始まりと 1 秒以上伸ばす音符にかかります。" }),
+    );
     this.glideSelect.addEventListener("change", () => {
       const t = this.track;
       t.glide = Number(this.glideSelect.value) || 0;
@@ -1264,14 +1306,21 @@ export class RollPanel {
 
   // ------------------------------------------------------------- tracks
 
+  /** 数値: the selected track's numbers in their fields (not the one being typed in). */
+  private showExpressionNumbers(): void {
+    const t = this.track;
+    for (const f of this.expressionFields) if (document.activeElement !== f.input) f.input.value = String(f.read(t));
+  }
+
   /** 長い音にビブラート: the selected track's setting, and how many of its notes it reaches. */
   private showVibrato(): void {
     const t = this.track;
     const v = t.vibrato;
     this.vibratoOn.checked = v.on;
-    this.vibratoMin.value = String(v.minBeats);
-    this.vibratoDepth.value = String(v.depthCents);
+    this.vibratoMin.value = menuValue(VIBRATO_MIN_BEATS, v.minBeats);
+    this.vibratoDepth.value = menuValue(VIBRATO_DEPTHS, v.depthCents);
     this.vibratoMin.disabled = this.vibratoDepth.disabled = !v.on;
+    this.showExpressionNumbers();
     const long = t.notes.filter((n) => n.length >= v.minBeats - 1e-9).length;
     this.vibratoNote.textContent = !v.on
       ? ""
@@ -1283,8 +1332,9 @@ export class RollPanel {
   /** しゃくり・フォール: the selected track's setting, and how many phrases it reaches. */
   private showBends(): void {
     const t = this.track;
-    this.scoopSelect.value = String(t.bends.scoop);
-    this.fallSelect.value = String(t.bends.fall);
+    this.scoopSelect.value = menuValue(SCOOP_CHOICES, t.bends.scoop);
+    this.fallSelect.value = menuValue(FALL_CHOICES, t.bends.fall);
+    this.showExpressionNumbers();
     if (!t.bends.scoop && !t.bends.fall) {
       this.bendsNote.textContent = "";
       return;
@@ -1293,7 +1343,8 @@ export class RollPanel {
       this.bendsNote.textContent = "簡易シンセのトラックでは効きません(素材の音源で鳴るトラックだけ)";
       return;
     }
-    const marks = phraseMarks([...t.notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch));
+    const rests = phraseRestsOf(t);
+    const marks = phraseMarks([...t.notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch), rests.before, rests.after);
     const starts = marks.filter((m) => m & 1).length;
     const ends = marks.filter((m) => m & 2).length;
     this.bendsNote.textContent = `フレーズの始まり ${starts} か所・終わり ${ends} か所`;
@@ -2945,7 +2996,7 @@ export class RollPanel {
         instrument: t.kind === "drum" ? "drum" : t.instrument!,
         samples: t.kind === "drum" ? kit.samples : undefined,
         drumKeys: t.kind === "drum" ? kit.keys : undefined,
-        notes: toSeqNotes(t.kind === "melodic" ? withHarmony(t.notes, t.harmony, t.glide) : t.notes, this.project, t.kind !== "drum" && t.glide > 0),
+        notes: toSeqNotes(t.kind === "melodic" ? withHarmony(t.notes, t.harmony, t.glide) : t.notes, this.project, t.kind !== "drum" && t.glide > 0, phraseRestsOf(t)),
         glide: t.kind === "drum" ? 0 : t.glide,
         vibrato: t.kind === "melodic" ? longVibratoOf(t, this.project.bpm) : null,
         bends: t.kind === "melodic" ? noteBendsOf(t) : null,
